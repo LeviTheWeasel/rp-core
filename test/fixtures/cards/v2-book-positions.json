@@ -1,0 +1,118 @@
+{
+  "spec": "chara_card_v2",
+  "spec_version": "2.0",
+  "data": {
+    "name": "Archivist",
+    "description": "{{char}} keeps the index of every world-info slot.",
+    "personality": "",
+    "scenario": "",
+    "first_mes": "Which slot shall we test today?",
+    "mes_example": "",
+    "creator_notes": "",
+    "system_prompt": "",
+    "post_history_instructions": "",
+    "alternate_greetings": [],
+    "tags": [],
+    "creator": "",
+    "character_version": "",
+    "extensions": {},
+    "character_book": {
+      "name": "",
+      "scan_depth": 3,
+      "token_budget": 512,
+      "recursive_scanning": false,
+      "extensions": {},
+      "entries": [
+        {
+          "id": 10,
+          "keys": ["before"],
+          "secondary_keys": [],
+          "comment": "pos 0",
+          "content": "Before the character.",
+          "constant": false,
+          "selective": true,
+          "insertion_order": 100,
+          "enabled": true,
+          "position": "before_char",
+          "use_regex": true,
+          "extensions": { "position": 0, "display_index": 0, "probability": 100, "useProbability": true, "depth": 4, "selectiveLogic": 0, "group": "", "group_weight": 100, "role": 0, "vectorized": false, "sticky": 0, "cooldown": 0, "delay": 0 }
+        },
+        {
+          "id": 11,
+          "keys": ["after"],
+          "secondary_keys": ["also"],
+          "comment": "pos 1",
+          "content": "After the character.",
+          "selective": true,
+          "insertion_order": 90,
+          "enabled": true,
+          "position": "after_char",
+          "extensions": { "position": 1, "selectiveLogic": 3, "group": "weather, mood ,", "group_weight": 40 }
+        },
+        {
+          "id": 12,
+          "keys": ["note top"],
+          "comment": "pos 2",
+          "content": "Author's note, top.",
+          "insertion_order": 80,
+          "enabled": false,
+          "position": "after_char",
+          "extensions": { "position": 2, "probability": 25, "useProbability": true }
+        },
+        {
+          "id": 13,
+          "keys": ["note bottom"],
+          "secondary_keys": ["ignored without selective"],
+          "comment": "pos 3",
+          "content": "Author's note, bottom.",
+          "insertion_order": 70,
+          "enabled": true,
+          "position": "after_char",
+          "extensions": { "position": 3, "probability": 10, "useProbability": false }
+        },
+        {
+          "id": 14,
+          "keys": ["deep"],
+          "comment": "pos 4",
+          "content": "At depth.",
+          "insertion_order": 60,
+          "enabled": true,
+          "position": "after_char",
+          "case_sensitive": true,
+          "extensions": { "position": 4, "depth": 2, "role": 1, "scan_depth": 5, "match_whole_words": false, "prevent_recursion": true, "exclude_recursion": true, "sticky": 3, "cooldown": 2, "delay": "1" }
+        },
+        {
+          "id": 15,
+          "keys": ["examples top"],
+          "comment": "pos 5",
+          "content": "Before the examples.",
+          "insertion_order": 50,
+          "enabled": true,
+          "position": "after_char",
+          "extensions": { "position": 5, "vectorized": true, "my_plugin_flag": "x" }
+        },
+        {
+          "id": 16,
+          "keys": ["examples bottom"],
+          "comment": "pos 6",
+          "content": "After the examples.",
+          "insertion_order": 40,
+          "enabled": true,
+          "position": "after_char",
+          "extensions": { "position": 6, "ignore_budget": true }
+        },
+        {
+          "id": 17,
+          "keys": ["outlet"],
+          "comment": "pos 7",
+          "content": "Into the outlet.",
+          "insertion_order": 30,
+          "enabled": true,
+          "constant": true,
+          "position": "after_char",
+          "extensions": { "position": 7, "outlet_name": "sidebar" }
+        }
+      ]
+    }
+  }
+}

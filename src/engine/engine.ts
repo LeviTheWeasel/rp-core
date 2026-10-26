@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 the rp-core authors
+//
+// The Engine (ARCHITECTURE.md §3, §6, §12.1): open sessions, one turn per session, the turn state
+// machine (turn.ts), recovery (recover.ts), narrator loop (narrate.ts), empty host-hook points.
+// CONTRACT FILE: the entry point is fixed; the engine agent implements it.
+//
+// Everything lives on the instance: the session registry, the per-origin scheduler, the event bus.
+// Two Engines in one process share nothing but the files (and the session locks guard those).
+
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { CreateSessionInput, EngineHandle, EngineOptions, SessionHandle } from './api.ts';
+import { Refusal } from './api.ts';
+import { realTimers } from './abort.ts';
+import { EventBus } from './bus.ts';
+import { checkpointCadence } from './checkpoint.ts';
+import type { EngineCtx } from './context.ts';
+import { createScheduler } from './sched.ts';
+import { SessionImpl } from './session.ts';
+import { systemClock, systemRandom, systemTimeZone } from './system.ts';
+import type { Event } from '../protocol/events.ts';
+import { listSessions, sessionsDir } from '../session/log.ts';
+
+/**
+ * The tuning knobs of EngineOptions (call timeouts, timers). They began outside the contract and
+ * were folded into EngineOptions at integration; the name stays for callers that spell it.
+ */
+export type EngineTuning = Pick<EngineOptions, 'timeouts' | 'timers'>;
+
+export class Engine {
+  static async open(opts: EngineOptions): Promise<EngineHandle> {
+    if (!opts || typeof opts.home !== 'string' || opts.home === '') throw new Error('Engine.open needs a home directory');
+    const home = resolve(opts.home);
+    mkdirSync(sessionsDir(home), { recursive: true });
+    const ctx: EngineCtx = {
+      home,
+      clock: opts.clock ?? systemClock,
+      random: opts.random ?? systemRandom,
+      timeZone: opts.timeZone ?? systemTimeZone(),
+      fetch: opts.fetch ?? globalThis.fetch,
+      sched: createScheduler(),
+      checkpoint: checkpointCadence(opts.checkpoint),
+      timers: opts.timers ?? realTimers,
+      bus: new EventBus<Event>(),
+      connections: { ...(opts.connections ?? {}) },
+      ...(opts.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: opts.retryMaxDelayMs } : {}),
+      ...(opts.timeouts ? { timeouts: opts.timeouts } : {}),
+      ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
+    };
+    return new EngineImpl(ctx);
+  }
+}
+
+class EngineImpl implements EngineHandle {
+  private readonly open = new Map<string, SessionImpl>();
+  private closing: Promise<void> | null = null;
+
+  constructor(private readonly ctx: EngineCtx) {}
+
+  private readonly forget = (s: SessionImpl): void => {
+    if (this.open.get(s.id) === s) this.open.delete(s.id);
+  };
+
+  private assertOpen(): void {
+    if (this.closing) throw new Error('the engine is closed');
+  }
+
+  createSession(input: CreateSessionInput): SessionHandle {
+    this.assertOpen();
+    const s = SessionImpl.create(this.ctx, input, this.forget);
+    this.open.set(s.id, s);
+    return s;
+  }
+
+  session(id: string): SessionHandle {
+    this.assertOpen();
+    // Already open here: the lock file would say the same, without touching the disk.
+    if (this.open.has(id)) throw new Refusal('session_locked', `session ${id} is already open in this engine`);
+    const s = SessionImpl.open(this.ctx, id, this.forget);
+    this.open.set(s.id, s);
+    return s;
+  }
+
+  listSessions(): { id: string; title?: string; updated: string }[] {
+    return listSessions(this.ctx.home);
+  }
+
+  events(): AsyncIterable<Event> {
+    return this.ctx.bus.subscribe();
+  }
+
+  close(): Promise<void> {
+    this.closing ??= (async () => {
+      // Shutdown order: stop every turn (partial text kept), let each settle, release the locks,
+      // then end the event tails.
+      await Promise.all([...this.open.values()].map((s) => s.close()));
+      this.ctx.bus.close();
+    })();
+    return this.closing;
+  }
+}

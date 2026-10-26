@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 the rp-core authors
+//
+// Test helpers exported as `rp-core/testing` (M9 grows this: record/replay, RecordStore conformance).
+
+export { createScriptedProvider, parseScript, hashRequest, SCRIPT_CAPS } from '../providers/scripted.ts';
+export type { ScriptCall, ScriptStep, ScriptedProvider } from '../providers/scripted.ts';
