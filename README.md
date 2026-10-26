@@ -38,7 +38,7 @@ overrides (e.g. `context_length = 16384` when Ollama's `num_ctx` is not in the m
 shell). A broken file is exit 64 with the file and the key path.
 
 **In the chat** a line is your message; `/help` lists the commands: `/r` swipe (`/regen <hint>` a
-guided one), `/[` `/]` browse swipes, `/c` continue, `/e [n]` edit in `$EDITOR`, `/hide n`,
+guided one), `/[` `/]` browse swipes, `/c` continue, `/e [n]` edit (in place, or in `$EDITOR` when set), `/hide n`,
 `/rewind n`, `/tails`, `/goto <id>`, `/fork [n]`, `/model [role] conn:model`, `/note`, `/think`,
 `/show`, `/usage`, `/trace`, `/sessions`, `/open`, `/quit`. Ctrl+C stops an answer and keeps what
 arrived (even with text typed meanwhile; that text comes back at the prompt); at the prompt it clears

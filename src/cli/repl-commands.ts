@@ -261,7 +261,7 @@ export function helpText(): string {
     '  /regen <guidance>  guided swipe: a new version that follows your direction',
     '  /[  /]             previous / next version of the last message',
     '  /c                 continue the last answer',
-    '  /e [n]             edit message n in $EDITOR (default: the last message)',
+    '  /e [n]             edit message n (default: the last) in place: Enter saves, Ctrl+C cancels; in $EDITOR when it is set',
     '  /hide n, /unhide n leave message n out of the prompt / bring it back',
     '  /rewind n          go back to message n; your next message starts a new branch',
     '  /tails             list the branches off this path; /goto <id> switches to one',

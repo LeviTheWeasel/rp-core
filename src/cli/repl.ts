@@ -173,6 +173,8 @@ interface LineSource {
   pending(): string;
   /** Throw the typed text away (Ctrl+C at the prompt). */
   clearPending(): void;
+  /** Put text into the input line as if typed (inline /e); no-op for sources that do not edit lines. */
+  prefill(text: string): void;
   /** Hand the terminal to a child process (the editor); returns the function that takes it back. */
   suspend(): () => void;
   close(): void;
@@ -254,6 +256,9 @@ function readlineInput(interactive: boolean | undefined, terminal?: ReplOptions[
       rl.write(null, { ctrl: true, name: 'e' });
       rl.write(null, { ctrl: true, name: 'u' });
     },
+    prefill(text: string): void {
+      if (!closed && text !== '') rl.write(text);
+    },
     suspend(): () => void {
       rl.pause();
       const raw = tty && stdin.isRaw === true;
@@ -292,6 +297,7 @@ function injectedInput(input: AsyncIterable<string> & { close?(): void }, intera
     muted: false,
     pending: () => '',
     clearPending: () => {},
+    prefill: () => {},
     suspend: () => () => {},
     close(): void {
       try {
@@ -303,6 +309,14 @@ function injectedInput(input: AsyncIterable<string> & { close?(): void }, intera
       void it.return?.()?.catch(() => {});
     },
   };
+}
+
+/** How a line break looks while a message is edited in place (inline /e). */
+export const INLINE_BREAK = '⏎';
+
+/** The editor the person named ($VISUAL, then $EDITOR; empty counts as unset), or null. */
+export function namedEditor(env: Record<string, string | undefined>): string | null {
+  return env.VISUAL?.trim() || env.EDITOR?.trim() || null;
 }
 
 /**
@@ -378,6 +392,8 @@ class Repl {
   private debugHinted = false;
   private left = false;
   private finished = false;
+  /** Set while /e edits in place: the next line (or null on Ctrl+C / end of input) is the result. */
+  private editing: ((line: string | null) => void) | null = null;
 
   constructor(
     private readonly deps: ReplDeps,
@@ -395,7 +411,10 @@ class Repl {
       this.source = rl.source;
       this.interrupts = deps.onInterrupt ?? rl.interrupts;
     }
-    this.editText = deps.editText ?? editorRunner(this.source, env);
+    // /e: an editor only when the person named one ($VISUAL / $EDITOR); otherwise the message is
+    // edited in place in the input line. A terminal editor started from inside the REPL depends on
+    // the terminal handing it the keyboard, which some terminals (Warp) do not do.
+    this.editText = deps.editText ?? (namedEditor(env) ? editorRunner(this.source, env) : (initial) => this.inlineEdit(initial));
     this.exitWindowMs = opts.exitWindowMs ?? 2000;
   }
 
@@ -458,6 +477,7 @@ class Repl {
     } catch (e) {
       if (!this.finished) this.say(this.style.dim(`(input ended: ${errorMessage(e)})`));
     }
+    this.editing?.(null);
     this.enqueue({ t: 'end' });
   }
 
@@ -483,6 +503,10 @@ class Repl {
     // The Enter moved the cursor, unless readline was muted (a turn streams; its newline never showed).
     if (this.source.echoes && !this.source.muted) this.screen.markLineStart();
     this.disarmExit();
+    if (this.editing) {
+      this.editing(line);
+      return;
+    }
     if (this.turn === null || !this.source.interactive) {
       this.enqueue({ t: 'line', line, during: this.turn !== null });
       return;
@@ -533,6 +557,12 @@ class Repl {
 
   private interrupt(): void {
     if (this.finished) return;
+    if (this.editing) {
+      // Ctrl+C while editing in place: drop the edit, keep the message as it was.
+      this.source.clearPending();
+      this.editing(null);
+      return;
+    }
     if (this.turn) {
       this.stopPresses++;
       // §6.5: what arrived is kept; the stopped event prints [stopped].
@@ -853,6 +883,28 @@ class Repl {
     if (i >= sibs.length) return this.say(this.style.dim(`this is the last ${what}${what === 'version' && m.role === 'assistant' ? '; /r makes another' : ''}`));
     this.session.select({ messageId: sibs[i]!, expectedVersion: this.session.version() });
     this.showSelected(sibs[i]!);
+  }
+
+  /**
+   * /e without $VISUAL / $EDITOR: the message goes into the input line, ready to edit. Enter saves,
+   * Ctrl+C cancels. Line breaks show as ⏎ (one line of input cannot hold them) and come back on save.
+   */
+  private inlineEdit(initial: string): Promise<string | null> {
+    if (initial.includes(INLINE_BREAK)) {
+      this.say(this.style.yellow(`this message contains ${INLINE_BREAK} itself; set $EDITOR to edit it in an editor`));
+      return Promise.resolve(null);
+    }
+    this.say(this.style.dim(`editing in place: Enter saves · Ctrl+C cancels · ${INLINE_BREAK} is a line break · set $EDITOR to use an editor`));
+    return new Promise<string | null>((resolve) => {
+      this.editing = (line) => {
+        this.editing = null;
+        resolve(line === null ? null : line.split(INLINE_BREAK).join('\n'));
+      };
+      if (!this.source.echoes) return; // piped input: the next line is the new text
+      this.screen.newline();
+      this.source.prompt(prefix('edit', this.style));
+      this.source.prefill(initial.replace(/\r?\n/g, INLINE_BREAK));
+    });
   }
 
   /** /e [n] (§5.5: an edit entry; the raw text stays in the journal). */
