@@ -1,0 +1,24 @@
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"<th"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"ink>"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"\nThe guest is soaked"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"; offer the fire first.\n</th"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"ink>"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"\n\n"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"Mara"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":" nods toward the hearth. \"Dry off"}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":" first.\""}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"created":1793000000,"id":"chatcmpl-Lq7x2HfM","model":"Qwen3-8B-Q5_K_M.gguf","system_fingerprint":"b6900-1a2b3c4d","object":"chat.completion.chunk","timings":{"cache_n":512,"prompt_n":38,"prompt_ms":41.2,"prompt_per_token_ms":1.084,"prompt_per_second":922.33,"predicted_n":14,"predicted_ms":160.4,"predicted_per_token_ms":11.457,"predicted_per_second":87.28}}
+
+data: [DONE]
+

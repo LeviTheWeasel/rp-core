@@ -1,1 +1,385 @@
-{ "as_of": "2026-10-26", "rows": [] }
+{
+  "as_of": "2026-10-26",
+  "rows": [
+    {
+      "name": "llama.cpp server",
+      "match": {
+        "port": 8080,
+        "server": "llama.cpp"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "note": "System messages and roles go through the model's own chat template, so a template that enforces alternation (Mistral, Gemma) is narrowed back by models.json. A trailing assistant message is continued (prefill). The last stream chunk carries `timings` (prompt_n, predicted_n, cache_n) whether or not stream_options is sent. cache_prompt:true keeps the slot's KV prefix (agents never send false, §7.4.7). response_format json_schema is turned into a grammar. Capacity is NOT taken from -np / total_slots [D-84].",
+      "caps": {
+        "midSystem": "native",
+        "alternation": "free",
+        "prefill": "assistant-last",
+        "parallelToolCalls": "send-true",
+        "structuredOutput": {
+          "mode": "json_schema",
+          "confirmedBy": "host"
+        },
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "typical_p",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ],
+          "wire": {
+            "repetition_penalty": "repeat_penalty"
+          }
+        },
+        "streamUsage": "timings",
+        "caching": "auto-prefix",
+        "extraBody": {
+          "cache_prompt": true
+        }
+      }
+    },
+    {
+      "name": "Ollama",
+      "match": {
+        "port": 11434,
+        "server": "ollama"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://docs.ollama.com/api/openai-compatibility",
+      "note": "/v1/chat/completions supports model, messages, frequency_penalty, presence_penalty, response_format, seed, stop, stream, stream_options.include_usage, temperature, top_p, max_tokens, tools, reasoning_effort / reasoning.effort; tool_choice, logit_bias, user and n are unsupported. top_k / min_p / repeat_penalty exist only as options of the native /api/chat, so they are not claimed here. 'The OpenAI API does not have a way of setting the context size': the window is num_ctx (Modelfile PARAMETER num_ctx or the server default), not model_info context_length (see probe.ts).",
+      "caps": {
+        "toolChoiceHonored": false,
+        "prefill": "assistant-last",
+        "structuredOutput": {
+          "mode": "json_schema",
+          "confirmedBy": "host"
+        },
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "streamUsage": "stream_options",
+        "caching": "auto-prefix"
+      }
+    },
+    {
+      "name": "LM Studio",
+      "match": {
+        "port": 1234,
+        "server": "lmstudio"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://lmstudio.ai/docs/developer/openai-compat/chat-completions; https://lmstudio.ai/docs/developer/rest/list",
+      "note": "Supported payload parameters per the docs: model, top_p, top_k, messages, temperature, max_tokens, stream, stop, presence_penalty, frequency_penalty, logit_bias, repeat_penalty, seed (no min_p). stream_options and response_format are not listed, so usage and structured output are left to the catalog/probe. The loaded context is loaded_instances[].config.context_length of GET /api/v1/models, not max_context_length.",
+      "caps": {
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ],
+          "wire": {
+            "repetition_penalty": "repeat_penalty"
+          }
+        },
+        "caching": "auto-prefix"
+      }
+    },
+    {
+      "name": "koboldcpp",
+      "match": {
+        "port": 5001,
+        "server": "koboldcpp"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://github.com/LostRuins/koboldcpp/blob/concedo/koboldcpp.py",
+      "note": "transform_genparams (api_format 4) maps max_tokens → max_length, seed → sampler_seed, presence_penalty falling back to frequency_penalty, and reads stream_options; generate() reads rep_pen, typical, top_a, min_p, top_k under their KoboldAI names. /api/extra/version answers get_capabilities(), /api/extra/true_max_context_length {value}, /v1/models owned_by 'koboldcpp'. Requests only queue; FastForward reuses a matching prefix (--smartcache helps alternating prompts, §7.4.7).",
+      "caps": {
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "top_a",
+            "typical_p",
+            "repetition_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ],
+          "wire": {
+            "repetition_penalty": "rep_pen",
+            "typical_p": "typical"
+          }
+        },
+        "caching": "auto-prefix",
+        "streamUsage": "stream_options"
+      }
+    },
+    {
+      "name": "vLLM",
+      "match": {
+        "server": "vllm"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html",
+      "note": "Extra sampling parameters (top_k, min_p, repetition_penalty) are accepted next to the OpenAI ones; structured outputs through response_format json_schema; automatic prefix caching is on by default.",
+      "caps": {
+        "structuredOutput": {
+          "mode": "json_schema",
+          "confirmedBy": "host"
+        },
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "streamUsage": "stream_options",
+        "caching": "auto-prefix"
+      }
+    },
+    {
+      "name": "OpenRouter",
+      "match": {
+        "hostname": "openrouter.ai",
+        "server": "openrouter"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://openrouter.ai/docs/api-reference/parameters; https://openrouter.ai/docs/use-cases/usage-accounting; Bunraku:src/kit/providers/spokes/openrouter.ts@702d8120 (stop 4); RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (provider.allow_fallbacks, no volatile metadata)",
+      "note": "provider.allow_fallbacks:false keeps the request on the chosen provider (RoleCall; volatile metadata would break the prefix cache, so none is sent). Usage is always in the last SSE message; usage.include and stream_options are deprecated no-ops. Reasoning comes as `reasoning` plus structured `reasoning_details`, which tool loops send back (§8.6). Reasoning control, tools and structured outputs come per model from the catalog's supported_parameters; no disable is sent unless a row allows it (grok-4.5 answers it with 400).",
+      "caps": {
+        "extraBody": {
+          "provider": {
+            "allow_fallbacks": false
+          }
+        },
+        "streamUsage": "always",
+        "reasoning": {
+          "output": "reasoning_details",
+          "echo": "tool-turn"
+        },
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "top_a",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "stopMax": 4
+      }
+    },
+    {
+      "name": "NanoGPT",
+      "match": {
+        "hostname": "nano-gpt.com",
+        "server": "nanogpt"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-25",
+      "src": "Bunraku:src/kit/providers/spokes/nanogpt.ts@702d8120; SillyTavern via RoleCall:apps/rc/src/lib/providers/definitions.ts@fb8dc623e (nanogpt samplerSupport)",
+      "note": "Only what every OpenAI-compatible relay accepts is claimed (no NanoGPT parameter documentation in either source; top_k is marked unsupported).",
+      "caps": {
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        }
+      }
+    },
+    {
+      "name": "DeepSeek",
+      "match": {
+        "hostname": "api.deepseek.com",
+        "server": "deepseek"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://api-docs.deepseek.com/api/create-chat-completion; https://api-docs.deepseek.com/guides/chat_prefix_completion; Bunraku:src/kit/providers/spokes/deepseek.ts@702d8120; Bunraku:src/core/tokens/cache.ts@702d8120",
+      "note": "stop takes at most 16; frequency/presence penalty are deprecated with no effect, so not claimed. Chat prefix completion (`prefix: true` on the last assistant message) is a Beta feature: it needs base_url https://api.deepseek.com/beta. Context caching is automatic in 64-token units. Thinking output arrives in reasoning_content; successive same-role messages are refused, so alternation stays strict.",
+      "caps": {
+        "tools": "native",
+        "prefill": "prefix-flag",
+        "stopMax": 16,
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "reasoning": {
+          "output": "reasoning_content"
+        },
+        "streamUsage": "stream_options",
+        "caching": "auto-prefix",
+        "cacheMinTokens": 64
+      }
+    },
+    {
+      "name": "OpenAI",
+      "match": {
+        "hostname": "api.openai.com",
+        "server": "openai"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-26",
+      "src": "https://platform.openai.com/docs/api-reference/chat/create; Bunraku:src/stage/params/dialects.ts@702d8120 (OPENAI_PARAMS, stop 4); Bunraku:src/core/tokens/cache.ts@702d8120",
+      "note": "o-series and gpt-5 rows in models.json switch to max_completion_tokens and drop samplers and stop. Chat Completions never returns reasoning text. Prompt caching is automatic from 1024 tokens.",
+      "caps": {
+        "midSystem": "native",
+        "alternation": "free",
+        "tools": "native",
+        "toolChoice": [
+          "auto",
+          "none",
+          "required"
+        ],
+        "toolChoiceHonored": true,
+        "parallelToolCalls": "param",
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "stopMax": 4,
+        "reasoning": {
+          "output": "none"
+        },
+        "streamUsage": "stream_options",
+        "caching": "auto-prefix",
+        "cacheMinTokens": 1024
+      }
+    },
+    {
+      "name": "Mistral AI",
+      "match": {
+        "hostname": "api.mistral.ai",
+        "server": "mistral"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-25",
+      "src": "https://docs.mistral.ai/api/#tag/chat; Bunraku:src/kit/providers/spokes/mistral.ts@702d8120",
+      "note": "The seed field is random_seed. Tool call ids must be 9 alphanumeric characters.",
+      "caps": {
+        "tools": "native",
+        "toolIdFormat": "mistral9",
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "max_tokens"
+          ],
+          "wire": {
+            "seed": "random_seed"
+          }
+        }
+      }
+    },
+    {
+      "name": "Groq",
+      "match": {
+        "hostname": "api.groq.com",
+        "server": "groq"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-10-25",
+      "src": "https://console.groq.com/docs/api-reference#chat-create; Bunraku:src/kit/providers/spokes/groq.ts@702d8120",
+      "note": "Penalties, logit_bias and logprobs are unsupported; stop takes at most 4.",
+      "caps": {
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "stopMax": 4,
+        "streamUsage": "stream_options"
+      }
+    },
+    {
+      "name": "Google Gemini, OpenAI-compatible endpoint",
+      "match": {
+        "hostname": "generativelanguage.googleapis.com",
+        "server": "google-openai"
+      },
+      "dialect": "openai-chat",
+      "as_of": "2026-09-30",
+      "src": "https://ai.google.dev/gemini-api/docs/openai; RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (VVS-383)",
+      "note": "The compatibility layer answers frequency_penalty, presence_penalty and top_k with 400 INVALID_ARGUMENT (VVS-383). The native gemini dialect (M8) brings its own rows.",
+      "caps": {
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "stop",
+            "max_tokens"
+          ]
+        }
+      }
+    }
+  ]
+}

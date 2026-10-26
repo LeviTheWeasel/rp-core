@@ -165,7 +165,11 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     try {
       const report = recoverSession(s);
       for (const h of report.held) s.held.add(h);
-      for (const ev of report.events) s.openEvent(ev);
+      for (const ev of report.events) {
+        // A notice told while opening counts as told for this open session (once-per-session codes).
+        if (ev.type === 'notice') s.noticed.add(ev.code);
+        s.openEvent(ev);
+      }
     } catch (e) {
       opened.log.close();
       throw e;
@@ -356,11 +360,13 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     return { version: this.ver };
   }
 
-  select(input: { messageId: string; expectedVersion: number }): { version: number } {
+  select(input: { messageId: string; expectedVersion: number; exact?: boolean }): { version: number } {
     this.guardWrite(input?.expectedVersion);
+    if (input.exact !== undefined && typeof input.exact !== 'boolean') throw new Refusal('invalid_params', 'exact must be a boolean');
     const idx = this.tree();
     this.mustExist(idx, input.messageId);
-    const leaf = newestDescendant(idx, input.messageId);
+    // exact: a rewind puts the head on the message itself (§5.5); else the newest message below it.
+    const leaf = input.exact === true ? input.messageId : newestDescendant(idx, input.messageId);
     if (leaf === idx.head) return { version: this.ver }; // already there: no line, no new version
     this.verbAppend({ t: 'head', ts: this.now(), leaf });
     this.publish({ type: 'changed', version: this.ver, change: 'head', id: leaf });

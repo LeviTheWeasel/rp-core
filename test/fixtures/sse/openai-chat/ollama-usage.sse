@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-417","object":"chat.completion.chunk","created":1793000000,"model":"hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"role":"assistant","content":"Mara"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-417","object":"chat.completion.chunk","created":1793000000,"model":"hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"content":" sets down"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-417","object":"chat.completion.chunk","created":1793000000,"model":"hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"content":" the mug."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-417","object":"chat.completion.chunk","created":1793000000,"model":"hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-417","object":"chat.completion.chunk","created":1793000000,"model":"hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M","system_fingerprint":"fp_ollama","choices":[],"usage":{"prompt_tokens":61,"prompt_tokens_details":{"cached_tokens":48},"completion_tokens":7,"total_tokens":68}}
+
+data: [DONE]
+

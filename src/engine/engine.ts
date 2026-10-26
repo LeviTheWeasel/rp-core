@@ -47,6 +47,8 @@ export class Engine {
       ...(opts.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: opts.retryMaxDelayMs } : {}),
       ...(opts.timeouts ? { timeouts: opts.timeouts } : {}),
       ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
+      ...(opts.prices ? { prices: { ...opts.prices } } : {}),
+      ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
     };
     return new EngineImpl(ctx);
   }

@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Entry, EntryInput } from '../../src/session/entries.ts';
 import { foldView } from '../../src/session/fold.ts';
-import { buildTree, effectiveMessage, newestDescendant, pathTo, siblings, tails } from '../../src/session/tree.ts';
+import { buildTree, effectiveMessage, newestDescendant, pathTo, siblings, swipeSiblings, tails } from '../../src/session/tree.ts';
 import { fakeRandom } from '../helpers.ts';
 import { edit, head, hide, makeHeader, msg, seqd, text, TS } from './fixtures.ts';
 
@@ -108,11 +108,19 @@ describe('tree properties (random trees)', () => {
         expect(pathTo(idx, leaf)).toContain(id);
       }
 
-      // the PathView agrees, and swipe positions index into the sibling list
+      // swipe siblings: the siblings of the same role and kind (greeting / generated), self included
+      for (const id of idx.msgs.keys()) {
+        const m = idx.msgs.get(id)!;
+        const versions = swipeSiblings(idx, id);
+        expect(versions).toContain(id);
+        expect(versions).toEqual(siblings(idx, id).filter((s) => idx.msgs.get(s)!.role === m.role && (idx.msgs.get(s)!.gen?.kind === 'greeting') === (m.gen?.kind === 'greeting')));
+      }
+
+      // the PathView agrees, and swipe positions index into the list of versions
       const view = foldView(makeHeader(), entries, idx);
       expect(view.path.map((m) => m.id)).toEqual(path);
       for (const m of view.path) {
-        const sibs = siblings(idx, m.id);
+        const sibs = swipeSiblings(idx, m.id);
         expect(m.swipe.count).toBe(sibs.length);
         expect(sibs[m.swipe.index]).toBe(m.id);
       }

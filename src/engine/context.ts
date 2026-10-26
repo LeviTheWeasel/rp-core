@@ -4,7 +4,7 @@
 // What every session of one Engine shares (ARCHITECTURE.md §3: "Engine (экземпляр; никаких
 // глобалов модуля)"). Built once by Engine.open and handed down; nothing here is module state.
 
-import type { Connection } from './api.ts';
+import type { Connection, EngineOptions } from './api.ts';
 import type { DelayTimers } from './abort.ts';
 import type { EventBus } from './bus.ts';
 import type { CheckpointCadence } from './checkpoint.ts';
@@ -29,8 +29,12 @@ export interface EngineCtx {
   bus: EventBus<Event>;
   connections: Record<string, Connection>;
   providerOverride?: Connection;
+  /** EngineOptions.prices: [prices."conn:model"], the second source of a call's cost (§11). */
+  prices?: EngineOptions['prices'];
   /** M9. Always undefined in M1a. */
   hooks?: HostHooks;
+  /** EngineOptions.onProviderError: the host's debug tap for raw provider failures (§13). */
+  onProviderError?: EngineOptions['onProviderError'];
 }
 
 /** ISO timestamp from the injected clock. */

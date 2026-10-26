@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 the rp-core authors
+//
+// `rp-core chat <session>` and the REPL that `rp-core new` opens on a terminal (ARCHITECTURE.md §12.4,
+// §15 M1b). The REPL itself lives in repl.ts; this file opens the engine with the configured
+// connections, hands the session over and shuts down in the right order.
+//
+// Signals: the REPL owns SIGINT (stop the turn; twice at the prompt quits). SIGTERM is handled here:
+// close the engine (the running turn stops with its partial text kept, the lock is released), then
+// exit 143; a second SIGTERM leaves at once. Exit 130 from the REPL means a turn would not settle
+// after Stop: the engine is not waited for (the next open recovers that turn, as after a crash).
+
+import { Engine } from '../engine/engine.ts';
+import { Refusal, type EngineHandle, type EngineOptions, type SessionHandle } from '../engine/api.ts';
+import type { Io } from './io.ts';
+import { EXIT, reportRefusal } from './oneshot.ts';
+import { runRepl } from './repl.ts';
+import { connectionProblem, engineOptions, redactor, windowOf, type Runtime } from './runtime.ts';
+import { EXIT_SIGINT, EXIT_SIGTERM, type SignalSource } from './signals.ts';
+
+export interface ChatArgs {
+  rt: Runtime;
+  io: Io;
+  /** Leave the process at once (second SIGTERM, or after SIGTERM closed the engine). Never returns. */
+  exitNow: (code: number) => void;
+  /** process by default; tests pass a stand-in. */
+  signals?: SignalSource;
+  /** Extra engine options (tests: clock, random, timers). */
+  engine?: Partial<EngineOptions>;
+}
+
+/** `rp-core chat <session>`: open (lock + recovery) and run the REPL until /quit or EOF. */
+export async function cmdChat(a: ChatArgs & { sessionId: string }): Promise<number> {
+  const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt) });
+  let session: SessionHandle;
+  try {
+    session = engine.session(a.sessionId);
+  } catch (e) {
+    await engine.close();
+    if (e instanceof Refusal) return reportRefusal(a.io, e, false, a.rt);
+    throw e;
+  }
+  return runChat(engine, session, a);
+}
+
+/** Run the REPL on an open session of `engine`; closes the engine when the REPL ends. */
+export async function runChat(engine: EngineHandle, session: SessionHandle, a: ChatArgs): Promise<number> {
+  const source: SignalSource = a.signals ?? process;
+  let terminating = false;
+  const onTerm = (): void => {
+    if (terminating) return a.exitNow(EXIT_SIGTERM);
+    terminating = true;
+    a.io.err.write('\nrp-core: terminated: closing the session (the partial answer is kept)\n');
+    void engine
+      .close()
+      .catch(() => {})
+      .finally(() => a.exitNow(EXIT_SIGTERM));
+  };
+  source.on('SIGTERM', onTerm);
+  let code: number;
+  // --debug: while the REPL runs, raw provider failures go through its screen (engineOptions reads
+  // rt.debug at the moment of a failure), so they never glue into a streamed answer.
+  const plainDebug = a.rt.debug;
+  const debugTap = plainDebug
+    ? (print: (line: string) => void): (() => void) => {
+        a.rt.debug = print;
+        return () => {
+          a.rt.debug = plainDebug;
+        };
+      }
+    : undefined;
+  try {
+    code = await runRepl({
+      engine,
+      session,
+      config: a.rt.config,
+      home: a.rt.home,
+      io: a.io,
+      openSession: (id) => engine.session(id),
+      windowOf: (conn, model) => windowOf(a.rt, conn, model),
+      redact: redactor(a.rt),
+      ...(debugTap ? { debugTap } : {}),
+      // Under --provider every role plays the script: /model only checks config.toml's names then.
+      ...(a.rt.provider ? {} : { connectionProblem: (conn: string) => connectionProblem(a.rt, conn) }),
+    });
+  } catch (e) {
+    source.removeListener('SIGTERM', onTerm);
+    await engine.close();
+    throw e;
+  }
+  source.removeListener('SIGTERM', onTerm);
+  if (code === EXIT_SIGINT) {
+    // The turn would not settle after Stop: leave without waiting; the lock stays for recovery.
+    void engine.close().catch(() => {});
+    return code;
+  }
+  await engine.close();
+  return code === 0 ? EXIT.done : code;
+}

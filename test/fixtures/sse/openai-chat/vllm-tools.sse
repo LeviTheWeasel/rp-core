@@ -1,0 +1,18 @@
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"tool_calls":[{"id":"chatcmpl-tool-a1f0","type":"function","index":0,"function":{"name":"roll_dice"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"roll_dice","arguments":"{\"sides\": "}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"roll_dice","arguments":"20}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"tool_calls":[{"id":"chatcmpl-tool-b2c7","type":"function","index":2,"function":{"name":"look_around","arguments":""}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"tool_calls":[{"index":2,"function":{"arguments":"{\"target\": \"door\"}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[{"index":0,"delta":{"content":""},"logprobs":null,"finish_reason":"tool_calls","stop_reason":null}]}
+
+data: {"id":"chatcmpl-9f1e44c2a8","object":"chat.completion.chunk","created":1793000000,"model":"Qwen/Qwen3-32B","choices":[],"usage":{"prompt_tokens":350,"total_tokens":391,"completion_tokens":41,"prompt_tokens_details":null}}
+
+data: [DONE]
+

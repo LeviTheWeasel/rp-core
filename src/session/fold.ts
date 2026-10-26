@@ -10,7 +10,7 @@
 
 import type { DeepPartial, Entry, SessionConfig, SessionHeader, VarsDiff } from './entries.ts';
 import type { TreeIndex } from './tree.ts';
-import { buildTree, effectiveMessage, pathTo, tails } from './tree.ts';
+import { buildTree, effectiveMessage, pathTo, swipeSiblings, tails } from './tree.ts';
 import type { MessageView, PathView } from './view.ts';
 
 /** Apply one diff in place: null deletes, anything else sets. */
@@ -68,7 +68,8 @@ function castNamesOf(header: SessionHeader): string[] {
 
 function messageView(idx: TreeIndex, id: string): MessageView {
   const m = idx.msgs.get(id)!;
-  const sibs = idx.children.get(m.parent) ?? [id];
+  // Swipe position among the message's own versions (same role and kind), not every child of the parent.
+  const sibs = swipeSiblings(idx, id);
   const eff = effectiveMessage(idx, id);
   const view: MessageView = {
     id,

@@ -1,0 +1,5 @@
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"Mara reaches"}}],"created":1793000000,"id":"chatcmpl-cut","model":"mag-mell-r1-12b-q5_k_m.gguf","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":" for the"}}],"created":1793000000,"id":"chatcmpl-cut","model":"mag-mell-r1-12b-q5_k_m.gguf","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"cont

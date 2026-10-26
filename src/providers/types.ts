@@ -80,8 +80,44 @@ export function categoryOf(code: ProviderErrorCode): ProviderErrorCategory {
 }
 
 /**
- * A provider failure. `message` may echo prompt text, so it is shown live but never stored:
- * only {category, code, status} reach the session log (§8.8, §13).
+ * The fixed, user-facing sentence for each code (§13: provider error text is reduced to
+ * {category, code, status} and a fixed message per code before it is written anywhere). Adapters
+ * build `message` from this (plus the status, the origin or an engine-authored reason that quotes
+ * nothing the server or the environment said); the server's own words go to `detail`.
+ */
+export const PROVIDER_ERROR_MESSAGE: Readonly<Record<ProviderErrorCode, string>> = {
+  auth_failed: 'the server refused the API key',
+  model_not_found: 'the server does not know this model (or this URL)',
+  context_length_exceeded: "the prompt does not fit the model's context window",
+  bad_request: 'the server refused the request',
+  rate_limited: 'the server is rate limiting requests',
+  overloaded: 'the server failed or is overloaded',
+  unreachable: 'the server could not be reached',
+  truncated_stream: 'the answer broke off',
+  timeout: 'the server did not answer in time',
+  content_filter: "the provider's moderation refused the request",
+  refusal: 'the model refused to answer',
+  empty_response: 'the model returned an empty reply',
+  reasoning_only: 'the model only reasoned and wrote no reply',
+  prefill_unsupported: 'this model does not accept a prefill',
+  forced_tool_unsupported: 'this model does not accept a forced tool call',
+  thinking_signature_mismatch: "the provider rejected the replayed reasoning's signature",
+  tool_protocol_invalid: 'the tool calls broke the protocol',
+  script_exhausted: 'the script ran out of calls',
+  key_unavailable: 'the API key is unavailable',
+};
+
+/** "<fixed message> (HTTP <status>)": what a failure may say anywhere without --debug. */
+export function providerMessage(code: ProviderErrorCode, status?: number): string {
+  return status === undefined ? PROVIDER_ERROR_MESSAGE[code] : `${PROVIDER_ERROR_MESSAGE[code]} (HTTP ${status})`;
+}
+
+/**
+ * A provider failure. `message` is safe to show and to put in events: adapters write it from a
+ * fixed sentence per code (PROVIDER_ERROR_MESSAGE) and engine-authored context only. The server's
+ * own words (which may quote the prompt, or echo a key or a header back) and raw transport errors
+ * go to `detail`: shown live only on --debug, never stored or put in an event (§8.8, §13). Only
+ * {category, code, status} reach the session log.
  */
 export class ProviderError extends Error {
   readonly category: ProviderErrorCategory;
@@ -89,6 +125,8 @@ export class ProviderError extends Error {
   readonly status?: number;
   readonly retryAfterSec?: number;
   readonly afterOutput: boolean;
+  /** Raw server / transport text, for --debug only (never in events, files or plain output). */
+  readonly detail?: string;
   constructor(init: {
     category: ProviderErrorCategory;
     code: ProviderErrorCode;
@@ -96,6 +134,7 @@ export class ProviderError extends Error {
     status?: number;
     retryAfterSec?: number;
     afterOutput?: boolean;
+    detail?: string;
   }) {
     super(init.message ?? init.code);
     this.name = 'ProviderError';
@@ -104,6 +143,19 @@ export class ProviderError extends Error {
     if (init.status !== undefined) this.status = init.status;
     if (init.retryAfterSec !== undefined) this.retryAfterSec = init.retryAfterSec;
     this.afterOutput = init.afterOutput ?? false;
+    if (init.detail !== undefined && init.detail !== '') this.detail = init.detail;
+  }
+  /** The same failure with another afterOutput (everything else, detail included, kept). */
+  withAfterOutput(afterOutput: boolean): ProviderError {
+    return new ProviderError({
+      category: this.category,
+      code: this.code,
+      message: this.message,
+      ...(this.status !== undefined ? { status: this.status } : {}),
+      ...(this.retryAfterSec !== undefined ? { retryAfterSec: this.retryAfterSec } : {}),
+      ...(this.detail !== undefined ? { detail: this.detail } : {}),
+      afterOutput,
+    });
   }
   /** What may be persisted. */
   toRecord(): { category: ProviderErrorCategory; code: ProviderErrorCode; status?: number } {
@@ -225,6 +277,12 @@ export type StreamEv =
 export interface ProviderEnv {
   fetch: typeof fetch;
   key: string | null;
+  /**
+   * Called on every chunk of response body bytes, SSE comments and keep-alives included (§8.8: the
+   * first-byte and idle timeouts are about bytes on the wire, not about parsed events). Optional:
+   * a provider that never calls it is timed by its events alone.
+   */
+  onActivity?(): void;
 }
 
 export interface Provider {

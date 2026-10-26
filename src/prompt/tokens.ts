@@ -2,7 +2,7 @@
 // Copyright (C) 2026 the rp-core authors
 //
 // Token estimate (ARCHITECTURE.md §11). M1: chars/3, Cyrillic chars/2.5, conservative, no deps.
-// gpt-tokenizer and the EMA correction arrive in M1b/M2 behind the same functions.
+// M1b: the per-model EMA correction (emaFactor, D-50); gpt-tokenizer arrives in M2 behind the same functions.
 // CONTRACT FILE: signatures are fixed; the prompt agent implements the bodies.
 
 import type { PromptMsg } from '../providers/types.ts';
@@ -77,11 +77,41 @@ export const EMA_MIN = 0.8;
 export const EMA_MAX = 2.0;
 
 /**
+ * A sample whose reported/estimated ratio is below this is not a tokenizer at all: the estimate is
+ * chars/3 (Cyrillic /2.5), and natural text runs about 3.5–4.5 characters per token, so ordinary
+ * ratios sit around 0.65–0.9 (EMA_MIN is an ordinary value, not an outlier line). Under 0.5 the
+ * server counted fewer than half of the estimated tokens, i.e. it did not process the whole prompt:
+ * Ollama silently drops old messages to fit its num_ctx. Such samples are left out of the EMA (they
+ * would drag the factor to EMA_MIN and pack even more text into the next prompt), and the engine
+ * says once that the server cut the prompt (engine/ema.ts truncatedByServer).
+ */
+export const EMA_DISCARD_BELOW = 0.5;
+
+/** x clamped to the EMA corridor [EMA_MIN, EMA_MAX]. */
+function clampFactor(x: number): number {
+  return Math.min(EMA_MAX, Math.max(EMA_MIN, x));
+}
+
+/**
  * The token-estimate correction for one model, derived (never stored) from the answers on the path
  * that report prompt tokens: samples oldest → newest, each {estimated, reported}. No samples → EMA_START.
- * CONTRACT (M1b): implemented by the prompt-m1b agent.
+ *
+ * f₀ = EMA_START; for each usable sample f ← α·clamp(reported / estimated) + (1 − α)·f; the result is
+ * clamped as well. Each ratio is clamped before it enters the average, so one wild report above the
+ * corridor (a server that counts the cached prefix twice, CJK text far denser than chars/3) moves the
+ * factor by at most α·(2.0 − f). A sample is skipped when either count is not a positive finite
+ * number (a missing report is "unknown", never zero; an empty estimate has no ratio), and when its
+ * ratio is below EMA_DISCARD_BELOW: the server did not see the whole prompt, so the sample says
+ * nothing about the tokenizer.
  */
 export function emaFactor(samples: readonly { estimated: number; reported: number }[]): number {
-  void samples;
-  throw new Error('not implemented: emaFactor');
+  let f = EMA_START;
+  for (const s of samples) {
+    const { estimated, reported } = s;
+    if (!(Number.isFinite(estimated) && estimated > 0 && Number.isFinite(reported) && reported > 0)) continue;
+    const ratio = reported / estimated;
+    if (ratio < EMA_DISCARD_BELOW) continue;
+    f = EMA_ALPHA * clampFactor(ratio) + (1 - EMA_ALPHA) * f;
+  }
+  return clampFactor(f);
 }

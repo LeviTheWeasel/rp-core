@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 the rp-core authors
 //
-// The non-turn subcommands of M1a: `new`, `import`, `sessions`, `show` (ARCHITECTURE.md §12.3,
-// §15 M1a, D-72). `sessions` and `show` never take the session lock: they read the journal with
-// readSessionFile/listSessions and fold it themselves, so they work while another process runs a
+// The non-turn subcommands: `init` (M1b), `new`, `import`, `sessions`, `show` (ARCHITECTURE.md §12.3,
+// §13, §15 M1a/M1b, D-72). `sessions` and `show` never take the session lock: they read the journal
+// with readSessionFile/listSessions and fold it themselves, so they work while another process runs a
 // turn. The price is that they never recover anything (recovery only runs on a locked open), so
 // `show` says so when the journal has turns without a closing line.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { Engine } from '../engine/engine.ts';
-import type { EngineOptions } from '../engine/api.ts';
+import type { EngineHandle, EngineOptions, SessionHandle } from '../engine/api.ts';
+import { CONFIG_TEMPLATE, configPath } from '../config/config.ts';
 import { openTurns } from '../engine/recover.ts';
 import { parseModelRef } from '../engine/route.ts';
 import { systemClock } from '../engine/system.ts';
@@ -18,12 +19,13 @@ import { importFile, ImportError } from '../formats/import.ts';
 import { loadFromLibrary } from '../formats/library.ts';
 import { validateCharacter, validatePersona, type Character, type ImportWarning, type Persona } from '../formats/native.ts';
 import type { DeepPartial, Entry, SessionConfig } from '../session/entries.ts';
-import { foldView } from '../session/fold.ts';
+import { foldView, mergePatch } from '../session/fold.ts';
 import { DEFAULT_LOCK_TTL_MS, isLockStale, listSessions, readLock, readSessionFile, SessionNotFoundError } from '../session/log.ts';
 import { UsageError } from './args.ts';
 import type { Io } from './io.ts';
 import { EXIT } from './oneshot.ts';
 import { messageText, renderPath, renderSessions } from './render.ts';
+import { connectionProblem, engineOptions, type Runtime } from './runtime.ts';
 
 /** A failure the user can fix (bad input file, missing session): one stderr line, exit 1. */
 export class CliError extends Error {
@@ -53,6 +55,39 @@ function readJsonFile(file: string, what: string): unknown {
   } catch (e) {
     throw new CliError(`${what} ${file} is not valid JSON: ${errMessage(e)}`);
   }
+}
+
+// ---- init ----------------------------------------------------------------------------------------
+
+/**
+ * `rp-core init`: write the starter config.toml (CONFIG_TEMPLATE) into the home unless one is there.
+ * Never overwrites: the file is created exclusively, so even a race with an editor cannot clobber it.
+ */
+export function cmdInit(a: { home: string; json: boolean; io: Io }): number {
+  const path = configPath(a.home);
+  let created = false;
+  try {
+    mkdirSync(a.home, { recursive: true });
+    writeFileSync(path, CONFIG_TEMPLATE, { flag: 'wx' });
+    created = true;
+  } catch (e) {
+    if ((e as { code?: unknown } | null)?.code !== 'EEXIST') throw new CliError(`cannot write ${path}: ${errMessage(e)}`);
+  }
+  if (a.json) {
+    a.io.out.write(`${JSON.stringify({ path, created })}\n`);
+    return EXIT.done;
+  }
+  a.io.out.write(`${path}\n`);
+  if (created) {
+    a.io.err.write(
+      `rp-core: wrote a starter config to ${path}\n` +
+        'rp-core: next: edit [connections] and [roles] narrator, check the server with `rp-core probe <connection>`,\n' +
+        'rp-core: then `rp-core new --card <file> --model <connection>:<model>`\n',
+    );
+  } else {
+    a.io.err.write(`rp-core: ${path} already exists; left as it is (init never overwrites)\n`);
+  }
+  return EXIT.done;
 }
 
 // ---- import --------------------------------------------------------------------------------------
@@ -91,9 +126,18 @@ export interface NewArgs {
   card: string;
   persona?: string;
   model?: string;
+  /** The narrator binding's maxTokens (the reply limit; else the preset's, else the §11 reserve). */
+  maxTokens?: number;
   title?: string;
   json: boolean;
   io: Io;
+  /**
+   * config.toml and its connections (M1b): new sessions start from config.sessionDefaults, and a
+   * --model connection must exist there unless --provider overrides every role. Absent: no config.
+   */
+  rt?: Runtime;
+  /** Open the REPL on the new session instead of printing its id (a terminal, no --json/--no-chat). */
+  chat?: (engine: EngineHandle, session: SessionHandle) => Promise<number>;
   engine?: Partial<EngineOptions>;
 }
 
@@ -142,33 +186,58 @@ function greetingsOf(entries: readonly Entry[]): { id: string; text: string }[] 
   return out;
 }
 
-/** `rp-core new --card <file>`: import the card, create the session, print its id. */
-export async function cmdNew(a: NewArgs): Promise<number> {
-  let config: DeepPartial<SessionConfig> | undefined;
+/**
+ * The new session's config: config.toml's defaults, then --model / --max-tokens on the narrator.
+ * A --model connection is checked against config.toml unless --provider overrides every role.
+ */
+function newSessionConfig(a: NewArgs): DeepPartial<SessionConfig> | undefined {
+  let config: DeepPartial<SessionConfig> | undefined = a.rt && Object.keys(a.rt.config.sessionDefaults).length > 0 ? a.rt.config.sessionDefaults : undefined;
+  const narrator: { conn?: string; model?: string; maxTokens?: number } = {};
   if (a.model !== undefined) {
     const ref = parseModelRef(a.model);
     if (!ref) throw new UsageError(`--model must be conn:model, got ${JSON.stringify(a.model)}`, 'new');
-    config = { roles: { narrator: { conn: ref.conn, model: ref.model } } };
+    if (a.rt && !a.rt.provider) {
+      const problem = connectionProblem(a.rt, ref.conn);
+      if (problem) throw new UsageError(`--model ${a.model}: ${problem}`, 'new');
+    }
+    narrator.conn = ref.conn;
+    narrator.model = ref.model;
   }
+  if (a.maxTokens !== undefined) narrator.maxTokens = a.maxTokens;
+  if (Object.keys(narrator).length > 0) config = mergePatch<DeepPartial<SessionConfig>>(config ?? {}, { roles: { narrator } });
+  return config;
+}
+
+/** `rp-core new --card <file>`: import the card, create the session, print its id (or open the REPL). */
+export async function cmdNew(a: NewArgs): Promise<number> {
+  const config = newSessionConfig(a);
   const persona = a.persona !== undefined ? resolvePersona(a.persona) : undefined;
   const card = resolveCard(a);
   warn(a.io, card.warnings);
 
-  const engine = await Engine.open({ ...a.engine, home: a.home });
+  const engine = await Engine.open({ ...a.engine, ...(a.rt ? engineOptions(a.rt) : {}), home: a.home });
   let sessionId: string;
   let title: string | undefined;
+  /** Set once the REPL owns the engine (runChat closes it when the REPL ends). */
+  let handedOver = false;
   try {
-    const s = engine.createSession({
+    const session = engine.createSession({
       character: card.character,
       ...(persona ? { persona } : {}),
       ...(config ? { config } : {}),
       ...(a.title !== undefined ? { title: a.title } : {}),
     });
-    sessionId = s.id;
-    title = s.header().title;
-    await s.close();
+    sessionId = session.id;
+    title = session.header().title;
+    if (a.chat) {
+      const how = card.imported ? `card imported as library character ${card.libraryId}` : `library character ${card.libraryId}`;
+      a.io.err.write(`rp-core: created session ${sessionId} (${how}); \`rp-core chat ${sessionId}\` reopens it\n`);
+      handedOver = true;
+      return await a.chat(engine, session);
+    }
+    await session.close();
   } finally {
-    await engine.close();
+    if (!handedOver) await engine.close();
   }
   const greetings = greetingsOf(readSessionFile(a.home, sessionId).entries);
 

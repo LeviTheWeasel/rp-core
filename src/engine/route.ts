@@ -25,14 +25,17 @@ export const RETRY_MAX_JITTER_MS = 250;
 const TRANSIENT_CODES = new Set(['rate_limited', 'overloaded', 'timeout']);
 
 /**
- * A failure that may be retried (and then sent to the fallback): nothing came out yet, and the
- * server said "try again later" (a §6.6 status, or a transient code carrying a status). A failure
- * without a status — a local timeout, `fetch failed` after the body went out — is ambiguous: the
- * request may have been billed, so it is not repeated.
+ * A failure that may be retried (and then sent to the fallback): nothing came out yet, it is not an
+ * auth failure, and the server said "try again later" (a §6.6 status, or a transient code carrying
+ * a status). A failure without a status — a local timeout, `fetch failed` after the body went out —
+ * is ambiguous: the request may have been billed, so it is not repeated.
  */
 export function isRetryable(err: unknown): err is ProviderError {
   if (!(err instanceof ProviderError)) return false;
   if (err.afterOutput) return false;
+  // An auth failure (a rejected or unavailable key, D-73) is the same on every attempt: never retried,
+  // and so never sent to the fallback either.
+  if (err.category === 'auth') return false;
   if (err.status === undefined) return false;
   return RETRYABLE_STATUSES.has(err.status) || TRANSIENT_CODES.has(err.code);
 }

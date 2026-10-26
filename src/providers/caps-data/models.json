@@ -1,1 +1,446 @@
-{ "as_of": "2026-10-26", "rows": [] }
+{
+  "as_of": "2026-10-26",
+  "rows": [
+    {
+      "name": "Qwen3: <think> tags",
+      "match": "*qwen3*",
+      "as_of": "2026-10-26",
+      "src": "https://huggingface.co/Qwen/Qwen3-8B#switching-between-thinking-and-non-thinking-mode",
+      "note": "Qwen3 thinks inside <think>…</think>; only that tag is split out.",
+      "caps": {
+        "reasoning": {
+          "tags": [
+            "<think>"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Qwen3: thinking toggle through the chat template",
+      "match": "*qwen3*",
+      "servers": [
+        "llama.cpp",
+        "vllm"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://huggingface.co/Qwen/Qwen3-8B#switching-between-thinking-and-non-thinking-mode; https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md (chat_template_kwargs)",
+      "note": "[D-54] enable_thinking is a template variable, reachable through chat_template_kwargs on llama.cpp and vLLM only. Ollama switches thinking through reasoning_effort instead (catalog).",
+      "caps": {
+        "reasoning": {
+          "control": "toggle",
+          "canDisable": true,
+          "offShape": {
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Qwen3 2507 split models: no toggle",
+      "match": "*qwen3*{thinking,instruct}*2507*",
+      "as_of": "2026-10-26",
+      "src": "https://huggingface.co/Qwen/Qwen3-235B-A22B-Thinking-2507; https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "note": "The 2507 Thinking models always think (the template opens <think> itself) and the Instruct models never do; enable_thinking does nothing on either.",
+      "caps": {
+        "reasoning": {
+          "control": "none",
+          "canDisable": false
+        }
+      }
+    },
+    {
+      "name": "DeepSeek R1 / reasoner: reasoning_content",
+      "match": "*deepseek-{r1,reasoner}*",
+      "servers": [
+        "deepseek",
+        "llama.cpp",
+        "unknown"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://api-docs.deepseek.com/guides/reasoning_model; https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md (--reasoning-format deepseek)",
+      "note": "OpenRouter and Ollama return the same thoughts as `reasoning`; the adapter reads every known field anyway (§8.4).",
+      "caps": {
+        "reasoning": {
+          "output": "reasoning_content"
+        }
+      }
+    },
+    {
+      "name": "deepseek-reasoner on the DeepSeek API",
+      "match": "*deepseek-reasoner*",
+      "servers": [
+        "deepseek"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://api-docs.deepseek.com/guides/reasoning_model; https://api-docs.deepseek.com/guides/thinking_mode; RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (lines 268-283)",
+      "note": "Thinking-only alias. temperature/top_p/penalties are accepted but have no effect, so none are sent. With tools, every past assistant turn must carry its reasoning_content (§8.4). Any tool_choice is answered with 400 'does not support this tool_choice' (RoleCall prod logs), so it is never sent.",
+      "caps": {
+        "toolChoice": [],
+        "samplers": {
+          "accepted": [
+            "max_tokens",
+            "stop"
+          ],
+          "fixed": true
+        },
+        "reasoning": {
+          "output": "reasoning_content",
+          "control": "none",
+          "canDisable": false,
+          "echo": "all-with-tools"
+        }
+      }
+    },
+    {
+      "name": "DeepSeek V4 hybrid models on the DeepSeek API",
+      "match": "*deepseek-v4*",
+      "servers": [
+        "deepseek"
+      ],
+      "as_of": "2026-09-30",
+      "src": "RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (VVS-254: thinking {type} confirmed by curl on deepseek-v4-pro; file derived from SillyTavern); RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (v4 rejects tool_choice)",
+      "note": "Reasoning by default; `thinking: {type: 'disabled'}` turns it off. Same tool_choice refusal and reasoning_content echo as the reasoner.",
+      "caps": {
+        "toolChoice": [],
+        "reasoning": {
+          "output": "reasoning_content",
+          "control": "toggle",
+          "canDisable": true,
+          "offShape": {
+            "thinking": {
+              "type": "disabled"
+            }
+          },
+          "echo": "all-with-tools"
+        }
+      }
+    },
+    {
+      "name": "Claude through a router",
+      "match": "*claude*",
+      "servers": [
+        "openrouter",
+        "nanogpt"
+      ],
+      "as_of": "2026-09-30",
+      "src": "RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (toOpenAIMessages by model: Anthropic rejects a system message outside the leading block); ARCHITECTURE.md §8.4",
+      "note": "Late system messages become user messages. Prefill stays off unless a row below names a model that takes it.",
+      "caps": {
+        "midSystem": "as-user",
+        "prefill": "none"
+      }
+    },
+    {
+      "name": "Claude 3.x through a router: prefill",
+      "match": "*claude-3*",
+      "servers": [
+        "openrouter",
+        "nanogpt"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/prefill-claudes-response; ARCHITECTURE.md §8.4",
+      "caps": {
+        "prefill": "assistant-last"
+      }
+    },
+    {
+      "name": "Claude 4.0-4.5 through a router: prefill",
+      "match": "*claude-{opus-4,sonnet-4,opus-4[.-][0-5]*,sonnet-4[.-][0-5]*,haiku-4[.-][0-5]*}",
+      "servers": [
+        "openrouter",
+        "nanogpt"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/prefill-claudes-response; ARCHITECTURE.md §8.4 (no prefill on >= 4.6)",
+      "note": "Covers dotted router ids (claude-sonnet-4.5) and dated ones (claude-sonnet-4-20250514). 4.6 and later never get prefill.",
+      "caps": {
+        "prefill": "assistant-last"
+      }
+    },
+    {
+      "name": "Claude :thinking variants: no prefill",
+      "match": "*claude*:thinking*",
+      "servers": [
+        "openrouter",
+        "nanogpt"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking",
+      "note": "Extended thinking does not combine with a prefilled assistant turn.",
+      "caps": {
+        "prefill": "none"
+      }
+    },
+    {
+      "name": "Claude with fixed sampling (Opus 4.7+, 5 series, Fable, Mythos)",
+      "match": "*claude-{opus-4[.-][7-9],opus-5,sonnet-5,fable-,mythos-}*",
+      "as_of": "2026-09-30",
+      "src": "RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (modelRequiresClaudeDefaultSampling, applied to Claude behind OpenAI-compatible servers too); ARCHITECTURE.md §8.2",
+      "note": "These models reject every non-default temperature, top_p or top_k; no tuning sampler is sent.",
+      "caps": {
+        "samplers": {
+          "accepted": [
+            "max_tokens",
+            "stop"
+          ],
+          "fixed": true
+        }
+      }
+    },
+    {
+      "name": "Claude 5 series, Fable, Mythos: thinking cannot be disabled",
+      "match": "*claude-{opus-5,sonnet-5,fable-,mythos-}*",
+      "as_of": "2026-10-26",
+      "src": "ARCHITECTURE.md §8.2, §19.4 (no thinking disabled on claude-opus-5-5 / claude-sonnet-5-5); RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (modelRequiresClaudeAlwaysOnThinking)",
+      "caps": {
+        "toolChoice": [
+          "auto",
+          "none"
+        ],
+        "reasoning": {
+          "canDisable": false
+        }
+      }
+    },
+    {
+      "name": "Gemini through OpenRouter: safety settings off",
+      "match": "*gemini*",
+      "servers": [
+        "openrouter"
+      ],
+      "as_of": "2026-09-30",
+      "src": "VAUDEVILLE:packages/managed-ai/src/contracts/gemini-safety.ts@fb8dc623e (measured against OpenRouter's validator)",
+      "note": "OpenRouter validates safety_settings: thresholds OFF | BLOCK_NONE | BLOCK_ONLY_HIGH | BLOCK_LOW_AND_ABOVE | BLOCK_MEDIUM_AND_ABOVE; the IMAGE_* and JAILBREAK categories are refused. OFF removes the filter, BLOCK_NONE only stops blocking.",
+      "caps": {
+        "extraBody": {
+          "safety_settings": [
+            {
+              "category": "HARM_CATEGORY_HATE_SPEECH",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_HARASSMENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+              "threshold": "OFF"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Mistral family: 9-character tool call ids",
+      "match": "*{mistral,mixtral,ministral,magistral,devstral,codestral,pixtral}*",
+      "as_of": "2026-10-26",
+      "src": "https://docs.mistral.ai/capabilities/function_calling/; https://huggingface.co/mistralai/Mistral-Nemo-Instruct-2407/blob/main/tokenizer_config.json (raise_exception: tool call ids must be alphanumeric strings of length 9)",
+      "caps": {
+        "toolIdFormat": "mistral9"
+      }
+    },
+    {
+      "name": "Mistral family on a Jinja template server: strict roles",
+      "match": "*{mistral,mixtral,ministral,magistral,devstral,codestral,pixtral}*",
+      "servers": [
+        "llama.cpp",
+        "vllm",
+        "lmstudio"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://huggingface.co/mistralai/Mistral-Nemo-Instruct-2407/blob/main/tokenizer_config.json (raise_exception: roles must alternate user/assistant)",
+      "note": "The host preset's free alternation would make these templates throw (HTTP 500).",
+      "caps": {
+        "midSystem": "as-user",
+        "alternation": "strict"
+      }
+    },
+    {
+      "name": "Gemma on a Jinja template server: strict roles",
+      "match": "*gemma*",
+      "servers": [
+        "llama.cpp",
+        "vllm",
+        "lmstudio"
+      ],
+      "as_of": "2026-10-26",
+      "src": "https://huggingface.co/google/gemma-3-12b-it/blob/main/chat_template.json (raise_exception: Conversation roles must alternate user/assistant/user/assistant/...)",
+      "caps": {
+        "midSystem": "as-user",
+        "alternation": "strict"
+      }
+    },
+    {
+      "name": "OpenAI o-series",
+      "match": "o[1-9]*",
+      "servers": [
+        "openai"
+      ],
+      "as_of": "2026-09-30",
+      "src": "SillyTavern via RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (applyOpenAIReasoningModelShape, OPENAI_REASONING_EFFORT_MODELS); RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (no stop on o-series / gpt-5)",
+      "note": "max_tokens is refused (use max_completion_tokens); every sampling control is refused; stop is not sent. Chat Completions returns no reasoning text.",
+      "caps": {
+        "maxTokensField": "max_completion_tokens",
+        "samplers": {
+          "accepted": [
+            "max_tokens"
+          ],
+          "fixed": true
+        },
+        "reasoning": {
+          "output": "none",
+          "control": "effort",
+          "canDisable": false,
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "OpenAI o1-mini / o1-preview: no effort",
+      "match": "{o1-mini,o1-preview}*",
+      "servers": [
+        "openai"
+      ],
+      "as_of": "2026-09-30",
+      "src": "SillyTavern via RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (OPENAI_REASONING_EFFORT_MODELS lists neither)",
+      "caps": {
+        "reasoning": {
+          "control": "none",
+          "efforts": []
+        }
+      }
+    },
+    {
+      "name": "OpenAI gpt-5 family",
+      "match": "gpt-5*",
+      "servers": [
+        "openai"
+      ],
+      "as_of": "2026-09-30",
+      "src": "SillyTavern via RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (applyOpenAIReasoningModelShape, mapOpenAIReasoningEffort); RoleCall:apps/rc/src/lib/providers/adapters/openai.ts@fb8dc623e (no stop on gpt-5)",
+      "note": "max_completion_tokens; sampling is refused while reasoning is active, so none is sent; the original gpt-5 / mini / nano take 'minimal'.",
+      "caps": {
+        "maxTokensField": "max_completion_tokens",
+        "samplers": {
+          "accepted": [
+            "max_tokens"
+          ],
+          "fixed": true
+        },
+        "reasoning": {
+          "output": "none",
+          "control": "effort",
+          "canDisable": false,
+          "efforts": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "OpenAI gpt-5.1+: 'none' effort, no 'minimal'",
+      "match": "gpt-5.[1-9]*",
+      "servers": [
+        "openai"
+      ],
+      "as_of": "2026-09-30",
+      "src": "SillyTavern via RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (mapOpenAIReasoningEffort: gpt-5.1+ floor is low/none)",
+      "caps": {
+        "reasoning": {
+          "canDisable": true,
+          "offShape": {
+            "reasoning_effort": "none"
+          },
+          "efforts": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "OpenAI gpt-5.4+: 'xhigh'",
+      "match": "gpt-5.[4-9]*",
+      "servers": [
+        "openai"
+      ],
+      "as_of": "2026-09-30",
+      "src": "SillyTavern via RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (mapOpenAIReasoningEffort: xhigh only on gpt-5.4+ / codex-max)",
+      "caps": {
+        "reasoning": {
+          "efforts": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        }
+      }
+    },
+    {
+      "name": "OpenAI gpt-5.3-chat-latest: fixed effort",
+      "match": "gpt-5.3-chat-latest",
+      "servers": [
+        "openai"
+      ],
+      "as_of": "2026-09-30",
+      "src": "SillyTavern via RoleCall:apps/rc/src/lib/providers/adapters/reasoning-effort.ts@fb8dc623e (OPENAI_FIXED_REASONING_EFFORT)",
+      "caps": {
+        "reasoning": {
+          "canDisable": false,
+          "efforts": [
+            "medium"
+          ]
+        }
+      }
+    },
+    {
+      "name": "grok-4.5 on OpenRouter: mandatory reasoning",
+      "match": "x-ai/grok-4.5",
+      "servers": [
+        "openrouter"
+      ],
+      "as_of": "2026-09-25",
+      "src": "VAUDEVILLE:packages/managed-ai/src/reasoning-facts.ts@fb8dc623e (provider_error_events 2026-09-25: 400 'Reasoning is mandatory for this endpoint and cannot be disabled', 15 times)",
+      "caps": {
+        "reasoning": {
+          "canDisable": false
+        }
+      }
+    },
+    {
+      "name": "Kimi K2 thinking on NanoGPT: mandatory reasoning",
+      "match": "moonshotai/kimi-k2*thinking*",
+      "servers": [
+        "nanogpt"
+      ],
+      "as_of": "2026-09-26",
+      "src": "VAUDEVILLE:packages/managed-ai/src/reasoning-facts.ts@fb8dc623e (provider_error_events 2026-09-08..26: 400 reasoning_required, 12 times)",
+      "caps": {
+        "reasoning": {
+          "canDisable": false
+        }
+      }
+    }
+  ]
+}

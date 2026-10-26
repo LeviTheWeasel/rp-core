@@ -1,0 +1,22 @@
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"**Setting the scene**\n","reasoning_details":[{"type":"reasoning.text","text":"**Setting the scene**\n","format":"google-gemini-v1","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"Rain, a tired keeper.","reasoning_details":[{"type":"reasoning.text","text":"Rain, a tired keeper.","format":"google-gemini-v1","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":null,"reasoning_details":[{"type":"reasoning.encrypted","data":"CiQB4/H/XgPq0w==","id":"tool_0","format":"google-gemini-v1","index":1}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":"Mara wipes the bar."},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":" \"Room's upstairs.\""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"STOP","logprobs":null}]}
+
+data: {"id":"gen-1793000000-AbCdEfGh","provider":"Google","model":"google/gemini-3-pro-preview","object":"chat.completion.chunk","created":1793000000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}],"usage":{"prompt_tokens":812,"completion_tokens":96,"total_tokens":908,"cost":0.0019,"is_byok":false,"prompt_tokens_details":{"cached_tokens":640,"audio_tokens":0},"cost_details":{"upstream_inference_cost":null,"upstream_inference_prompt_cost":0.00041,"upstream_inference_completions_cost":0.00149},"completion_tokens_details":{"reasoning_tokens":71,"image_tokens":0}}}
+
+data: [DONE]
+

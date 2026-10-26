@@ -132,7 +132,7 @@ describe('refusals (exit 5)', () => {
   );
 
   test(
-    'no --provider in M1a: no_connection, with a hint in text mode; the user line is not written',
+    'no --provider and no config.toml connection for the binding: no_connection, with a hint; the user line is not written',
     async () => {
       const { home, id } = await newSession();
       const r = await run(['send', id, 'Hi', '--home', home]);

@@ -3,13 +3,14 @@
 //
 // Turn admission (ARCHITECTURE.md §6.1, §6.2 step 1, D-38): synchronous, before any write. Every
 // refusal is a typed Refusal thrown to the caller, never an event. Order: busy → held → version →
-// the kind's preconditions → params → connection → preset.
+// the kind's preconditions → params → connection (and its caps for the bound model) → preset.
 
 import { Refusal, type Connection, type RunTurnOptions } from './api.ts';
 import type { EngineCtx } from './context.ts';
 import { parseModelRef } from './route.ts';
 import { BUILTIN_PRESET, validatePreset, type Preset } from '../formats/native.ts';
 import { loadFromLibrary } from '../formats/library.ts';
+import type { ModelCaps } from '../providers/types.ts';
 import type { Binding, SessionConfig, TurnKind } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 
@@ -29,6 +30,28 @@ export interface AdmitState {
 export interface Route {
   conn: Connection;
   model: string;
+  /**
+   * The caps of this model on this connection (§8.2, M1b): conn.capsFor(model) when the connection
+   * resolves caps per model, else conn.caps. Resolved once at admission (§6.2 step 1); everything
+   * downstream (window, assemble, shape, the request, the semaphore) reads these, never conn.caps.
+   */
+  caps: ModelCaps;
+}
+
+/** The caps a connection has for one model: capsFor(model) when it resolves per model, else its caps. */
+export function capsOf(conn: Connection, model: string): ModelCaps {
+  return conn.capsFor?.(model) ?? conn.caps;
+}
+
+/** A route with its caps resolved. A connection that cannot resolve them is refused like a missing one. */
+export function routeTo(conn: Connection, model: string): Route {
+  let caps: ModelCaps;
+  try {
+    caps = capsOf(conn, model);
+  } catch (e) {
+    throw new Refusal('no_connection', `the caps of ${conn.id}:${model} cannot be resolved: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return { conn, model, caps };
 }
 
 export interface AdmittedTurn {
@@ -94,7 +117,7 @@ export function resolvePrimary(ctx: EngineCtx, config: SessionConfig): Route {
   const binding = config.roles.narrator;
   const conn = resolveConnection(ctx, binding.conn);
   if (!conn) throw new Refusal('no_connection', `no connection '${binding.conn}' for the narrator`);
-  return { conn, model: binding.model };
+  return routeTo(conn, binding.model);
 }
 
 /** The head message and what the kind needs of it. */
@@ -160,10 +183,10 @@ export function admitTurn(ctx: EngineCtx, s: AdmitState, opts: RunTurnOptions): 
     const conn = resolveConnection(ctx, explicitFallback.conn);
     // The caller asked for this fallback by name: an unknown one is refused, not ignored.
     if (!conn) throw new Refusal('no_connection', `no connection '${explicitFallback.conn}' for the fallback`);
-    fallback = { conn, model: explicitFallback.model };
+    fallback = routeTo(conn, explicitFallback.model);
   } else if (binding.fallback) {
     const conn = resolveConnection(ctx, binding.fallback.conn);
-    if (conn) fallback = { conn, model: binding.fallback.model };
+    if (conn) fallback = routeTo(conn, binding.fallback.model);
     else fallbackMissing = `${binding.fallback.conn}:${binding.fallback.model}`;
   }
   // §6.6: the fallback is only ever a different connection:model pair.

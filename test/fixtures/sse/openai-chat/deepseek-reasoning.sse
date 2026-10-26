@@ -1,0 +1,16 @@
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"The guest wants"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[{"index":0,"delta":{"content":null,"reasoning_content":" a room. Keep it short."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[{"index":0,"delta":{"content":"\"Second","reasoning_content":null},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[{"index":0,"delta":{"content":" door on the left.\"","reasoning_content":null},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[{"index":0,"delta":{"content":"","reasoning_content":null},"logprobs":null,"finish_reason":"stop"}]}
+
+data: {"id":"5f2c9a1e-7b3d-4c11-9e0a-2d6f8b4a1c55","object":"chat.completion.chunk","created":1793000000,"model":"deepseek-reasoner","system_fingerprint":"fp_7e0991cad4_prod0820_fp8_kvcache","choices":[],"usage":{"prompt_tokens":420,"completion_tokens":58,"total_tokens":478,"prompt_tokens_details":{"cached_tokens":384},"completion_tokens_details":{"reasoning_tokens":41},"prompt_cache_hit_tokens":384,"prompt_cache_miss_tokens":36}}
+
+data: [DONE]
+

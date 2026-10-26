@@ -19,8 +19,12 @@
 // not committed "at the end of the take" unguarded but under its original parent U, as a tail when
 // the head moved, and dropped when U is hidden; the tool loop is never resumed; no module-level
 // `running` set (the engine recovers before it can start a turn on the session).
+//
+// M1b: the checkpointed text goes through the same post-processing as a live answer before it
+// commits (§6.2 step 9, D-57): leaked tool-call markup is stripped, with one notice per open.
 
 import { continuationResult } from '../prompt/shape.ts';
+import { stripToolCallLeaks } from '../tools/leaks.ts';
 import type { Entry, Generation, PrepEntry, TurnEntry } from '../session/entries.ts';
 import type { Notice } from '../protocol/events.ts';
 import { placeCommit, type Journal } from './commit.ts';
@@ -98,6 +102,7 @@ function recoveredGen(prep: PrepEntry | undefined): Generation {
 export function recoverSession(j: RecoverJournal): RecoveryReport {
   const events: RecoveryEvent[] = [];
   const held: string[] = [];
+  let strippedNoticed = false;
 
   for (const o of openTurns(j.entries())) {
     const { turn, prep } = o;
@@ -110,12 +115,25 @@ export function recoverSession(j: RecoverJournal): RecoveryReport {
       events.push({ type: 'recovered', turnId: turn.turn, outcome: 'abandoned' });
     };
 
+    // Post-processing (D-57), as a live turn does before its commit.
+    const leaks = stripToolCallLeaks(o.text);
+    const text = leaks.text;
+    if (leaks.stripped > 0 && !strippedNoticed) {
+      strippedNoticed = true;
+      events.push({
+        type: 'notice',
+        level: 'info',
+        code: 'tool_markup_stripped',
+        message: 'Leaked tool-call markup was removed from an interrupted answer; the model wrote tool calls as text.',
+      });
+    }
+
     // Nothing worth keeping: no text at all, or (continue) nothing beyond an echo of the base.
     const cont = prep?.cont;
     const hasText =
       turn.kind === 'continue'
-        ? cont !== undefined && continuationResult(cont.base, o.text, cont.mode).addition !== ''
-        : o.text.trim() !== '';
+        ? cont !== undefined && continuationResult(cont.base, text, cont.mode).addition !== ''
+        : text.trim() !== '';
     if (!hasText) {
       abandon();
       continue;
@@ -123,8 +141,8 @@ export function recoverSession(j: RecoverJournal): RecoveryReport {
 
     const placed = placeCommit(j, {
       turn,
-      blocks: [{ k: 'text', text: o.text }],
-      addition: o.text,
+      blocks: [{ k: 'text', text }],
+      addition: text,
       ...(cont ? { cont } : {}),
       body: {
         gen: recoveredGen(prep),
@@ -140,7 +158,7 @@ export function recoverSession(j: RecoverJournal): RecoveryReport {
       // (abandoned). The text survives only in chk lines, which `compact` deletes, so it rides the
       // event as the draft (§6.6).
       const outcome = placed.entry.outcome === 'dropped' ? 'dropped' : 'abandoned';
-      events.push({ type: 'recovered', turnId: turn.turn, outcome, draft: o.text });
+      events.push({ type: 'recovered', turnId: turn.turn, outcome, draft: text });
       continue;
     }
     if (placed.kind === 'msg' && placed.tail) {

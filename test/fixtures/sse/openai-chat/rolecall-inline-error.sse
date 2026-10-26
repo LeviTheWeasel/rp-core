@@ -1,0 +1,6 @@
+data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"error":{"message":"upstream exploded mid-stream","code":"server_error"}}
+
+data: [DONE]
+

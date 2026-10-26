@@ -6,7 +6,7 @@
 // implements it in engine.ts; the CLI agent codes against it.
 
 import type { Character, Persona } from '../formats/native.ts';
-import type { ModelCaps, Provider } from '../providers/types.ts';
+import type { ModelCaps, Provider, ProviderError } from '../providers/types.ts';
 import type { DeepPartial, SessionConfig, SessionHeader, TurnKind } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import type { Event } from '../protocol/events.ts';
@@ -57,7 +57,9 @@ export interface EngineOptions {
   retryMaxDelayMs?: number;
   /**
    * §8.8 call timeouts in ms. Defaults: first byte 600 s on a local connection, 120 s otherwise;
-   * idle (no event mid-stream) 120 s. Tests and hosts with slow local models change them.
+   * idle (no bytes mid-stream) 120 s. Both count body bytes, SSE keep-alive comments included, so a
+   * server that keeps the stream alive is never timed out. Tests and hosts with slow local models
+   * change them.
    */
   timeouts?: { firstByteMs?: number; idleMs?: number };
   /**
@@ -67,6 +69,12 @@ export interface EngineOptions {
   prices?: Record<string, { inPerM: number; outPerM: number; asOf: string }>;
   /** The timers behind checkpoints, call timeouts and retry delays. Tests inject fake ones. */
   timers?: DelayTimers;
+  /**
+   * M1b: every provider failure of a model call (retried and tail failures too), with the server's
+   * raw words in `error.detail`. Live only, for a host's debug output (the CLI's --debug, §13): the
+   * engine never stores that text or puts it in an event, whose message is the fixed one of the code.
+   */
+  onProviderError?(info: { sessionId: string; turnId: string; callKey: string; model: string; error: ProviderError }): void;
 }
 
 export type RefusalCode =
@@ -158,8 +166,13 @@ export interface SessionHandle {
   /** M1a refuses these with session_busy while a turn runs (conflict handling is M6). */
   edit(input: { messageId: string; text: string; expectedVersion: number }): { version: number };
   hide(input: { messageId: string; hidden: boolean; expectedVersion: number }): { version: number };
-  /** Move the head to the newest descendant of `messageId` (select a swipe, rewind, go to a tail). */
-  select(input: { messageId: string; expectedVersion: number }): { version: number };
+  /**
+   * Move the head to the newest descendant of `messageId` (select a swipe, go to a tail). With
+   * `exact: true` the head goes to `messageId` itself: a rewind (§5.5), after which the next message
+   * starts a new branch and the old continuation becomes a tail. On a straight path the newest
+   * descendant of every message is the head, so only the exact form can rewind.
+   */
+  select(input: { messageId: string; expectedVersion: number; exact?: boolean }): { version: number };
   /** Copy the path up to `at` into a new session; returns the new session id (not opened). */
   fork(input: { at: string }): string;
   /** Append a config entry (does not change the version). */

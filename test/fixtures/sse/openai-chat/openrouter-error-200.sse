@@ -1,0 +1,10 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1793000001-ZyXwVu","provider":"Chutes","model":"thedrummer/cydonia-24b-v4","object":"chat.completion.chunk","created":1793000001,"choices":[{"index":0,"delta":{"role":"assistant","content":"Mara"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1793000001-ZyXwVu","provider":"Chutes","model":"thedrummer/cydonia-24b-v4","object":"chat.completion.chunk","created":1793000001,"choices":[{"index":0,"delta":{"role":"assistant","content":" opens the"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1793000001-ZyXwVu","provider":"Chutes","model":"thedrummer/cydonia-24b-v4","object":"chat.completion.chunk","created":1793000001,"error":{"code":"server_error","message":"Provider disconnected unexpectedly"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+
+data: [DONE]
+

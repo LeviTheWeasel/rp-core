@@ -2239,7 +2239,8 @@ interface Provider { stream(req: ModelRequest, env: { fetch: typeof fetch; key: 
 **Общий `sse.ts`.**
 
 - **Чтение.** Один байтовый поток и один `TextDecoder`. Разбиение по LF, CR допускается. `data:` принимается с пробелом и без. Строки-комментарии `:` пропускаются.
-- **Когда останавливаться.** Чтение продолжается после `finish` до `[DONE]`, `message_stop` или EOF, потому что usage приходит после finish. EOF без терминального сигнала — это `truncated_stream`, а не придуманный stop.
+- **Когда останавливаться.** Чтение продолжается после `finish` до `[DONE]`, `message_stop` или EOF, потому что usage приходит после finish. EOF без терминального сигнала — это `truncated_stream`, а не придуманный stop. `finish` отдаётся вместе с чанком, где пришёл `finish_reason`, а не на `[DONE]`: обрыв, простой, ошибка или Stop между ними стоят только usage (ответ коммитится с `finish` провайдера, сбой — `stream_tail_failed`).
+- **Без пустых строк.** Сервер, который пишет по строке `data:` на событие без пустой строки между ними, читается построчно: накопленные данные, уже являющиеся целым JSON или `[DONE]`, отдаются, когда приходит следующая строка `data:` (так читал Bunraku).
 - **Ошибка внутри ответа 200** (включая `finish_reason:'error'` у OpenRouter) — провал.
 
 **Фрагменты вызовов тулов.**
@@ -2452,7 +2453,7 @@ interface ModelCaps {
 **`http.ts`.**
 
 - **Fetch с замком на хост.** Редиректы проходят вручную: только на тот же хост, без понижения https→http, не больше 5 шагов.
-- **Таймауты.** Первый байт — 600 с для localhost (обработка промпта медленная) и 120 с для удалённых. Простой между чанками — 120 с.
+- **Таймауты.** Первый байт — 600 с для localhost (обработка промпта медленная) и 120 с для удалённых. Простой между чанками — 120 с. Считаются байты тела, включая SSE-комментарии keep-alive (`: OPENROUTER PROCESSING`, `: keep-alive` DeepSeek, пинги llama.cpp): адаптер сообщает о каждом чанке через `ProviderEnv.onActivity`. До первого события вызов падает, только когда истекли оба срока.
 - Поведение Bun fetch на длинных паузах не проверено; проверка — на M1.
 
 **`ProviderError{category, code, status, retryAfterSec, afterOutput}`.** Коды:
@@ -2462,7 +2463,7 @@ interface ModelCaps {
 - `content_filter`, `refusal`, `empty_response`, `reasoning_only`;
 - `prefill_unsupported`, `forced_tool_unsupported`, `thinking_signature_mismatch`, `tool_protocol_invalid`.
 
-Текст ошибки показывается вживую, а хранится только как `{category, code, status}`.
+`message` — фиксированная фраза кода (`PROVIDER_ERROR_MESSAGE`) со статусом; слова сервера (могут цитировать промпт или эхом вернуть ключ) — в `detail`, их видит только `--debug` (`EngineOptions.onProviderError`), и то после `scrub`. Хранится только `{category, code, status}`. 403 с признаками модерации (OpenRouter `metadata.reasons` / `flagged_input`) — `content_filter`, а не `auth_failed`.
 
 ---
 
@@ -2677,11 +2678,11 @@ post_history (system) ← заменяется post_history_instructions кар�
 Всё считается в одном месте — `prompt/budget.ts` — одинаково для рассказчика и всех агентов.
 
 - **Окно** = `min(caps.contextLength ?? (8192 для localhost | 32768 для удалённых), preset.maxContext, config.window)`. Пресет и сессия могут только уменьшить окно.
-- **Резерв на ответ** = `min(maxTokens ?? (window < 24 576 ? 2 048 : 8 192), window / 2)`. *Рев. 6 [D-89]:* на малом окне 8 192 по умолчанию почти не оставляли бы места истории (§7.4.6). Рассуждающей модели на таком окне `max_tokens` стоит задать явно.
+- **Резерв на ответ** = `min(maxTokens ?? (window < 24 576 ? 2 048 : 8 192), window / 2)`. *Рев. 6 [D-89]:* на малом окне 8 192 по умолчанию почти не оставляли бы места истории (§7.4.6). Рассуждающей модели на таком окне `max_tokens` стоит задать явно. `maxTokens` здесь уже ограничен `caps.maxOutput`, а в запрос уходит сам резерв: промпт плюс `max_tokens` всегда помещается в окно. Если `max_tokens` пользователя урезан, движок говорит об этом один раз (`max_tokens_reduced`).
 - **Подсчёт токенов.**
   - **M1, без зависимостей:** консервативная оценка по символам (символы/3, для кириллицы — символы/2,5) с поправкой EMA.
   - **С M2:** `gpt-tokenizer` o200k, умноженный на поправку EMA для каждой модели.
-  - Поправка учится по промпт-токенам, которые сообщает провайдер (llama.cpp `timings.prompt_n`, usage Anthropic): α 0,3, старт 1,15, коридор 0,8–2,0.
+  - Поправка учится по промпт-токенам, которые сообщает провайдер (llama.cpp `timings.prompt_n`, usage Anthropic): α 0,3, старт 1,15, коридор 0,8–2,0. Вызов с отношением ниже 0,5 — не сэмпл: сервер обрезал промпт (Ollama молча выкидывает старые сообщения под свой `num_ctx`). О таком вызове движок один раз говорит `context_truncated_by_server`.
   - Счётчик подключается через внутренний интерфейс.
 - **Доли окна:**
   - лор вместе с блоком Compendium — 25 %; если у Compendium есть кандидаты, движок лора берёт не больше 60 % этой доли (§7.4.1);
@@ -2763,7 +2764,7 @@ type Command =
   | { method: 'turn/stop' | 'turn/commitAnyway' | 'turn/discard'; params: { sessionId: string; turnId: string } }
   | { method: 'message/edit'; params: { sessionId: string; messageId: string; text: string; expectedVersion: number } }
   | { method: 'message/hide'; params: { sessionId: string; messageId: string; hidden: boolean; expectedVersion: number } }
-  | { method: 'history/select'; params: { sessionId: string; messageId: string; expectedVersion: number } }  // голова → новейший потомок
+  | { method: 'history/select'; params: { sessionId: string; messageId: string; expectedVersion: number; exact?: boolean } }  // голова → новейший потомок; exact: true — на само сообщение (откат, §5.5; M1b)
   | { method: 'history/tails'; params: { sessionId: string } }
   | { method: 'history/search'; params: { sessionId: string; query: string; before?: number; limit?: number } }
   | { method: 'lore/test'; params: { sessionId: string; text: string } }
@@ -2872,6 +2873,8 @@ Mira › *Она ставит недочищенный бокал…*
   [1/1 · 386 tok · 7.9s · director: planned · memory: +2 за прошлый ответ]   /r swipe  /c continue  /e edit
 ```
 
+Существующую сессию открывает `rp-core chat <session>`; `rp-core new` на терминале сразу открывает её чат.
+
 **Вывод.**
 
 - Рассуждения приглушены и свёрнуты (`/think show|hide`).
@@ -2881,8 +2884,8 @@ Mira › *Она ставит недочищенный бокал…*
 
 **Ввод.**
 
-- Ctrl+C во время генерации останавливает ход с сохранением полученного; на приглашении два Ctrl+C подряд — выход.
-- Строку, набранную во время хода, REPL держит у себя и после `done`/`stopped`/`failed` отправляет через `submit` со свежей версией.
+- Ctrl+C во время генерации останавливает ход с сохранением полученного, даже если что-то уже набрано; на приглашении Ctrl+C сначала стирает набранное, два Ctrl+C подряд на пустом приглашении — выход.
+- Строку, набранную во время хода, REPL держит у себя и после `done`/`stopped`/`failed` отправляет через `submit` со свежей версией. Пока идёт ответ, вывод readline приглушён (эхо клавиш и перерисовки строки не попадают в ответ); недонабранный текст возвращается в приглашение после хода.
 - Команды правки истории во время хода REPL отклоняет сам.
 - При открытии сессии с отложенным (`held`) ответом REPL спрашивает «сохранить / отбросить».
 
@@ -3232,6 +3235,8 @@ as_of = "2026-10-06"
 ---
 
 **M1b. Локальная RP в терминале** · 17–28 дней
+
+*Статус: **готово 26.10.2026**. 1468 тестов, проверка типов чистая, живое демо на Ollama (Mag-Mell 12B) — `docs/M1B-DEMO.md`; заметки — «Примечания к ревизии», п. 35–37.*
 
 *Содержание.*
 - **Адаптер openai-chat.**
@@ -3885,7 +3890,7 @@ as_of = "2026-10-06"
 | `protocol/rpc.ts` | adapt | `BR:src/mcp/protocol.ts` (134) — конверт JSON-RPC, ~60 строк; `BR:src/mcp/server.ts` (195) — антипример | Чтение через jsonl.ts; конкурентная диспетчеризация, чтобы `turn/stop` работал во время хода; ошибки `{-32000, data:{code}}`; `gate/request` на M9 | M | M6 (+M9) |
 | `protocol/jsonl.ts` | adapt | `BR:src/kit/mcp/connections.ts` `readLines` (~18 из 297) | `lines(stream)` для stdin и `splitLines(bytes) → {lines, torn}` для журнала; CR, пустые строки, EOF. Один сплиттер на всё ядро [D-36] | S | M1a |
 | `protocol/coalesce.ts` | port | `BR:src/ui/server-chats-turn.ts` `coalesceTurnEvents` (стр. 43–104) | Без ветки `full`; ключ пачки (session, turn, type); планировщик инъецируется [D-36] | S | M1a |
-| `cli/main.ts` | fresh | `BR:docs/KINTSU-PLAN.md` K4 — спецификация; `BR:src/cli-io.ts` — стиль строгого разбора флагов | Подкоманды `new`/`open`/`send`/`sessions`/`compact`/`probe`/`import`; `--stdio`, `--home`, `--sandbox`/`--seed`, `--debug` | M | M1a–M1b (`compact` — M4 [D-35]; `probe`: каталог — M1b, активные пробы — M3) |
+| `cli/main.ts` | fresh | `BR:docs/KINTSU-PLAN.md` K4 — спецификация; `BR:src/cli-io.ts` — стиль строгого разбора флагов | Подкоманды `init`/`new`/`chat` (REPL открытой сессии)/`send`/`sessions`/`show`/`import`/`probe`/`models`/`compact`; `--stdio`, `--home`, `--sandbox`/`--seed`, `--debug` | M | M1a–M1b (`compact` — M4 [D-35]; `probe`: каталог — M1b, активные пробы — M3) |
 | `cli/repl.ts` | fresh | — (REPL Kit на OpenTUI/React не подходит). Урок RoleCall vvs-805: Stop, нажатый до появления id хода, не должен теряться | readline + ANSI; набранная строка держится до конца хода; вопрос про `held`; Ctrl+C во время допуска | L | M1b, растёт до M5 |
 | `cli/render.ts` | fresh | — | Курсив для действий; свёрнутые рассуждения; строка статуса; `notice` раз за сессию | M | M1b |
 | `cli/oneshot.ts` | fresh | `BR:docs/KINTSU-PLAN.md` K4 | `send … --json` через coalesce.ts; коды выхода §12.3; `onError:'keep'` | S | M1a |
@@ -5046,3 +5051,19 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
     - токены CJK недооцениваются;
     - у макросов нет канала ошибок;
     - вне ST-семантики `use_regex` у Seraphina не исполняется (регулярки — M2).
+
+**Ревизия 11 (26.10.2026, M1b реализована).**
+
+35. *M1b готова.*
+    - Есть адаптер openai-chat, `config.toml`, секреты, записи возможностей с пробой каталога и REPL.
+    - Добавлены команды `init`, `chat`, `probe` и `models`.
+    - Работает на живой Ollama: первый токен — ≈ 6 с на холодной модели, 30–80 мс на тёплой.
+36. *Найдено при реализации:*
+    - **fetch в Bun 1.3.14** имеет собственный таймаут простоя в 5 минут. `http.ts` выключает его через `timeout:false`, таймауты принадлежат движку (§8.8).
+    - **Ollama** не сообщает свой `num_ctx` через API, а по умолчанию это 4096. Окно нужно задать в `[caps."conn:model"] context_length` или параметром `num_ctx` в Modelfile. Иначе сервер молча обрезает промпт, и ядро предупреждает `notice{context_truncated_by_server}`.
+    - **Текст ошибок провайдера** больше не попадает в сообщения: `ProviderError.message` — фиксированная фраза на код, сырой текст лежит в `detail` и виден только под `--debug`, с вырезанными секретами.
+37. *Открытые мелочи:*
+    - после `finish_reason` без `[DONE]` ход ждёт таймаут простоя, прежде чем закоммитить;
+    - `models` при 401 завершается с кодом 0;
+    - текст, набранный во время ответа в REPL, не виден до конца ответа;
+    - `key_cmd` переживает `kill -9` самого rp-core.

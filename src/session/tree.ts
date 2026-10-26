@@ -105,6 +105,24 @@ export function siblings(idx: TreeIndex, id: string): string[] {
   return idx.children.get(m.parent) ?? [id];
 }
 
+/**
+ * The versions of message `id` (including it), ordered by seq: its siblings of the same role and,
+ * for an assistant message, of the same kind (greetings among greetings, generated answers among
+ * answers). A rewind onto the player's own line puts their next line beside the old answers under one
+ * parent; it is a new branch, not a version of those answers, so it is neither counted as a swipe
+ * nor reached by browsing them. [] for an unknown id.
+ */
+export function swipeSiblings(idx: TreeIndex, id: string): string[] {
+  const m = idx.msgs.get(id);
+  if (!m) return [];
+  const greeting = m.gen?.kind === 'greeting';
+  const all = idx.children.get(m.parent) ?? [id];
+  return all.filter((sid) => {
+    const s = idx.msgs.get(sid);
+    return s !== undefined && s.role === m.role && (s.gen?.kind === 'greeting') === greeting;
+  });
+}
+
 /** Follow the newest child repeatedly from `id` down to a leaf (selecting an old swipe). */
 export function newestDescendant(idx: TreeIndex, id: string): string {
   let cur = id;

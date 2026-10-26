@@ -19,21 +19,34 @@
 // reply without a guard, DOMException('stopped') (typed abort reasons instead), recall, trackers,
 // regex, Final Cut, the Inspector and the meter. Added: one retry of the same model before the
 // fallback, the answer-in-reasoning / reasoning-only rule (D-31), `onError: 'keep'` (D-22).
+//
+// M1b: every caps decision reads the route's caps for its model (Route.caps = capsFor(model) ??
+// conn.caps); the key is resolved per call (narrate.ts); the EMA token correction of the model is
+// derived from the path and handed to assemble (D-50); leaked tool-call markup is stripped from the
+// answer before it commits (step 9, D-57); one `usage` event per call carries the merged usage and
+// its cost (§11: provider, else the price table, else null). The reply's max_tokens is the reserve
+// the budget held back (never more, so prompt + max_tokens fits the window; capped by the model's
+// caps.maxOutput too); a server that reports far fewer prompt tokens than were sent cut the prompt,
+// which is told once and kept out of the EMA.
 
 import { abortableDelay, abortWith, type AbortReason } from './abort.ts';
-import type { Connection, TurnOutcome } from './api.ts';
+import type { TurnOutcome } from './api.ts';
 import type { AdmittedTurn, Route } from './admit.ts';
 import { EventQueue, singleConsumer } from './bus.ts';
 import { Checkpointer } from './checkpoint.ts';
 import { messageViewOf, placeCommit, type Journal, type Placed } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
+import { priceFor, usageCost } from './cost.ts';
+import { tokenFactorFor, truncatedByServer } from './ema.ts';
 import { hookBeforeAssemble, hookTransformReply, hookTransformRequest, type HookCtx } from './hooks.ts';
 import { streamCall, timeoutsFor, type CallResult } from './narrate.ts';
 import { isRetryable, modelLabel, retryDelayMs } from './route.ts';
 import { assemble, traceForSent, type AssembleResult } from '../prompt/assemble.ts';
+import { estimateMessages } from '../prompt/tokens.ts';
 import { contextWindow, replyReserve } from '../prompt/budget.ts';
 import { continuationResult, shape } from '../prompt/shape.ts';
 import type { Event, EventBody, Notice } from '../protocol/events.ts';
+import { stripToolCallLeaks } from '../tools/leaks.ts';
 import type { FinishReason, ProviderError, PromptMsg, Usage } from '../providers/types.ts';
 import type { Samplers } from '../formats/native.ts';
 import type { Binding, Block, Generation, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
@@ -113,6 +126,11 @@ export class TurnRun {
   /** Everything streamed this turn (a retry only happens before any output, so attempts never mix). */
   private text = '';
   private reasoning = '';
+  /**
+   * The streamed text after post-processing (§6.2 step 9): what commits and what a draft hands back.
+   * null until the stream is over; the text events already sent may still show what was removed.
+   */
+  private answer: string | null = null;
   /** The answer is in hand and being written: a failure now must keep the checkpoint (D-38). */
   private committing = false;
   private ended = false;
@@ -173,17 +191,34 @@ export class TurnRun {
     // Step 4: assemble (pure). The window and reserve follow the primary route.
     const primary = plan.primary;
     const window = contextWindow({
-      caps: primary.conn.caps,
+      caps: primary.caps,
       local: primary.conn.local,
       preset: plan.preset,
       ...(plan.config.window !== undefined ? { configWindow: plan.config.window } : {}),
     });
     const limits = replyLimits(plan.binding, plan.preset.samplers);
-    const reserve = replyReserve(window, limits.maxTokens);
+    // The reply may ask for no more than the model can write (caps.maxOutput, e.g. OpenRouter's
+    // top_provider.max_completion_tokens) and no more than the budget held back for it: the request
+    // carries the reserve itself, so the prompt the budget packed plus max_tokens fits the window.
+    const maxOutput = tokenLimit(primary.caps.maxOutput);
+    const wanted = limits.maxTokens !== undefined && maxOutput !== undefined ? Math.min(limits.maxTokens, maxOutput) : (limits.maxTokens ?? maxOutput);
+    const reserve = replyReserve(window, wanted);
+    if (limits.maxTokens !== undefined && reserve < limits.maxTokens && this.host.firstNotice('max_tokens_reduced')) {
+      this.notice({
+        level: 'info',
+        code: 'max_tokens_reduced',
+        message:
+          maxOutput !== undefined && maxOutput < limits.maxTokens && reserve === maxOutput
+            ? `max_tokens ${limits.maxTokens} is above what ${modelLabel(primary.conn.id, primary.model)} can write; ${reserve} is sent.`
+            : `max_tokens ${limits.maxTokens} does not fit: the context window is ${window} tokens and at most half of it is kept for the reply, so ${reserve} is sent.`,
+      });
+    }
     // The state the turn starts from: the head, except on a swipe, which regrows the answer from U
     // (§6.3), so the replaced answer's variables and fires must not reach its sibling (§5.10).
     const current = this.host.view();
     const view = current.head === plan.upTo ? current : foldViewAt(this.host.header(), this.host.tree(), plan.upTo);
+    // D-50: the model's token correction, learned from the earlier answers on this path.
+    const tokenFactor = tokenFactorFor(this.host.tree(), view, primary.model);
     let asm: AssembleResult;
     try {
       asm = assemble({
@@ -197,9 +232,10 @@ export class TurnRun {
         placements,
         ...(plan.config.authorNote ? { authorNote: plan.config.authorNote } : {}),
         ...(plan.guidance ? { guidance: { text: plan.guidance, ...(plan.rejected !== undefined ? { rejected: plan.rejected } : {}) } } : {}),
-        caps: primary.conn.caps,
+        caps: primary.caps,
         window,
         reserve,
+        tokenFactor,
         seed: this.entry.seed,
         now: this.entry.now,
         timeZone: this.ctx.timeZone,
@@ -215,7 +251,7 @@ export class TurnRun {
     // Step 5: shape for the primary model.
     let shaped: Shaped;
     try {
-      shaped = this.shapeFor(primary.conn, asm);
+      shaped = this.shapeFor(primary, asm);
     } catch (e) {
       return this.failEarly('request', 'shape_failed', errMessage(e));
     }
@@ -252,6 +288,9 @@ export class TurnRun {
     // Every byte that arrived goes to a chk before anything can commit or crash (§6.2 step 8).
     this.chk.flush();
     const { res } = narrated;
+    this.checkServerWindow(narrated, window);
+    // Step 9: post-processing, before anything commits or is handed back.
+    this.postProcess();
     if (res.tailError) {
       this.notice({
         level: 'warn',
@@ -264,14 +303,17 @@ export class TurnRun {
     return this.onFinished(asm, narrated);
   }
 
-  /** Shape (pure) for one connection's caps. */
-  private shapeFor(conn: Connection, asm: Extract<AssembleResult, { ok: true }>): Shaped {
+  /** Shape (pure) for one route's caps (the model's, not the connection default). */
+  private shapeFor(route: Route, asm: Extract<AssembleResult, { ok: true }>): Shaped {
+    const { character, persona } = this.host.header().cast;
     const out = shape({
       messages: asm.messages,
-      caps: conn.caps,
+      caps: route.caps,
       prefill: asm.prefill,
       kind: this.plan.kind,
       ...(this.plan.preset.postProcessing ? { postProcessing: this.plan.preset.postProcessing } : {}),
+      // Speaker prefixes for the 'single' post-processing mode, as the macros name them.
+      names: { char: character.name, user: persona?.name || 'User' },
     });
     this.notices(out.notices);
     const shaped: Shaped = { messages: out.messages };
@@ -294,7 +336,9 @@ export class TurnRun {
     const route: NonNullable<Generation['route']> = [];
     const calls: Trace['calls'] = [];
     const samplers = limits.samplers;
-    const maxTokens = limits.maxTokens ?? reserve;
+    // The reserve (it already holds the binding's max_tokens and the primary's maxOutput); a fallback
+    // with a smaller output limit gets its own.
+    const maxTokensFor = (r: Route): number => Math.min(reserve, tokenLimit(r.caps.maxOutput) ?? reserve);
     this.chk.start();
 
     const call = async (r: Route, shaped: Shaped): Promise<CallResult> => {
@@ -302,9 +346,10 @@ export class TurnRun {
       const res = await streamCall({
         conn: r.conn,
         model: r.model,
+        caps: r.caps,
         messages: shaped.messages,
         ...(shaped.prefill !== undefined ? { prefill: shaped.prefill } : {}),
-        maxTokens,
+        maxTokens: maxTokensFor(r),
         samplers,
         ...(plan.binding.reasoning ? { reasoning: plan.binding.reasoning } : {}),
         callKey,
@@ -325,19 +370,19 @@ export class TurnRun {
           this.reasoning += delta;
           this.emit({ type: 'reasoning', turnId: this.entry.turn, delta, offset });
         },
-        onUsage: (usage: Usage) => {
-          this.emit({
-            type: 'usage',
-            callKey,
-            agent: 'narrator',
-            model: label,
-            usage,
-            // §11: the provider's own figure, else unknown (null) — never 0. Price tables are M1b.
-            costUsd: usage.cost ?? null,
-            priceSource: usage.cost !== undefined ? 'provider' : 'none',
-          });
-        },
       });
+      // One usage event per call, with everything the call reported merged, so a cost from the
+      // price table is never computed from half a usage (§11).
+      if (res.usage) this.emitUsage(callKey, r, res.usage);
+      // The host's debug tap sees the raw failure (server words in error.detail); events never do.
+      for (const error of [res.error, res.tailError]) {
+        if (!error || !this.ctx.onProviderError) continue;
+        try {
+          this.ctx.onProviderError({ sessionId: this.host.sessionId, turnId: this.entry.turn, callKey, model: label, error });
+        } catch {
+          /* a debug sink must never break a turn */
+        }
+      }
       calls.push({ callKey, agent: 'narrator', model: label, ms: res.ms, ...(res.usage ? { usage: res.usage } : {}) });
       return res;
     };
@@ -374,7 +419,7 @@ export class TurnRun {
       });
       active = fb;
       // Re-shaped for the fallback's caps (prefill support may differ), through the same gate.
-      shaped = this.shapeFor(fb.conn, asm);
+      shaped = this.shapeFor(fb, asm);
       shaped.messages = await hookTransformRequest(this.ctx.hooks, shaped.messages, this.hookCtx);
       res = await call(active, shaped);
     }
@@ -386,20 +431,63 @@ export class TurnRun {
 
   // ---- outcomes -------------------------------------------------------------------------------
 
+  /**
+   * The server reported far fewer prompt tokens than were sent: it cut the prompt to fit a smaller
+   * window than the one budgeted for (Ollama does so silently at its num_ctx, keeping only the newest
+   * messages). Told once per session, with what to do; the call is no EMA sample (tokens.ts).
+   */
+  private checkServerWindow(n: Narrated, window: number): void {
+    const reported = n.res.usage?.inputTotal;
+    const estimated = estimateMessages(n.shaped.messages);
+    if (!truncatedByServer(estimated, reported) || !this.host.firstNotice('context_truncated_by_server')) return;
+    const label = modelLabel(n.active.conn.id, n.active.model);
+    this.notice({
+      level: 'warn',
+      code: 'context_truncated_by_server',
+      message:
+        `The server reported ${reported} prompt tokens for a prompt of about ${estimated}: it probably cut the prompt to fit a ` +
+        `context window smaller than the ${window} tokens assumed for ${label}, dropping older messages unseen. ` +
+        `Set context_length under [caps."${label}"] in config.toml (\`rp-core probe ${label}\` reads what the server reports), ` +
+        `or give the model a larger window on the server.`,
+    });
+  }
+
+  /** The answer text: post-processed once the stream is over, the raw stream before that. */
+  private get answerText(): string {
+    return this.answer ?? this.text;
+  }
+
+  /**
+   * §6.2 step 9 (D-57): leaked tool-call markup is cut out of the answer. Streamed `text` events may
+   * have shown it; the committed message and every draft carry the stripped text. Told once per
+   * session. Inline reasoning tags are split by the adapter, before the text reaches the engine.
+   */
+  private postProcess(): void {
+    const { text, stripped } = stripToolCallLeaks(this.text);
+    this.answer = text;
+    if (stripped > 0 && this.host.firstNotice('tool_markup_stripped')) {
+      this.notice({
+        level: 'info',
+        code: 'tool_markup_stripped',
+        message: `Leaked tool-call markup was removed from the answer (${stripped} block${stripped === 1 ? '' : 's'}); the model wrote tool calls as text.`,
+      });
+    }
+  }
+
   /** The addition a continue would commit ('' when nothing beyond an echo arrived). */
   private addition(n: Narrated): string {
     const cont = n.shaped.cont;
-    return cont ? continuationResult(cont.base, this.text, cont.mode).addition : '';
+    return cont ? continuationResult(cont.base, this.answerText, cont.mode).addition : '';
   }
 
   private hasAnswerText(n: Narrated): boolean {
-    return this.plan.kind === 'continue' ? this.addition(n) !== '' : this.text.trim() !== '';
+    return this.plan.kind === 'continue' ? this.addition(n) !== '' : this.answerText.trim() !== '';
   }
 
   /** §6.5: text in hand → commit as 'stopped'; nothing → end{stopped-empty}. */
   private async onStopped(asm: Extract<AssembleResult, { ok: true }>, n: Narrated): Promise<Ending> {
     if (!this.hasAnswerText(n)) return this.stoppedEmpty();
-    const placed = await this.commit(asm, n, answerBlocks(this.text, this.reasoning), 'stopped');
+    const placed = await this.commit(asm, n, answerBlocks(this.answerText, this.reasoning), 'stopped');
     if (placed.kind === 'end') return this.lostToConflict(placed);
     const message = this.messageView(placed);
     return { outcome: { type: 'stopped', message }, terminal: { type: 'stopped', turnId: this.entry.turn, message } };
@@ -407,9 +495,9 @@ export class TurnRun {
 
   /** §6.6 / D-22: a failure. After output with onError 'keep' the text is committed as 'interrupted'. */
   private async onFailure(asm: Extract<AssembleResult, { ok: true }>, n: Narrated, err: ProviderError): Promise<Ending> {
-    const draft = this.text;
+    const draft = this.answerText;
     if (n.res.output && this.plan.onError === 'keep' && this.hasAnswerText(n)) {
-      const placed = await this.commit(asm, n, answerBlocks(this.text, this.reasoning), 'interrupted');
+      const placed = await this.commit(asm, n, answerBlocks(this.answerText, this.reasoning), 'interrupted');
       if (placed.kind === 'end') return this.lostToConflict(placed);
     } else {
       this.host.append({ t: 'end', ts: isoNow(this.ctx), turn: this.entry.turn, outcome: 'failed', code: err.code });
@@ -427,9 +515,9 @@ export class TurnRun {
       return this.done(await this.commit(asm, n, [], finish));
     }
 
-    let text = this.text;
+    let text = this.answerText;
     let reasoning = this.reasoning;
-    if (text.trim() === '' && reasoning.trim() !== '' && n.active.conn.caps.reasoning.answerInReasoning) {
+    if (text.trim() === '' && reasoning.trim() !== '' && n.active.caps.reasoning.answerInReasoning) {
       // The capability record says this server puts the answer in the reasoning field (§6.6).
       text = reasoning;
       reasoning = '';
@@ -488,7 +576,7 @@ export class TurnRun {
     const placed = placeCommit(this.host, {
       turn: this.entry,
       blocks,
-      addition: this.text,
+      addition: this.answerText,
       ...(shaped.cont ? { cont: shaped.cont } : {}),
       body: { gen, trace, ...(Object.keys(asm.varsDiff).length > 0 ? { vars: asm.varsDiff } : {}) },
       // Live, a continue on a changed target is discarded (§6.6); recovery says abandoned.
@@ -521,7 +609,7 @@ export class TurnRun {
   /** The unconditional-commit rule ended the turn (U hidden, continue target changed). */
   private lostToConflict(placed: Extract<Placed, { kind: 'end' }>): Ending {
     const outcome = placed.entry.outcome;
-    return this.failed('conflict', outcome, `The session changed during the turn; the answer was ${outcome}.`, this.text);
+    return this.failed('conflict', outcome, `The session changed during the turn; the answer was ${outcome}.`, this.answerText);
   }
 
   // ---- endings --------------------------------------------------------------------------------
@@ -558,24 +646,39 @@ export class TurnRun {
       // handed back as the draft and the turn fails; it is never reported as done.
       this.committing = false;
       const who = e.info.pid > 0 ? `pid ${e.info.pid} on ${e.info.host}` : 'it wrote to the journal meanwhile';
-      return this.failed('conflict', 'session_locked', `Another process took this session over (${who}); the answer was not saved.`, this.text);
+      return this.failed('conflict', 'session_locked', `Another process took this session over (${who}); the answer was not saved.`, this.answerText);
     }
     if (this.committing) {
       // D-38: the answer arrived but is not written. Its checkpoint stays (no `end`), so the
       // next open commits it as interrupted.
       this.chk.flush();
-      return this.failed('internal', 'commit_deferred', `The reply arrived but could not be saved yet; it comes back when the session reopens (${message}).`, this.text);
+      return this.failed('internal', 'commit_deferred', `The reply arrived but could not be saved yet; it comes back when the session reopens (${message}).`, this.answerText);
     }
     try {
       this.host.append({ t: 'end', ts: isoNow(this.ctx), turn: this.entry.turn, outcome: 'failed', code: 'internal_error' });
     } catch {
       /* the journal is unusable; recovery closes the turn at the next open */
     }
-    return this.failed('internal', 'internal_error', message, this.text);
+    return this.failed('internal', 'internal_error', message, this.answerText);
+  }
+
+  /** §11: the call's usage and its cost (provider-reported, else the price table, else null). */
+  private emitUsage(callKey: string, r: Route, usage: Usage): void {
+    const cost = usageCost(usage, priceFor(this.ctx.prices, r.conn.id, r.model));
+    this.emit({
+      type: 'usage',
+      callKey,
+      agent: 'narrator',
+      model: modelLabel(r.conn.id, r.model),
+      usage,
+      costUsd: cost.costUsd,
+      priceSource: cost.priceSource,
+    });
   }
 
   private notices(list: readonly Notice[]): void {
-    // Prefill/tools notices come once per session (D-28); the assembler emits them every call.
+    // Assemble/shape notices (prefill/tools D-28, post-processing) come once per session; the
+    // assembler and shape emit them on every call.
     for (const n of list) if (this.host.firstNotice(n.code)) this.notice(n);
   }
 

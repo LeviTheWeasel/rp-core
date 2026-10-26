@@ -3,7 +3,8 @@
 //
 // One-shot `rp-core send` (ARCHITECTURE.md §12.3; Kintsu K4 as the spec): open the session (lock
 // and recovery), run one turn, print it, exit with a code that says how it ended. A thin client of
-// the library API (§12.1): it calls exactly what --stdio (M6) and the REPL (M1b) will call.
+// the library API (§12.1): it calls exactly what --stdio (M6) and the REPL (M1b) call. The session's
+// bindings resolve against config.toml's connections (M1b) unless --provider overrides every role.
 //
 // Output contract:
 // - text mode: answer deltas to stdout as they arrive, a final newline; everything else to stderr;
@@ -18,7 +19,8 @@ import { createCoalescer, type Coalescer } from '../protocol/coalesce.ts';
 import type { Event } from '../protocol/events.ts';
 import type { TurnKind } from '../session/entries.ts';
 import type { Io } from './io.ts';
-import { createTextRenderer } from './render.ts';
+import { createTextRenderer, redactEvent } from './render.ts';
+import { engineOptions, redactor, type Runtime } from './runtime.ts';
 import { installTurnSignals, type SignalSource } from './signals.ts';
 
 /** Exit codes (§12.3; the same as Kintsu K4), plus 1 for errors and 64 (EX_USAGE) for usage. */
@@ -48,6 +50,8 @@ export interface SendOptions {
   debug: boolean;
   /** --provider script:<file>: replaces every role's connection for this process. */
   provider?: Connection;
+  /** config.toml's connections and prices (M1b): the session's bindings resolve against them. */
+  rt?: Runtime;
   io: Io;
   /** Leave the process at once (second SIGINT/SIGTERM). Never returns. */
   exitNow: (code: number) => void;
@@ -63,30 +67,38 @@ interface Sink {
   close(): void;
 }
 
-function jsonSink(io: Io): Sink {
-  const c: Coalescer = createCoalescer((ev) => io.out.write(`${JSON.stringify(ev)}\n`));
+function jsonSink(io: Io, redact?: (text: string) => string): Sink {
+  const c: Coalescer = createCoalescer((ev) => io.out.write(`${JSON.stringify(redactEvent(ev, redact))}\n`));
   return { push: (ev) => c.push(ev), close: () => c.close() };
 }
 
-function textSink(io: Io, debug: boolean): Sink {
-  const r = createTextRenderer(io, { debug });
+function textSink(io: Io, debug: boolean, redact?: (text: string) => string): Sink {
+  const r = createTextRenderer(io, { debug, ...(redact ? { redact } : {}) });
   return { push: (ev) => r.push(ev), close: () => r.finish() };
 }
 
 /** Hints for refusals a one-shot user can act on. */
 const REFUSAL_HINT: Partial<Record<string, string>> = {
-  no_connection: 'M1a has no configured connections yet: pass --provider script:<file>',
+  no_connection:
+    "the session's binding names a connection that config.toml does not define (or cannot run yet): " +
+    'add it under [connections], switch the model with /model in `rp-core chat`, or pass --provider script:<file>',
   nothing_to_reply: 'the last message is not yours: give --kind swipe or --kind continue, or send text',
   nothing_to_swipe: 'only a model answer can be swiped (a greeting cannot)',
   session_locked: 'another rp-core process has this session open',
 };
 
-/** A refusal: the machine-readable line on stderr (both modes) and, in text mode, a hint. */
-export function reportRefusal(io: Io, r: Refusal, json: boolean): number {
+/**
+ * A refusal: the machine-readable line on stderr (both modes) and, in text mode, a hint. With a
+ * runtime, a no_connection refusal also names the config.toml connections that were skipped.
+ */
+export function reportRefusal(io: Io, r: Refusal, json: boolean, rt?: Runtime): number {
   if (!json) {
     io.err.write(`rp-core: refused (${r.code}): ${r.message}\n`);
     const hint = REFUSAL_HINT[r.code];
     if (hint) io.err.write(`rp-core: hint: ${hint}\n`);
+    if (r.code === 'no_connection' && rt) {
+      for (const s of rt.skipped) io.err.write(`rp-core: hint: connection "${s.id}" in config.toml is skipped: ${s.why}\n`);
+    }
   }
   io.err.write(`${JSON.stringify({ type: 'refusal', code: r.code, message: r.message })}\n`);
   return EXIT.refused;
@@ -106,6 +118,7 @@ function startTurn(s: SessionHandle, o: SendOptions): TurnHandle {
 export async function runSend(o: SendOptions): Promise<number> {
   const engine = await Engine.open({
     ...o.engine,
+    ...(o.rt ? engineOptions(o.rt) : {}),
     home: o.home,
     ...(o.provider ? { providerOverride: o.provider } : {}),
   });
@@ -114,10 +127,14 @@ export async function runSend(o: SendOptions): Promise<number> {
     try {
       session = engine.session(o.sessionId);
     } catch (e) {
-      if (e instanceof Refusal) return reportRefusal(o.io, e, o.json);
+      if (e instanceof Refusal) return reportRefusal(o.io, e, o.json, o.rt);
       throw e;
     }
-    const sink = o.json ? jsonSink(o.io) : textSink(o.io, o.debug);
+    // Every message printed is scrubbed of the secrets this process knows (§13), as a last line of
+    // defence: provider failures already carry only fixed sentences, the server's words reach stderr
+    // through the --debug tap alone.
+    const redact = o.rt ? redactor(o.rt) : undefined;
+    const sink = o.json ? jsonSink(o.io, redact) : textSink(o.io, o.debug, redact);
     // Recovery happened while opening; its events precede anything this turn says.
     for (const ev of session.openEvents()) sink.push(ev);
 
@@ -126,7 +143,7 @@ export async function runSend(o: SendOptions): Promise<number> {
       turn = startTurn(session, o);
     } catch (e) {
       sink.close();
-      if (e instanceof Refusal) return reportRefusal(o.io, e, o.json);
+      if (e instanceof Refusal) return reportRefusal(o.io, e, o.json, o.rt);
       throw e;
     }
 

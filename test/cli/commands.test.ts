@@ -51,6 +51,11 @@ describe('new', () => {
       const home = tmpHome('rp-core-cli-');
       const persona = join(home, 'levi.json');
       writeFileSync(persona, JSON.stringify({ name: 'Levi', description: 'A traveller.' }));
+      // M1b: a --model connection must exist in config.toml.
+      const unknown = await run(['new', '--card', join(CARDS, 'v3-full.json'), '--model', 'local:qwen3:14b', '--home', home]);
+      expect(unknown.code).toBe(64);
+      expect(unknown.stderr).toContain('no connection "local"');
+      writeFileSync(join(home, 'config.toml'), '[connections.local]\nbase_url = "http://127.0.0.1:8080"\n');
       expect((await run(['import', join(CARDS, 'v3-full.json'), '--home', home])).code).toBe(0);
       const r = await run(['new', '--card', 'alice', '--title', 'Dungeon run', '--model', 'local:qwen3:14b', '--persona', persona, '--home', home]);
       expect(r.code).toBe(0);
@@ -190,7 +195,7 @@ describe('global flags and usage', () => {
       const h = await run(['--help']);
       expect(h.code).toBe(0);
       expect(h.stdout).toContain('Commands:');
-      for (const c of ['new', 'import', 'send', 'sessions', 'show']) expect(h.stdout).toContain(`  ${c}`);
+      for (const c of ['init', 'new', 'chat', 'import', 'send', 'probe', 'models', 'sessions', 'show']) expect(h.stdout).toContain(`  ${c}`);
       const hs = await run(['send', '--help']);
       expect(hs.code).toBe(0);
       expect(hs.stdout).toContain('Usage: rp-core send <session>');

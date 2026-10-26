@@ -40,14 +40,6 @@ describe('shape: reply and swipe', () => {
     // nothing to drop, nothing to say
     expect(shape(input({ caps: caps('none') })).notices).toEqual([]);
   });
-
-  test('post-processing other than none passes through with post_processing_m1b', () => {
-    const inp = input({ postProcessing: 'strict' });
-    const out = shape(inp);
-    expect(out.messages).toEqual(inp.messages);
-    expect(out.notices.map((n) => n.code)).toEqual(['post_processing_m1b']);
-    expect(shape(input({ postProcessing: 'none' })).notices).toEqual([]);
-  });
 });
 
 describe('shape: continue', () => {
@@ -107,11 +99,6 @@ describe('shape: continue', () => {
 
   test('a missing target is a caller bug', () => {
     expect(() => shape(input({ kind: 'continue', messages: [sys, m('user', 'hi')] }))).toThrow();
-  });
-
-  test('post-processing notice on continue too', () => {
-    const out = shape(input({ kind: 'continue', messages: msgs, postProcessing: 'merge' }));
-    expect(out.notices.map((n) => n.code)).toEqual(['post_processing_m1b']);
   });
 });
 

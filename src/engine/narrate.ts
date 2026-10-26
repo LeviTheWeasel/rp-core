@@ -5,15 +5,20 @@
 // one streamed round. The shape follows Bunraku's tool loop (one provider call per round, events
 // forwarded as they arrive); tool rounds, the final text-only round and the loop guard arrive in M3.
 //
-// One call: take a place on the connection's origin semaphore (interactive priority), stream, turn
-// every StreamEv into an outcome. Timeouts (first byte, idle) abort a child of the turn signal with
-// a typed reason and come back as ProviderError 'timeout': a timeout is never reported as a Stop.
+// One call: resolve the connection's key (M1b, D-73), take a place on the connection's origin
+// semaphore (interactive priority), stream, turn every StreamEv into an outcome. Timeouts (first
+// byte, idle) abort a child of the turn signal with a typed reason and come back as ProviderError
+// 'timeout': a timeout is never reported as a Stop. They are measured on bytes, as §8.8 says
+// ("Первый байт … Простой между чанками"): the provider reports every body chunk through
+// ProviderEnv.onActivity, so SSE keep-alive comments (OpenRouter's ': OPENROUTER PROCESSING' while a
+// reasoning model thinks, DeepSeek's ': keep-alive' while queued, llama.cpp's pings) keep a live
+// server's call open even though they carry no event.
 
 import { abortWith, childController, reasonOf, type DelayTimers } from './abort.ts';
 import type { Scheduler } from './sched.ts';
 import type { Connection } from './api.ts';
 import { ProviderError } from '../providers/types.ts';
-import type { FinishReason, ModelRequest, PromptMsg, StreamEv, Usage } from '../providers/types.ts';
+import type { FinishReason, ModelCaps, ModelRequest, PromptMsg, StreamEv, Usage } from '../providers/types.ts';
 import type { Samplers } from '../formats/native.ts';
 
 /** §8.8: first byte 600 s on a local origin (prompt processing is slow), 120 s remote; idle 120 s. */
@@ -36,6 +41,8 @@ export function timeoutsFor(conn: Connection, override?: Partial<CallTimeouts>):
 export interface CallInput {
   conn: Connection;
   model: string;
+  /** The caps of `model` on `conn` (Route.caps: capsFor(model) ?? conn.caps). */
+  caps: ModelCaps;
   messages: PromptMsg[];
   prefill?: string;
   maxTokens: number;
@@ -52,7 +59,8 @@ export interface CallInput {
   /** Streamed text / reasoning deltas, in arrival order. */
   onText(delta: string): void;
   onReasoning(delta: string): void;
-  onUsage(usage: Usage): void;
+  /** Each usage StreamEv as it arrives (the merged figure is CallResult.usage). */
+  onUsage?(usage: Usage): void;
 }
 
 export interface CallResult {
@@ -94,7 +102,7 @@ export function providerFinish(reason: FinishReason): FinishReason {
 function buildRequest(input: CallInput, signal: AbortSignal): ModelRequest {
   const req: ModelRequest = {
     model: { connection: input.conn.id, model: input.model },
-    caps: input.conn.caps,
+    caps: input.caps,
     messages: input.messages,
     maxTokens: input.maxTokens,
     samplers: input.samplers,
@@ -109,9 +117,120 @@ function buildRequest(input: CallInput, signal: AbortSignal): ModelRequest {
 }
 
 /** A semaphore capacity the scheduler accepts (an integer >= 1). */
-function capacityOf(conn: Connection): number {
-  const n = Math.floor(conn.caps.maxInFlight);
+function capacityOf(caps: ModelCaps): number {
+  const n = Math.floor(caps.maxInFlight);
   return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+/**
+ * The first-byte and idle deadlines of one call (§8.8), fed by bytes (ProviderEnv.onActivity) and by
+ * events. Before anything arrives the call has firstByteMs. After a byte or an event, idleMs since the
+ * last one. Before the first EVENT (only keep-alive comments so far) the call fails only once both
+ * have run out: a server that sends one comment and then processes a long prompt quietly keeps its
+ * first-byte allowance (600 s locally). The abort reason says whether any event had arrived.
+ */
+class ActivityWatch {
+  private first: unknown = null;
+  private idle: unknown = null;
+  /** A byte or an event arrived. */
+  private active = false;
+  /** An event arrived (the answer, or at least the stream proper, has started). */
+  private evented = false;
+  private firstOver = false;
+  private idleOver = false;
+  private stopped = false;
+
+  constructor(
+    private readonly call: AbortController,
+    private readonly t: CallTimeouts,
+    private readonly timers: DelayTimers,
+  ) {
+    this.first = timers.setTimeout(() => {
+      this.first = null;
+      this.firstOver = true;
+      if (!this.active || this.idleOver) this.fire();
+    }, t.firstByteMs);
+  }
+
+  /** Body bytes arrived (a comment counts). */
+  bytes(): void {
+    if (this.stopped) return;
+    this.active = true;
+    this.idleOver = false;
+    if (this.idle !== null) this.timers.clearTimeout(this.idle);
+    this.idle = this.timers.setTimeout(() => {
+      this.idle = null;
+      this.idleOver = true;
+      if (this.evented || this.firstOver) this.fire();
+    }, this.t.idleMs);
+  }
+
+  /** A StreamEv arrived: from now on only the idle deadline counts. */
+  event(): void {
+    if (this.stopped) return;
+    if (!this.evented) {
+      this.evented = true;
+      if (this.first !== null) this.timers.clearTimeout(this.first);
+      this.first = null;
+    }
+    this.bytes();
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.first !== null) this.timers.clearTimeout(this.first);
+    if (this.idle !== null) this.timers.clearTimeout(this.idle);
+    this.first = this.idle = null;
+  }
+
+  private fire(): void {
+    if (this.stopped) return;
+    abortWith(this.call, this.evented ? 'timeout:idle' : 'timeout:first_byte');
+  }
+}
+
+/** The value an aborted wait for the key settles with (never a key). */
+const STOPPED: unique symbol = Symbol('stopped');
+
+/** What waiting for the key came to. */
+type KeyOutcome = { key: string | null } | { error: ProviderError } | { stopped: true };
+
+/**
+ * The connection's API key (§13, D-73): resolveKey() when the connection resolves it lazily
+ * (key_env / key_cmd; the resolver memoises it), else the static `key`, else none. A Stop while a
+ * key command runs ends the wait at once (the command itself is bounded by its own 10 s timeout). A
+ * rejection is an auth failure before any output: a ProviderError keeps its code; anything else
+ * becomes 'key_unavailable' with a fixed message, since a key command's output must never be shown.
+ */
+async function resolveKey(conn: Connection, signal: AbortSignal): Promise<KeyOutcome> {
+  if (signal.aborted) return { stopped: true };
+  if (!conn.resolveKey) return { key: conn.key ?? null };
+  let pending: Promise<string | null>;
+  try {
+    pending = Promise.resolve(conn.resolveKey());
+  } catch (e) {
+    pending = Promise.reject(e);
+  }
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<typeof STOPPED>((resolve) => {
+    onAbort = () => resolve(STOPPED);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    const got = await Promise.race([pending, aborted]);
+    if (got === STOPPED) return { stopped: true };
+    return { key: got ?? conn.key ?? null };
+  } catch (e) {
+    if (signal.aborted) return { stopped: true };
+    if (e instanceof ProviderError) return { error: e.afterOutput ? e.withAfterOutput(false) : e };
+    return {
+      error: new ProviderError({ category: 'auth', code: 'key_unavailable', message: `the API key of connection '${conn.id}' is unavailable` }),
+    };
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+    // A key that settles after a Stop must not surface as an unhandled rejection.
+    pending.catch(() => undefined);
+  }
 }
 
 /** One streamed narrator call. Never throws for provider trouble; the outcome says what happened. */
@@ -124,8 +243,19 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
     return out;
   };
 
+  // The key first, so a slow key command never holds a place on the origin.
+  const keyed = await resolveKey(input.conn, input.turnSignal);
+  if ('stopped' in keyed) {
+    out.stopped = true;
+    return done();
+  }
+  if ('error' in keyed) {
+    out.error = keyed.error;
+    return done();
+  }
+
   // The semaphore: a Stop while queued leaves the queue and ends the call as stopped.
-  const sem = input.sched.forOrigin(input.conn.origin, capacityOf(input.conn));
+  const sem = input.sched.forOrigin(input.conn.origin, capacityOf(input.caps));
   let slot;
   try {
     slot = await sem.acquire('interactive', input.turnSignal);
@@ -135,21 +265,17 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
   }
 
   const call = childController(input.turnSignal);
-  let timer: unknown = null;
-  const arm = (ms: number, reason: 'timeout:first_byte' | 'timeout:idle'): void => {
-    if (timer !== null) timers.clearTimeout(timer);
-    timer = timers.setTimeout(() => abortWith(call, reason), ms);
-  };
-  arm(input.timeouts.firstByteMs, 'timeout:first_byte');
+  const watch = new ActivityWatch(call, input.timeouts, timers);
 
   let finished = false;
   try {
     const stream = input.conn.provider.stream(buildRequest(input, call.signal), {
       fetch: input.fetch,
-      key: input.conn.key ?? null,
+      key: keyed.key,
+      onActivity: () => watch.bytes(),
     });
     for await (const ev of stream as AsyncIterable<StreamEv>) {
-      arm(input.timeouts.idleMs, 'timeout:idle');
+      watch.event();
       if (ev.t === 'text' || ev.t === 'reasoning') {
         if (ev.d === '') continue;
         if (out.ttftMs === undefined) out.ttftMs = Math.max(0, clock().getTime() - t0);
@@ -163,7 +289,7 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
         }
       } else if (ev.t === 'usage') {
         out.usage = { ...out.usage, ...ev.u };
-        input.onUsage(ev.u);
+        input.onUsage?.(ev.u);
       } else if (ev.t === 'finish') {
         // Keep reading: usage may follow the finish (§8.1).
         out.finish = { reason: providerFinish(ev.reason), raw: ev.raw };
@@ -183,24 +309,20 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
     }
   } catch (e) {
     const why = reasonOf(call.signal);
+    const timedOut = why === 'timeout:first_byte' || why === 'timeout:idle';
     if (finished) {
-      // A stall, a network drop or a Stop while waiting for usage/[DONE]: the finished answer is
-      // kept with the provider's finish; a Stop now has nothing left to stop.
-      out.tailError =
-        e instanceof ProviderError
-          ? e
-          : new ProviderError({
-              category: 'network',
-              code: why === 'timeout:idle' || why === 'timeout:first_byte' ? 'timeout' : 'unreachable',
-              message:
-                why === 'timeout:idle'
-                  ? 'the stream stalled after the answer finished'
-                  : call.signal.aborted
-                    ? 'stopped after the answer finished'
-                    : msg(e),
-              afterOutput: true,
-            });
-    } else if (why === 'timeout:first_byte' || why === 'timeout:idle') {
+      // A stall or a network drop while waiting for usage/[DONE]: the finished answer is kept with
+      // the provider's finish and the failure is a tail error (only the usage is lost). A Stop now has
+      // nothing left to stop and nothing failed: the answer is simply kept.
+      if (timedOut) {
+        out.tailError = new ProviderError({ category: 'network', code: 'timeout', message: 'the stream stalled after the answer finished', afterOutput: true });
+      } else if (!call.signal.aborted) {
+        out.tailError =
+          e instanceof ProviderError
+            ? e
+            : new ProviderError({ category: 'network', code: 'unreachable', message: 'the stream broke off after the answer finished', afterOutput: true, detail: msg(e) });
+      }
+    } else if (timedOut) {
       out.error = new ProviderError({
         category: 'network',
         code: 'timeout',
@@ -214,11 +336,12 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
       out.error = e;
     } else {
       // A provider that throws instead of yielding an error event: a network-ish failure whose
-      // timing we do not know, so it counts as after output when anything arrived.
-      out.error = new ProviderError({ category: 'network', code: 'unreachable', message: msg(e), afterOutput: out.output });
+      // timing we do not know, so it counts as after output when anything arrived. Its own words are
+      // kept for --debug only (§13).
+      out.error = new ProviderError({ category: 'network', code: 'unreachable', message: 'the connection failed', afterOutput: out.output, detail: msg(e) });
     }
   } finally {
-    if (timer !== null) timers.clearTimeout(timer);
+    watch.stop();
     slot.release();
   }
 

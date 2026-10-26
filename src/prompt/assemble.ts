@@ -311,6 +311,18 @@ function protectedTail(input: AssembleInput, ids: readonly string[]): number {
   return at >= 0 ? ids.length - at : 1;
 }
 
+// ---- token correction [D-50] --------------------------------------------------------------------
+
+/** AssembleInput.tokenFactor as the budget uses it: a positive finite number, anything else is 1. */
+function budgetFactor(f: number | undefined): number {
+  return typeof f === 'number' && Number.isFinite(f) && f > 0 ? f : 1;
+}
+
+/** An estimate scaled by the correction, rounded up (the safe side of a budget); factor 1 is exact. */
+function scaled(tok: number, factor: number): number {
+  return factor === 1 ? tok : Math.ceil(tok * factor);
+}
+
 // ---- the trace of what is sent ------------------------------------------------------------------
 
 /** trace.tokens.estimated and trace.blocks of a message list (§5.7: blocks are 1:1 with it). */
@@ -376,16 +388,21 @@ export function assemble(input: AssembleInput): AssembleResult {
   // message the turn is about (U; on continue the answer A and the U it replies to); the protected
   // head is the greeting. preset.context.maxMessages is applied by the same cut: same grid, same
   // protections, recorded in trace.trimmed.
+  // Every estimate the budget sees is scaled by the model's EMA correction [D-50]; the trace keeps
+  // the raw estimates, which are what the next correction is learned from.
+  const factor = budgetFactor(input.tokenFactor);
   const available = input.window - input.reserve;
-  const fixed =
+  const fixed = scaled(
     estimateMessages(layout.top) +
-    estimateMessages(layout.before) +
-    estimateMessages(newChat) +
-    estimateMessages(injectAtDepth([], inserts)) + // every non-blank insert, measured as it will be sent
-    estimateMessages(layout.after) +
-    estimateMessages(layout.bottom) +
-    (prefill.prefill === null ? 0 : estimateTokens(prefill.prefill) + MESSAGE_OVERHEAD_TOKENS);
-  const sized = chat.msgs.map((m, i) => ({ id: chat.ids[i]!, tok: estimateMessage(m) }));
+      estimateMessages(layout.before) +
+      estimateMessages(newChat) +
+      estimateMessages(injectAtDepth([], inserts)) + // every non-blank insert, measured as it will be sent
+      estimateMessages(layout.after) +
+      estimateMessages(layout.bottom) +
+      (prefill.prefill === null ? 0 : estimateTokens(prefill.prefill) + MESSAGE_OVERHEAD_TOKENS),
+    factor,
+  );
+  const sized = chat.msgs.map((m, i) => ({ id: chat.ids[i]!, tok: scaled(estimateMessage(m), factor) }));
   const head = chat.greeting ? 1 : 0;
   const tail = Math.min(protectedTail(input, chat.ids), Math.max(0, sized.length - head));
   const maxKept = preset.context?.maxMessages;

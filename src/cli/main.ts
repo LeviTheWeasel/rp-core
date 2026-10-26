@@ -2,21 +2,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 the rp-core authors
 //
-// The `rp-core` command (ARCHITECTURE.md §12.3, §15 M1a, §19.2 cli/main.ts): strict flag parsing
-// with zero dependencies, global flags anywhere on the line, one function per subcommand.
-// M1a commands: new, import, send, sessions, show. `open` (the REPL) and `--stdio` come later.
+// The `rp-core` command (ARCHITECTURE.md §12.3, §12.4, §13, §15 M1a/M1b, §19.2 cli/main.ts): strict
+// flag parsing with zero dependencies, global flags anywhere on the line, one function per subcommand.
+// M1a: new, import, send, sessions, show. M1b: init, chat (the REPL), probe, models; config.toml's
+// connections behind every turn. `--stdio` comes in M6.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ConfigError } from '../config/config.ts';
+import type { Connection } from '../engine/api.ts';
+import { systemClock } from '../engine/system.ts';
 import { bool, parseArgs, str, UsageError, type FlagKind, type Parsed } from './args.ts';
-import { cmdImport, cmdNew, cmdSessions, cmdShow, CliError } from './commands.ts';
+import { cmdModels, cmdProbe } from './catalog.ts';
+import { cmdChat, runChat } from './chat.ts';
+import { cmdImport, cmdInit, cmdNew, cmdSessions, cmdShow, CliError } from './commands.ts';
 import { resolveHome, type Home } from './home.ts';
 import { processIo, type Io } from './io.ts';
 import { EXIT, runSend } from './oneshot.ts';
 import { ScriptFileError, scriptConnection } from './provider.ts';
+import { loadRuntime, type Runtime } from './runtime.ts';
 import type { SignalSource } from './signals.ts';
 import type { TurnKind } from '../session/entries.ts';
 
@@ -36,17 +43,52 @@ interface Command {
   help: string;
 }
 
+const PROVIDER_HELP = '  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role';
+
 const COMMANDS: Record<string, Command> = {
+  init: {
+    flags: { json: 'bool' },
+    usage: 'rp-core init [--json]',
+    summary: 'write a starter config.toml into the home (never overwrites)',
+    help: `Writes <home>/config.toml with commented examples (Ollama, llama.cpp, LM Studio, OpenRouter)
+unless the file exists, and prints its path. Edit [connections] and [roles] narrator next.
+  --json  print {"path","created"}`,
+  },
   new: {
-    flags: { card: 'string', persona: 'string', model: 'string', title: 'string', json: 'bool' },
-    usage: 'rp-core new --card <file> [--persona <json file>] [--model conn:model] [--title text] [--json]',
-    summary: 'import a card and start a session; prints the session id',
+    flags: {
+      card: 'string',
+      persona: 'string',
+      model: 'string',
+      'max-tokens': 'string',
+      title: 'string',
+      json: 'bool',
+      'no-chat': 'bool',
+      provider: 'string',
+    },
+    usage:
+      'rp-core new --card <file> [--model conn:model] [--max-tokens n] [--persona <json file>] [--title text] [--no-chat] [--json] [--provider script:<file>]',
+    summary: 'import a card and start a session (opens the chat on a terminal)',
     help: `Imports the card (PNG or JSON, CCv2/V3) into the library and creates a session with its
-greetings. --card may also name a character already in the library (its id).
-  --persona <file>   a persona JSON {name, description, aliases?}
-  --model conn:model the narrator's binding (default script:default)
-  --title <text>     the session title (default: the character's name)
-  --json             print {"sessionId","title","greetings":[{id,text}]}`,
+greetings; its config starts from config.toml ([roles], [narrator], [director]). On a terminal
+the chat opens right away; otherwise (or with --no-chat / --json) the session id is printed.
+--card may also name a character already in the library (its id).
+  --model conn:model  the narrator's binding; the connection must be in config.toml
+  --max-tokens <n>    the narrator's reply limit (default: the preset's, else min(2048, window/2))
+  --persona <file>    a persona JSON {name, description, aliases?}
+  --title <text>      the session title (default: the character's name)
+  --no-chat           only create the session and print its id
+  --json              print {"sessionId","title","greetings":[{id,text}]} (implies --no-chat)
+${PROVIDER_HELP}`,
+  },
+  chat: {
+    flags: { provider: 'string' },
+    usage: 'rp-core chat <session> [--provider script:<file>]',
+    summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, ...)',
+    help: `Opens the session (lock + recovery of an interrupted answer) and reads lines: text is your
+message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /tails, /goto,
+/fork, /model, /usage, /trace, /quit). Ctrl+C stops an answer and keeps what arrived; twice at
+the prompt quits. Piped stdin is a script: each line waits for the previous answer.
+${PROVIDER_HELP}`,
   },
   import: {
     flags: { as: 'string', json: 'bool' },
@@ -63,12 +105,32 @@ library/characters/<id>.json, where id = canonicalId(name).
     summary: 'run one turn and print it',
     help: `reply (the default) appends your text and answers it; "-" reads the text from stdin.
 swipe re-rolls the last answer as a sibling; continue extends it. Both take no text.
+The session's bindings pick the connection from config.toml.
   --guidance <text>         swipe only: steer the re-roll
-  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role
   --json                    stdout carries only events, one JSON object per line
+${PROVIDER_HELP}
 A failure after output keeps the partial answer, marked [interrupted].
 Ctrl+C stops the turn and keeps what arrived; Ctrl+C again quits at once.
 Exit codes: 0 done, 2 stopped, 3 failed, 4 conflict, 5 refused before the turn opened.`,
+  },
+  probe: {
+    flags: { write: 'bool', json: 'bool' },
+    usage: 'rp-core probe [connection[:model]] [--write] [--json]',
+    summary: "ask a server for its models, windows and slots; show a model's caps",
+    help: `Reads the server's catalog (/models, llama.cpp /props, Ollama /api/show and /api/ps, LM Studio,
+koboldcpp, OpenRouter supported_parameters) for the connection (default: every connection in
+config.toml) and prints the server kind, the models with their context windows, reported slots
+(advice only: capacity stays at max_in_flight) and the caps the model would get.
+  --write  store the catalog in <home>/caps-cache.json; new turns use it
+  --json   print an array of {connection, ok, server, models, slots, notes, model, caps}
+Exit 1 when a server did not answer or refused the key (nothing is stored for it then).`,
+  },
+  models: {
+    flags: { json: 'bool' },
+    usage: 'rp-core models <connection> [--json]',
+    summary: "list a connection's model ids",
+    help: `Walks the /models ladder of the connection's server and prints one model id per line.
+  --json  print [{"id","contextLength"?}]`,
   },
   sessions: {
     flags: { json: 'bool' },
@@ -96,17 +158,20 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M1a)
+  return `rp-core — headless roleplay agent core (milestone M1b)
 
 Usage: rp-core <command> [flags]
 
 Commands:
 ${rows.join('\n')}
 
+Getting started: rp-core init, edit <home>/config.toml, rp-core probe <connection>,
+then rp-core new --card <file> --model <connection>:<model>.
+
 ${GLOBAL_HELP}
 
-Exit codes: 0 ok, 1 error, 2 stopped, 3 failed, 4 conflict, 5 refused, 64 usage,
-130/143 interrupted by SIGINT/SIGTERM.
+Exit codes: 0 ok, 1 error, 2 stopped, 3 failed, 4 conflict, 5 refused, 64 usage or config.toml
+error, 130/143 interrupted by SIGINT/SIGTERM.
 `;
 }
 
@@ -132,6 +197,12 @@ export interface MainDeps {
   signals?: SignalSource;
   /** Read all of stdin (for `send <session> -`). */
   readStdin?: () => Promise<string>;
+  /** stdin and stdout are a terminal: `new` then opens the chat right away. Default false. */
+  tty?: boolean;
+  /** For probe / models (default globalThis.fetch). */
+  fetch?: typeof fetch;
+  /** The wall clock (probe cache as_of). Default the system clock. */
+  clock?: () => Date;
 }
 
 function noPositionals(p: Parsed, command: string, max: number): void {
@@ -140,23 +211,85 @@ function noPositionals(p: Parsed, command: string, max: number): void {
 
 const KINDS: readonly TurnKind[] = ['reply', 'swipe', 'continue'];
 
+/** --provider script:<file>, read now (a bad file fails before anything is opened). */
+function providerOf(p: Parsed, command: string): Connection | undefined {
+  const spec = str(p, 'provider');
+  return spec !== undefined ? scriptConnection(spec, command) : undefined;
+}
+
+/** config.toml and its connections; ConfigError propagates to main (exit 64). --debug wires the raw-failure tap. */
+function runtimeOf(home: Home, deps: MainDeps, p: Parsed, provider?: Connection): Runtime {
+  const debug = bool(p, 'debug') ? (line: string): void => deps.io.err.write(`rp-core: debug: ${line}\n`) : undefined;
+  return loadRuntime(home.dir, deps.env, { ...(provider ? { provider } : {}), ...(debug ? { debug } : {}) });
+}
+
+function positiveInt(p: Parsed, flag: string, command: string): number | undefined {
+  const v = str(p, flag);
+  if (v === undefined) return undefined;
+  if (!/^[1-9][0-9]{0,6}$/.test(v)) throw new UsageError(`--${flag} must be a whole number from 1 to 9999999, got ${JSON.stringify(v)}`, command);
+  return Number(v);
+}
+
 async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): Promise<number> {
   const { io } = deps;
   const json = bool(p, 'json');
+  /** A second signal leaves at once; the sandbox goes first. */
+  const exitNow = (code: number): void => {
+    home.dispose();
+    deps.exit(code);
+  };
   switch (name) {
+    case 'init':
+      noPositionals(p, name, 0);
+      return cmdInit({ home: home.dir, json, io });
     case 'new': {
       noPositionals(p, name, 0);
       const card = str(p, 'card');
       if (card === undefined) throw new UsageError('--card <file> is required', name);
+      const maxTokens = positiveInt(p, 'max-tokens', name);
+      const rt = runtimeOf(home, deps, p, providerOf(p, name));
+      const chat = deps.tty === true && !json && !bool(p, 'no-chat');
       return cmdNew({
         home: home.dir,
         card,
         json,
         io,
+        rt,
+        ...(chat ? { chat: (engine, session) => runChat(engine, session, { rt, io, exitNow, ...(deps.signals ? { signals: deps.signals } : {}) }) } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
         ...(str(p, 'persona') !== undefined ? { persona: str(p, 'persona')! } : {}),
         ...(str(p, 'model') !== undefined ? { model: str(p, 'model')! } : {}),
         ...(str(p, 'title') !== undefined ? { title: str(p, 'title')! } : {}),
       });
+    }
+    case 'chat': {
+      noPositionals(p, name, 1);
+      const sessionId = p.positionals[0];
+      if (sessionId === undefined) throw new UsageError('which session? rp-core chat <session>', name);
+      const rt = runtimeOf(home, deps, p, providerOf(p, name));
+      return cmdChat({ rt, io, sessionId, exitNow, ...(deps.signals ? { signals: deps.signals } : {}) });
+    }
+    case 'probe': {
+      noPositionals(p, name, 2);
+      const [target, model] = p.positionals;
+      const rt = runtimeOf(home, deps, p);
+      return cmdProbe({
+        rt,
+        io,
+        json,
+        write: bool(p, 'write'),
+        clock: deps.clock ?? systemClock,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(target !== undefined ? { target } : {}),
+        ...(model !== undefined ? { model } : {}),
+      });
+    }
+    case 'models': {
+      noPositionals(p, name, 1);
+      const conn = p.positionals[0];
+      if (conn === undefined) throw new UsageError('which connection? rp-core models <connection>', name);
+      const rt = runtimeOf(home, deps, p);
+      return cmdModels({ rt, io, json, conn, clock: deps.clock ?? systemClock, ...(deps.fetch ? { fetch: deps.fetch } : {}) });
     }
     case 'import': {
       noPositionals(p, name, 1);
@@ -192,8 +325,8 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         if (!deps.readStdin) throw new UsageError('reading the text from stdin is not available here', name);
         text = (await deps.readStdin()).replace(/\r?\n$/, '');
       }
-      const spec = str(p, 'provider');
-      const provider = spec !== undefined ? scriptConnection(spec) : undefined;
+      const provider = providerOf(p, name);
+      const rt = runtimeOf(home, deps, p, provider);
       return runSend({
         home: home.dir,
         sessionId,
@@ -201,10 +334,8 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         json,
         debug: bool(p, 'debug'),
         io,
-        exitNow: (code) => {
-          home.dispose();
-          deps.exit(code);
-        },
+        rt,
+        exitNow,
         ...(text !== undefined ? { text } : {}),
         ...(guidance !== undefined ? { guidance } : {}),
         ...(provider ? { provider } : {}),
@@ -274,6 +405,12 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
       io.err.write(`rp-core: ${e.message}\n`);
       return e.exitCode;
     }
+    if (e instanceof ConfigError) {
+      // The message starts with the key path (or "line N"); the file is named once in front.
+      const file = home ? join(home.dir, 'config.toml') : 'config.toml';
+      io.err.write(`rp-core: config error in ${file}: ${e.message}\n`);
+      return EXIT.usage;
+    }
     if (e instanceof ScriptFileError) {
       io.err.write(`rp-core: ${e.message}\n`);
       return EXIT.error;
@@ -298,6 +435,7 @@ if (import.meta.main) {
     env: process.env,
     exit: (c) => process.exit(c),
     readStdin: readAllStdin,
+    tty: process.stdin.isTTY === true && process.stdout.isTTY === true,
   });
   // Only exit once both channels have drained; a bare process.exit can cut a piped stdout short.
   await io.out.flush();

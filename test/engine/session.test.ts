@@ -93,6 +93,21 @@ describe('verbs', () => {
     expect(changed.slice(0, 4)).toEqual(['msg', 'edit', 'hide', 'head']);
   });
 
+  test('select {exact: true} rewinds onto the message itself; the old continuation becomes a tail', async () => {
+    const { engine } = await rig([]);
+    const { s, version, userId } = withUserMessage(engine, 'Hi.');
+    const g0 = s.view().path[0]!.id;
+    // Without exact, selecting a message on a straight path goes back to the newest descendant: no-op.
+    expect(s.select({ messageId: g0, expectedVersion: version }).version).toBe(version);
+    expect(s.view().head).toBe(userId);
+    const r = s.select({ messageId: g0, expectedVersion: version, exact: true });
+    expect(r.version).toBeGreaterThan(version);
+    expect(s.view().head).toBe(g0);
+    expect(s.view().tails).toContain(userId);
+    expect(() => s.select({ messageId: g0, expectedVersion: r.version, exact: 'yes' as unknown as boolean })).toThrow(Refusal);
+    await engine.close();
+  });
+
   test('stale_version, not_found and invalid_params on the verbs, with nothing written', async () => {
     const { engine, home } = await rig([]);
     const { s, version, userId } = withUserMessage(engine);

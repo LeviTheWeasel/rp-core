@@ -71,6 +71,28 @@ export function renderSessions(rows: readonly { id: string; title?: string; upda
   return rows.map((r) => `${r.id}  ${r.updated}  ${r.title ?? ''}`.trimEnd()).join('\n') + '\n';
 }
 
+/**
+ * An event with its free-text messages (failed, notice, recovered draft excluded) passed through
+ * `redact` (scrub of the known secrets, §13): a last line of defence on top of messages that are
+ * already fixed sentences at their source. Other events are returned as they are.
+ */
+export function redactEvent(ev: Event, redact: ((text: string) => string) | undefined): Event {
+  if (!redact) return ev;
+  if (ev.type === 'failed' || ev.type === 'notice') {
+    const message = redact(ev.message);
+    return message === ev.message ? ev : { ...ev, message };
+  }
+  return ev;
+}
+
+/** Failure categories that come from a provider (the server's own words exist; --debug shows them). */
+const PROVIDER_CATEGORIES: ReadonlySet<string> = new Set(['auth', 'request', 'rate', 'server', 'network', 'content']);
+
+/** A failure whose raw server text --debug would show (not our own key_unavailable / timeout sentences). */
+export function hasServerWords(ev: { category: string; code: string }): boolean {
+  return PROVIDER_CATEGORIES.has(ev.category) && ev.code !== 'key_unavailable' && ev.code !== 'timeout';
+}
+
 /** A human line (for stderr) about a non-text event, or null when there is nothing to say. */
 export function describeEvent(ev: Event): string | null {
   switch (ev.type) {
@@ -105,9 +127,10 @@ export interface TurnRenderer {
 /**
  * Text mode for `send`: deltas go to stdout as they arrive and the answer ends with a newline;
  * notices, recoveries, retries and the ending go to stderr. With `debug`, failures and retries are
- * also printed raw (as JSON) to stderr.
+ * also printed raw (as JSON) to stderr (the server's own words come through the engine's debug tap,
+ * runtime.ts). Every message passes through `redact` when one is given.
  */
-export function createTextRenderer(io: Io, opts: { debug: boolean; prefix?: string }): TurnRenderer {
+export function createTextRenderer(io: Io, opts: { debug: boolean; prefix?: string; redact?: (text: string) => string }): TurnRenderer {
   const prefix = opts.prefix ?? 'rp-core: ';
   let printed = '';
   let kept = false;
@@ -121,7 +144,8 @@ export function createTextRenderer(io: Io, opts: { debug: boolean; prefix?: stri
   };
 
   return {
-    push(ev: Event): void {
+    push(raw: Event): void {
+      const ev = redactEvent(raw, opts.redact);
       switch (ev.type) {
         case 'text':
           if (ev.delta !== '') {
@@ -149,6 +173,7 @@ export function createTextRenderer(io: Io, opts: { debug: boolean; prefix?: stri
           if (opts.debug) io.err.write(`${JSON.stringify(ev)}\n`);
           say(describeEvent(ev)!);
           if (kept) say('the partial answer was kept, marked [interrupted]');
+          if (!opts.debug && hasServerWords(ev)) say("hint: --debug prints the server's own words");
           return;
         case 'retry':
           if (opts.debug) io.err.write(`${JSON.stringify(ev)}\n`);

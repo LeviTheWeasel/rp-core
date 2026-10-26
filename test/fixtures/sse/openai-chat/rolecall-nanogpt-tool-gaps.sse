@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-live","object":"chat.completion.chunk","created":1787863341,"model":"deepseek/deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_a","type":"function","function":{"name":"Remember_Character","arguments":"{\"name\":\"Mara\"}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":3,"id":"call_b","type":"function","function":{"name":"postgen_status","arguments":"{\"summ"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":3,"function":{"arguments":"ary\":\"Saved Mara.\"}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":16254,"completion_tokens":9948,"total_tokens":26202}}
+
+data: [DONE]
+
