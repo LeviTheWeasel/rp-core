@@ -67,3 +67,21 @@ export function estimateMessages(messages: readonly PromptMsg[]): number {
   for (const m of messages) sum += estimateMessage(m);
   return sum;
 }
+
+// ---- M1b [D-50] --------------------------------------------------------------------------------
+
+/** EMA defaults: alpha 0.3, start 1.15, clamped to [0.8, 2.0] (§11). */
+export const EMA_ALPHA = 0.3;
+export const EMA_START = 1.15;
+export const EMA_MIN = 0.8;
+export const EMA_MAX = 2.0;
+
+/**
+ * The token-estimate correction for one model, derived (never stored) from the answers on the path
+ * that report prompt tokens: samples oldest → newest, each {estimated, reported}. No samples → EMA_START.
+ * CONTRACT (M1b): implemented by the prompt-m1b agent.
+ */
+export function emaFactor(samples: readonly { estimated: number; reported: number }[]): number {
+  void samples;
+  throw new Error('not implemented: emaFactor');
+}

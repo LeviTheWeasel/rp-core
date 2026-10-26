@@ -23,6 +23,19 @@ export interface Connection {
   /** Local origins get the local defaults (8192 window, 600 s first byte, 1 in flight). */
   local: boolean;
   key?: string | null;
+  /**
+   * M1b: caps of one model on this connection (host preset → model rows → catalog → probe cache →
+   * user overrides, §8.2). When absent the engine uses `caps`.
+   */
+  capsFor?(model: string): ModelCaps;
+  /**
+   * M1b: the API key, resolved lazily at the first call (key_env / key_cmd, D-73). Rejects with a
+   * ProviderError code 'key_unavailable'. When absent the engine uses `key`.
+   */
+  resolveKey?(): Promise<string | null>;
+  /** M1b: the dialect and base URL, for probes and display. Absent for in-process providers. */
+  dialect?: ModelCaps['dialect'];
+  baseUrl?: string;
 }
 
 export interface EngineOptions {
@@ -47,6 +60,11 @@ export interface EngineOptions {
    * idle (no event mid-stream) 120 s. Tests and hosts with slow local models change them.
    */
   timeouts?: { firstByteMs?: number; idleMs?: number };
+  /**
+   * M1b: [prices."conn:model"] from config.toml (USD per million tokens). usage events use the
+   * provider-reported cost first, then this table, else null (never 0) (§11).
+   */
+  prices?: Record<string, { inPerM: number; outPerM: number; asOf: string }>;
   /** The timers behind checkpoints, call timeouts and retry delays. Tests inject fake ones. */
   timers?: DelayTimers;
 }

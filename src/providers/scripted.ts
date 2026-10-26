@@ -12,7 +12,7 @@
 
 import { createHash } from 'node:crypto';
 import { abortableDelay } from '../engine/abort.ts';
-import { ProviderError } from './types.ts';
+import { PROVIDER_ERROR_CATEGORY, ProviderError } from './types.ts';
 import type { ProviderErrorCategory, ProviderEnv, StreamEv } from './types.ts';
 import type { FinishReason, ModelCaps, ModelRequest, Provider, ProviderErrorCode, Usage } from './types.ts';
 
@@ -47,27 +47,8 @@ export interface ScriptCall {
 
 // ---- error categories ---------------------------------------------------------------------------
 
-/** [D-51] category of every code. A Record, so a new code fails the typecheck until it is placed. */
-const CATEGORY: Readonly<Record<ProviderErrorCode, ProviderErrorCategory>> = {
-  auth_failed: 'auth',
-  model_not_found: 'request',
-  bad_request: 'request',
-  context_length_exceeded: 'request',
-  prefill_unsupported: 'request',
-  forced_tool_unsupported: 'request',
-  tool_protocol_invalid: 'request',
-  script_exhausted: 'request',
-  rate_limited: 'rate',
-  overloaded: 'server',
-  unreachable: 'network',
-  timeout: 'network',
-  truncated_stream: 'network',
-  content_filter: 'content',
-  refusal: 'content',
-  empty_response: 'protocol',
-  reasoning_only: 'protocol',
-  thinking_signature_mismatch: 'protocol',
-};
+/** [D-51] category of every code: the shared table lives in providers/types.ts. */
+const CATEGORY = PROVIDER_ERROR_CATEGORY;
 
 /** The category a scripted error code is reported under. */
 export function categoryOf(code: ProviderErrorCode): ProviderErrorCategory {

@@ -71,6 +71,11 @@ export interface AssembleInput {
   /** Narrator tools offered this turn ([] in M1a). */
   tools: ToolSpec[];
   prefillVsTools: 'prefill' | 'tools';
+  /**
+   * M1b [D-50]: EMA correction of the token estimate for this model, derived from the path
+   * (reported prompt tokens / estimated). Every budget estimate is multiplied by it. Default 1.
+   */
+  tokenFactor?: number;
 }
 
 export type AssembleResult =

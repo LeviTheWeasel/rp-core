@@ -46,10 +46,38 @@ export type ProviderErrorCode =
   | 'forced_tool_unsupported'
   | 'thinking_signature_mismatch'
   | 'tool_protocol_invalid'
-  | 'script_exhausted'; // scripted provider only: the script ran out of calls
+  | 'script_exhausted' // scripted provider only: the script ran out of calls
+  | 'key_unavailable'; // key_env unset or key_cmd failed / timed out [D-73]
 
 /** [D-51] categories. */
 export type ProviderErrorCategory = 'auth' | 'request' | 'rate' | 'server' | 'network' | 'content' | 'protocol';
+
+/** [D-51] category of every code. A Record, so a new code fails the typecheck until it is placed. Shared by every adapter. */
+export const PROVIDER_ERROR_CATEGORY: Readonly<Record<ProviderErrorCode, ProviderErrorCategory>> = {
+  auth_failed: 'auth',
+  model_not_found: 'request',
+  bad_request: 'request',
+  context_length_exceeded: 'request',
+  prefill_unsupported: 'request',
+  forced_tool_unsupported: 'request',
+  tool_protocol_invalid: 'request',
+  script_exhausted: 'request',
+  rate_limited: 'rate',
+  overloaded: 'server',
+  unreachable: 'network',
+  timeout: 'network',
+  truncated_stream: 'network',
+  content_filter: 'content',
+  refusal: 'content',
+  empty_response: 'protocol',
+  reasoning_only: 'protocol',
+  thinking_signature_mismatch: 'protocol',
+  key_unavailable: 'auth',
+};
+
+export function categoryOf(code: ProviderErrorCode): ProviderErrorCategory {
+  return PROVIDER_ERROR_CATEGORY[code];
+}
 
 /**
  * A provider failure. `message` may echo prompt text, so it is shown live but never stored:
@@ -124,6 +152,8 @@ export interface ModelCaps {
     offShape?: unknown;
     echo: 'never' | 'tool-turn' | 'all-with-tools';
     answerInReasoning?: boolean;
+    /** [D-54] allowed effort values instead of regexes over model ids. */
+    efforts?: string[];
   };
   samplers: { accepted: string[]; fixed?: boolean; wire?: Record<string, string> };
   streamUsage: 'stream_options' | 'always' | 'timings' | 'none';
@@ -131,6 +161,8 @@ export interface ModelCaps {
   maxInFlight: number;
   cacheMinTokens?: number; // [D-54]
   stopMax?: number; // [D-54]
+  /** [D-54] host/model specific body fields (OpenRouter provider.allow_fallbacks, llama.cpp cache_prompt, ...). Protected keys are never overwritten. */
+  extraBody?: Record<string, unknown>;
   source: ('host' | 'model' | 'catalog' | 'probe' | 'user' | 'script')[];
 }
 
