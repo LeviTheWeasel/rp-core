@@ -1,0 +1,36 @@
+{
+  "name": "01-no-preset-first-turn",
+  "about": "No preset, no persona, no lorebook: the synthesized default prompt set on a chat's first user turn after the greeting.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 1,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-01", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-01", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "<START>\n{{user}}: Hello?\n{{char}}: *She squints.* Who's asking?",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "input": {
+    "characterId": "ch-01",
+    "chatId": "c-01",
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." }
+    ],
+    "currentMessage": "I only need somewhere dry until morning."
+  }
+}

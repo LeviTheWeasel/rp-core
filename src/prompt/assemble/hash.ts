@@ -6,7 +6,7 @@
 // the hash follows the content, not the key order a file happened to be written in.
 
 import { createHash } from 'node:crypto';
-import type { Preset } from '../../formats/native.ts';
+import type { LoreBook, Preset } from '../../formats/native.ts';
 
 /** JSON with object keys sorted at every level; undefined members are left out as JSON.stringify does. */
 export function canonicalJson(v: unknown): string {
@@ -29,4 +29,9 @@ export function shortHash(v: unknown): string {
 /** Trace.presetHash and Generation.preset.hash. */
 export function presetHash(preset: Preset): string {
   return shortHash(preset);
+}
+
+/** Trace.loreHashes[sourceKey]: the book as loaded, hashed the same way. */
+export function loreBookHash(book: LoreBook): string {
+  return shortHash(book);
 }

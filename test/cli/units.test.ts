@@ -94,11 +94,14 @@ describe('home resolution', () => {
 });
 
 describe('provider spec', () => {
-  test('script:<file> only; record/replay are M2', () => {
+  test('script:, record: and replay: with a file', () => {
     expect(parseProviderSpec('script:a/b.jsonl')).toEqual({ scheme: 'script', file: 'a/b.jsonl' });
-    expect(() => parseProviderSpec('record:x')).toThrow('M2');
-    expect(() => parseProviderSpec('openai:x')).toThrow(UsageError);
+    expect(parseProviderSpec('record:x.jsonl')).toEqual({ scheme: 'record', file: 'x.jsonl' });
+    expect(parseProviderSpec('replay:C:/r.jsonl')).toEqual({ scheme: 'replay', file: 'C:/r.jsonl' });
+    expect(() => parseProviderSpec('openai:x')).toThrow('--provider must be script:<file>, record:<file> or replay:<file>');
     expect(() => parseProviderSpec('script:')).toThrow(UsageError);
+    expect(() => parseProviderSpec('replay:')).toThrow('--provider replay: needs a file');
+    expect(() => parseProviderSpec('nofile')).toThrow(UsageError);
   });
 });
 

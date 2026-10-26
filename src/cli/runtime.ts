@@ -2,8 +2,8 @@
 // Copyright (C) 2026 the rp-core authors
 //
 // What every CLI command that talks to a model needs (ARCHITECTURE.md §13, §15 M1b): <home>/config.toml,
-// the engine Connections built from it, the price table, and the --provider override. One place, so
-// `new`, `chat`, `send` and `probe` see the same connections.
+// the engine Connections built from it, the price table, and the --provider override (provider.ts
+// attaches it). One place, so `new`, `chat`, `send`, `preview` and `probe` see the same connections.
 //
 // Nothing here touches the network: building a connection only resolves caps from data files and the
 // probe cache (<home>/caps-cache.json). Keys are resolved lazily at the first call that needs one.
@@ -19,12 +19,12 @@ export interface Runtime {
   /** The environment the connections were built from (header values, key_env). */
   env: Record<string, string | undefined>;
   config: RpConfig;
-  /** openai-chat connections of config.toml, ready for the engine. */
+  /** openai-chat connections of config.toml, ready for the engine (under --provider record: each one records its calls). */
   connections: Record<string, Connection>;
   /** Connections in config.toml that cannot run yet (anthropic M7, gemini M8), with the reason. */
   skipped: { id: string; why: string }[];
   secrets: SecretResolver;
-  /** --provider script:<file>: every role resolves to this one for this process. */
+  /** --provider script:<file> or replay:<file>: every role resolves to this one for this process. */
   provider?: Connection;
   /**
    * --debug: where a raw provider failure goes (one line, already scrubbed of every known secret).
@@ -109,7 +109,11 @@ export function connectionProblem(rt: Runtime, conn: string): string | null {
 export function windowOf(rt: Runtime, conn: string, model: string): number | null {
   if (rt.provider) return null;
   const c = Object.hasOwn(rt.connections, conn) ? rt.connections[conn] : undefined;
-  if (!c) return null;
+  return c ? connectionWindow(c, model) : null;
+}
+
+/** The context window a connection's caps state for `model`, or null when they state none. */
+export function connectionWindow(c: Connection, model: string): number | null {
   try {
     const caps = c.capsFor ? c.capsFor(model) : c.caps;
     return typeof caps.contextLength === 'number' && caps.contextLength > 0 ? caps.contextLength : null;

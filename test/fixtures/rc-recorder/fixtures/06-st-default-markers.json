@@ -1,0 +1,103 @@
+{
+  "name": "06-st-default-markers",
+  "about": "A standard ST chat-completion preset: main plus the eight ST marker slots (charDescription/charPersonality/scenario/personaDescription/worldInfoBefore/worldInfoAfter/dialogueExamples/chatHistory), all empty, plus an enabled post-history jailbreak prompt. Proves preset-loader's marker auto-fill: description/personality/scenario/persona/chatHistory get their macro, but dialogueExamples does NOT (RoleCall has no auto-fill for it), so the card's example dialogue is silently dropped when a preset is active.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 6,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-06", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-06", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "<START>\n{{user}}: Hello?\n{{char}}: *She squints.* Who's asking? This line proves whether example dialogue survives a preset.",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }],
+      "personas": [{
+        "id": "p-06", "name": "Wren", "creator_id": "u-owner", "status": "private",
+        "details": { "pronouns": "she/her", "age": "31", "appearance": "Soaked oilskin coat, a satchel of charts.", "personality": "Curious and stubborn." },
+        "section_order": null
+      }],
+      "presets": [{
+        "id": "preset-06", "name": "ST Default Markers", "creator_id": "u-owner",
+        "status": "private", "deleted_at": null, "is_soft_hidden": false, "listing_preset_id": null,
+        "temperature": 1, "top_p": 0.97, "top_k": 64, "top_a": 0, "min_p": 0,
+        "max_context": 2000000, "max_tokens": 8192,
+        "frequency_penalty": 0, "presence_penalty": 0, "repetition_penalty": 1,
+        "prompt_post_processing": "none",
+        "system_prompts": {
+          "impersonation_prompt": "", "new_chat_prompt": "", "new_group_chat_prompt": "",
+          "new_example_chat_prompt": "[Example Chat]", "continue_nudge_prompt": "",
+          "group_nudge_prompt": "", "assistant_prefill": "", "assistant_impersonation": ""
+        },
+        "settings": null, "raw_settings": {}
+      }],
+      "preset_prompts": [
+        { "id": "pp-06-0", "preset_id": "preset-06", "identifier": "main", "name": "Main Prompt", "content": "You are the narrator of an interactive fiction scene. Stay fully in character as {{char}} and never break the fourth wall.", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 0 },
+        { "id": "pp-06-1", "preset_id": "preset-06", "identifier": "charDescription", "name": "Char Description", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 1 },
+        { "id": "pp-06-2", "preset_id": "preset-06", "identifier": "charPersonality", "name": "Personality", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 2 },
+        { "id": "pp-06-3", "preset_id": "preset-06", "identifier": "scenario", "name": "Scenario", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 3 },
+        { "id": "pp-06-4", "preset_id": "preset-06", "identifier": "personaDescription", "name": "Persona Description", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 4 },
+        { "id": "pp-06-5", "preset_id": "preset-06", "identifier": "worldInfoBefore", "name": "World Info (before)", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 5 },
+        { "id": "pp-06-6", "preset_id": "preset-06", "identifier": "worldInfoAfter", "name": "World Info (after)", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 6 },
+        { "id": "pp-06-7", "preset_id": "preset-06", "identifier": "dialogueExamples", "name": "Dialogue Examples", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 7 },
+        { "id": "pp-06-8", "preset_id": "preset-06", "identifier": "chatHistory", "name": "Chat History", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 8 },
+        { "id": "pp-06-9", "preset_id": "preset-06", "identifier": "jailbreak", "name": "Post-History Jailbreak", "content": "Reminder: keep replies grounded in {{char}}'s established voice and the lighthouse setting.", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 9 }
+      ]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "stPreset": {
+    "name": "ST Default Markers",
+    "prompts": [
+      { "identifier": "main", "name": "Main Prompt", "content": "You are the narrator of an interactive fiction scene. Stay fully in character as {{char}} and never break the fourth wall.", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "charDescription", "name": "Char Description", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "charPersonality", "name": "Personality", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "scenario", "name": "Scenario", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "personaDescription", "name": "Persona Description", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "worldInfoBefore", "name": "World Info (before)", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "worldInfoAfter", "name": "World Info (after)", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "dialogueExamples", "name": "Dialogue Examples", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "chatHistory", "name": "Chat History", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "jailbreak", "name": "Post-History Jailbreak", "content": "Reminder: keep replies grounded in {{char}}'s established voice and the lighthouse setting.", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 }
+    ],
+    "prompt_order": [{
+      "character_id": 100001,
+      "order": [
+        { "identifier": "main", "enabled": true },
+        { "identifier": "charDescription", "enabled": true },
+        { "identifier": "charPersonality", "enabled": true },
+        { "identifier": "scenario", "enabled": true },
+        { "identifier": "personaDescription", "enabled": true },
+        { "identifier": "worldInfoBefore", "enabled": true },
+        { "identifier": "worldInfoAfter", "enabled": true },
+        { "identifier": "dialogueExamples", "enabled": true },
+        { "identifier": "chatHistory", "enabled": true },
+        { "identifier": "jailbreak", "enabled": true }
+      ]
+    }]
+  },
+  "input": {
+    "characterId": "ch-06",
+    "chatId": "c-06",
+    "presetId": "preset-06",
+    "personaId": "p-06",
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." },
+      { "role": "user", "content": "I only need somewhere dry until morning." },
+      { "role": "assistant", "content": "*She steps aside.* Boots off. Don't touch the lamp." },
+      { "role": "user", "content": "*I set my satchel down.* What's wrong with the lamp?" },
+      { "role": "assistant", "content": "It's older than both of us, and it doesn't like strangers." }
+    ],
+    "currentMessage": "Then it and I have something in common, don't we."
+  }
+}

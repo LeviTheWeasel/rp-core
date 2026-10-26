@@ -88,9 +88,12 @@ export function redactEvent(ev: Event, redact: ((text: string) => string) | unde
 /** Failure categories that come from a provider (the server's own words exist; --debug shows them). */
 const PROVIDER_CATEGORIES: ReadonlySet<string> = new Set(['auth', 'request', 'rate', 'server', 'network', 'content']);
 
-/** A failure whose raw server text --debug would show (not our own key_unavailable / timeout sentences). */
+/** Failures rp-core words itself: no server said anything (the scripted and replay providers' own too). */
+const OWN_WORDS: ReadonlySet<string> = new Set(['key_unavailable', 'timeout', 'script_exhausted', 'replay_mismatch', 'replay_aborted']);
+
+/** A failure whose raw server text --debug would show (not our own key_unavailable / timeout / replay sentences). */
 export function hasServerWords(ev: { category: string; code: string }): boolean {
-  return PROVIDER_CATEGORIES.has(ev.category) && ev.code !== 'key_unavailable' && ev.code !== 'timeout';
+  return PROVIDER_CATEGORIES.has(ev.category) && !OWN_WORDS.has(ev.code);
 }
 
 /** A human line (for stderr) about a non-text event, or null when there is nothing to say. */

@@ -1,0 +1,97 @@
+{
+  "fixture": "08-append-and-pins",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "TOP-PIN-A-ORDER5"
+    },
+    {
+      "role": "system",
+      "content": "TOP-PIN-B-ORDER10"
+    },
+    {
+      "role": "system",
+      "content": "TOP-PIN-C-ORDER15"
+    },
+    {
+      "role": "system",
+      "content": "TOP-PIN-D-ORDER20"
+    },
+    {
+      "role": "system",
+      "content": "<persona name=\"Wren\">\n  <identity>\n    <pronouns>she/her</pronouns>\n    <age>31</age>\n  </identity>\n  <appearance>Soaked oilskin coat, a satchel of charts.</appearance>\n  <personality>Curious and stubborn.</personality>\n</persona>"
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, Wren."
+    },
+    {
+      "role": "user",
+      "content": "Turn one: I step inside out of the rain.\nAPPEND-SYSTEM-FALLBACK-DEPTH2"
+    },
+    {
+      "role": "assistant",
+      "content": "Turn two: she bars the door behind you.\nAPPEND-ASSISTANT-DEPTH1"
+    },
+    {
+      "role": "user",
+      "content": "Turn three: I ask where I can dry off."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn four: she points to a chair by the stove."
+    },
+    {
+      "role": "user",
+      "content": "Turn five: I sit and finally start to warm up.\nAPPEND-USER-DEPTH0"
+    },
+    {
+      "role": "system",
+      "content": "BOTTOM-PIN-A-ORDER5"
+    },
+    {
+      "role": "system",
+      "content": "BOTTOM-PIN-B-ORDER10"
+    },
+    {
+      "role": "system",
+      "content": "BOTTOM-PIN-C-ORDER15"
+    }
+  ],
+  "samplerSettings": {
+    "temperature": 0.65,
+    "top_p": 0.8,
+    "top_k": 64,
+    "top_a": 0,
+    "min_p": 0,
+    "max_tokens": 512,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "repetition_penalty": 1,
+    "prompt_post_processing": "none"
+  },
+  "presetName": "Append And Pins",
+  "assistantPrefill": "Understood. I will continue as instructed.",
+  "budgetReport": null,
+  "messagesTrimmed": 0,
+  "personaXml": "<persona name=\"Wren\">\n  <identity>\n    <pronouns>she/her</pronouns>\n    <age>31</age>\n  </identity>\n  <appearance>Soaked oilskin coat, a satchel of charts.</appearance>\n  <personality>Curious and stubborn.</personality>\n</persona>",
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "personas",
+    "preset_prompts",
+    "presets",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 3.2,
+    "medianWarmMs": 0.73,
+    "note": "wall clock, database time excluded"
+  }
+}

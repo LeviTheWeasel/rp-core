@@ -80,18 +80,48 @@ export function protectSlots(raw: string, refs: SlotRef[], scope = ''): string {
   return out + raw.slice(pos);
 }
 
+/** Which side of the card's examples an example slot sits on, or null for any other slot. */
+function exampleSide(ref: SlotRef): 'before' | 'after' | null {
+  if (ref.kind !== 'lore') return null;
+  const name = ref.name.toLowerCase();
+  return name === 'examples_before' ? 'before' : name === 'examples_after' ? 'after' : null;
+}
+
 /**
  * Fill every sentinel of `scope` in an expanded text with its slot's value; an unknown number stays
  * as it is. A sentinel of another scope (one that left its block through a variable) renders '': a
  * slot is placed by its own block only, never a second time elsewhere.
+ *
+ * Example slots are joined to what ends up next to them by a newline: presets write
+ * `{{lore::examples_before}}{{examples}}{{lore::examples_after}}` back to back, and each side is its
+ * own example dialogue (ST puts example entries into the same list as the card's examples).
  */
 export function fillSlots(text: string, refs: readonly SlotRef[], value: (ref: SlotRef) => string, scope = ''): string {
   if (!text.includes(OPEN)) return text;
-  return text.replace(SENTINEL, (m, sc: string | undefined, i: string) => {
-    if ((sc ?? '') !== scope) return '';
-    const ref = refs[Number(i)];
-    return ref ? value(ref) : m;
+  // Literal text and rendered slots in order, so a slot can see what lands beside it.
+  const parts: { text: string; side: 'before' | 'after' | null }[] = [];
+  let pos = 0;
+  for (const m of text.matchAll(SENTINEL)) {
+    parts.push({ text: text.slice(pos, m.index), side: null });
+    pos = m.index + m[0].length;
+    if ((m[1] ?? '') !== scope) continue;
+    const ref = refs[Number(m[2])];
+    parts.push(ref ? { text: value(ref), side: exampleSide(ref) } : { text: m[0], side: null });
+  }
+  parts.push({ text: text.slice(pos), side: null });
+
+  const joined = (from: number, to: number): string => parts.slice(from, to).map((p) => p.text).join('');
+  parts.forEach((p, i) => {
+    if (p.side === null || p.text === '') return;
+    if (p.side === 'before') {
+      const next = joined(i + 1, parts.length);
+      if (next !== '' && !next.startsWith('\n')) p.text += '\n';
+    } else {
+      const prev = joined(0, i);
+      if (prev !== '' && !prev.endsWith('\n')) p.text = `\n${p.text}`;
+    }
   });
+  return joined(0, parts.length);
 }
 
 /**
@@ -116,12 +146,17 @@ export function applyFormat(format: string | undefined, value: string): string {
 }
 
 /**
- * A slot's rendered value: wi_format wraps non-empty lore and outlet values, the rest are as given.
- * Empty values stay empty so the block holding them can drop out.
+ * A slot's rendered value: wi_format wraps non-empty {{lore::before}} / {{lore::after}} values, as
+ * ST's formatWorldInfo wraps only worldInfoBefore / worldInfoAfter (a blank format is no format);
+ * outlets and example slots are as given (ST sends outlets and example entries unwrapped). Empty
+ * values stay empty so the block holding them can drop out.
  */
 export function renderSlot(ref: SlotRef, value: string, formats: Preset['formats']): string {
   if (value === '') return '';
-  return ref.kind === 'lore' || ref.kind === 'outlet' ? applyFormat(formats?.wi, value) : value;
+  const wi = formats?.wi;
+  if (ref.kind !== 'lore' || wi === undefined || wi.trim() === '') return value;
+  const name = ref.name.toLowerCase();
+  return name === 'before' || name === 'after' ? applyFormat(wi, value) : value;
 }
 
 /** Lowercased name when the raw template is exactly one macro without arguments, else null. */
@@ -133,14 +168,17 @@ export function soleMacro(raw: string): string | null {
 
 /**
  * ST's new_example_chat_prompt: every example dialogue (split on `<START>`, as ST's
- * parseMesExamples does) is headed by the format line instead of the bare `<START>` marker.
+ * parseMesExamples does) is headed by the format line instead of the bare `<START>` marker. A
+ * header that is present but blank heads nothing: `<START>` is only a separator to ST, and the empty
+ * header message is dropped (ChatCompletion.getChat), so the dialogues go out joined, no marker.
+ * Without a header (a native preset, the builtin) the examples are sent as written.
  */
 export function formatExamples(examples: string, header: string | undefined): string {
-  if (header === undefined || header === '' || examples.trim() === '') return examples;
-  return examples
+  if (header === undefined || examples.trim() === '') return examples;
+  const chunks = examples
     .split(/<START>/i)
     .map((chunk) => chunk.trim())
-    .filter((chunk) => chunk !== '')
-    .map((chunk) => `${header}\n${chunk}`)
-    .join('\n');
+    .filter((chunk) => chunk !== '');
+  if (header.trim() === '') return chunks.join('\n');
+  return chunks.map((chunk) => `${header}\n${chunk}`).join('\n');
 }

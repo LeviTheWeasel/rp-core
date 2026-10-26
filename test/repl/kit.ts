@@ -5,7 +5,8 @@ import type { Connection, EngineHandle, SessionHandle } from '../../src/engine/a
 import type { RpConfig } from '../../src/config/config.ts';
 import type { Character, Persona } from '../../src/formats/native.ts';
 import { memoryChannel } from '../../src/cli/io.ts';
-import { runReplWith } from '../../src/cli/repl.ts';
+import { runReplWith, type ReplDeps } from '../../src/cli/repl.ts';
+import type { Provider } from '../../src/providers/types.ts';
 import { createScriptedProvider, SCRIPT_CAPS, type ScriptCall, type ScriptedProvider, type ScriptStep } from '../../src/providers/scripted.ts';
 import { readSessionFile, type SessionLog, openSessionLog } from '../../src/session/log.ts';
 import type { DeepPartial, Entry, SessionConfig } from '../../src/session/entries.ts';
@@ -107,11 +108,22 @@ export interface ReplRigOptions {
   config?: DeepPartial<SessionConfig>;
   /** Replace the session handle the REPL gets (a stand-in that misbehaves). */
   wrap?: (s: SessionHandle) => SessionHandle;
+  /** The caps window of a binding before its first answer (ReplDeps.windowOf). */
+  windowOf?: (conn: string, model: string) => number | null;
+  /** More ReplDeps (failExit, override, …), merged over the kit's. */
+  deps?: Partial<ReplDeps>;
+  /** Give the scripted connection a wire() (a fake HTTP body: model, max_tokens, message count). */
+  wire?: boolean;
+  /** The config.toml the REPL sees (default CONFIG). */
+  rpConfig?: RpConfig;
 }
 
 export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Promise<ReplRig> {
   const home = o.home ?? tmpHome('rp-core-repl-');
   const provider = createScriptedProvider(script);
+  if (o.wire) {
+    (provider as Provider).wire = (req) => ({ url: 'http://127.0.0.1:9/v1/chat/completions', body: { model: req.model.model, max_tokens: req.maxTokens, n: req.messages.length } });
+  }
   const conn: Connection = { id: 'script', provider, caps: SCRIPT_CAPS, origin: 'script:script', local: true };
   const engine = await Engine.open({
     home,
@@ -132,7 +144,7 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
     {
       engine,
       session: o.wrap ? o.wrap(session) : session,
-      config: CONFIG,
+      config: o.rpConfig ?? CONFIG,
       home,
       io: { out, err },
       input: typed.input,
@@ -147,6 +159,8 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
         return o.editor ? o.editor(initial) : null;
       },
       color: o.color ?? false,
+      ...(o.windowOf ? { windowOf: o.windowOf } : {}),
+      ...o.deps,
     },
     { interactive: o.interactive ?? false },
   );

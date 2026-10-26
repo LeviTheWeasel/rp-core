@@ -4,9 +4,11 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M1b**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
-  koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server).
-- **Built with:** TypeScript on [Bun](https://bun.sh), with zero runtime dependencies.
+- **Status:** milestone **M2**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+  koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
+  and lorebooks.
+- **Built with:** TypeScript on [Bun](https://bun.sh), with two small runtime dependencies:
+  `re2js` (regex lorebook keys) and `gpt-tokenizer` (token counts).
 - **Licence:** AGPL-3.0-or-later.
 - **Design:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (in Russian).
 
@@ -18,48 +20,49 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 4. [Connecting Ollama, in detail](#connecting-ollama-in-detail)
 5. [Playing in the chat](#playing-in-the-chat)
 6. [Editing messages and choosing an editor](#editing-messages-and-choosing-an-editor)
-7. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-8. [config.toml reference](#configtoml-reference)
-9. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-10. [Where your data lives](#where-your-data-lives)
-11. [Troubleshooting](#troubleshooting)
-12. [Command reference](#command-reference)
-13. [Development](#development)
+7. [Presets and lorebooks](#presets-and-lorebooks)
+8. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+9. [config.toml reference](#configtoml-reference)
+10. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+11. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+12. [Where your data lives](#where-your-data-lives)
+13. [Troubleshooting](#troubleshooting)
+14. [Command reference](#command-reference)
+15. [Development](#development)
 
 ## What works today
 
-**Works now (M1b):**
+**Works now (M2):**
 
 | Area | What you get |
 |---|---|
 | Characters | Character cards from PNG or JSON (CCv1/V2/V3), with alternate greetings, the embedded lorebook, `system_prompt`, `post_history_instructions` and `depth_prompt` |
+| Presets | SillyTavern chat-completion presets: prompt order, markers, samplers, prefill, formats (`/preset`) |
+| Lorebooks | SillyTavern world info and card books, activated as in SillyTavern: keys and `/regex/` keys, secondary keys, recursion, inclusion groups, probability, sticky, cooldown, delay, positions and depths, the budget (`/lore`) |
 | Chat | A streaming chat in the terminal |
 | Story tree | Swipes and guided re-rolls, continue, edit, hide, rewind, branches (tails) and forks |
 | Models | Switch the model in the middle of a session (`/model`) |
 | Notes | Author's note |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
-| Inspection | `/trace` shows what went into the prompt; `/usage` shows tokens and cost |
-| Scripting | One-shot commands with JSON events, and a scripted fake model for tests |
+| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not; `/preview` prints the exact request before it is sent; `/lore test` explains every lore entry; `/usage` shows tokens and cost |
+| Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls |
 
 **Not yet:**
 
 | Milestone | Arrives |
 |---|---|
-| M2 | Lorebook activation by keys, importing SillyTavern presets and world info |
 | M3 | Tools and history search |
 | M4 | The Story Director |
 | M5 | The Compendium (memory) |
 | M6 | `--stdio` for other UIs |
 | M7, M8 | Native Anthropic, then native Gemini |
 
-The character's embedded lorebook is imported and kept, but it does not fire until M2.
-
 ## Install
 
 You need **Bun 1.3 or newer** and this repository.
 
-**1. Install the dev tools.** This step is only needed for tests and the typecheck: rp-core itself
-has no runtime dependencies.
+**1. Install the dependencies.** This fetches the two runtime dependencies (`re2js`,
+`gpt-tokenizer`) and the dev tools for tests and the typecheck.
 
 ```bash
 cd ~/Documents/AI/rp-core
@@ -161,14 +164,19 @@ change it**, and the OpenAI-compatible API does not report it. rp-core therefore
 its own: it assumes 8192 for a local server and warns you once the server starts cutting
 (`context_truncated_by_server`).
 
-A short budget also has a direct cost. rp-core keeps part of the window for the answer: at most
-2048 tokens, and never more than half the window. So with a 4096 window, the prompt gets only about
-2048 tokens. That covers the card, the greeting, your message and the history together. A rich card
-alone can exceed that. Then the turn is refused with:
+A short budget also has a direct cost. rp-core keeps part of the window for the answer, never more
+than half of it: the reply length you set (`--max-tokens` at `new`, which goes into the session's
+narrator binding), else the preset's (a SillyTavern preset's `openai_max_tokens`), else 2048 (8192
+on a window of 24576 tokens or more). So with a 4096 window, the prompt gets only about 2048 tokens.
+That covers the card, the greeting, your message and the history together. Old history goes first;
+the greeting goes last, as in SillyTavern (a notice says so). A rich card alone can exceed that.
+Then the turn is refused with:
 
 ```
 ✗ the answer failed (request/context_length_exceeded): the required part of the prompt needs about
-  5301 tokens, but only 2048 are available (window 4096 - reply reserve 2048)
+  5301 tokens, but only 2048 are available (window 4096 - reply reserve 2048): the preset's blocks
+  5271 (lore included: 0 of its budget 512), your current message 30; the greeting (571 tokens) is
+  already left out
 ```
 
 Your message stays in the session: fix the window, then press `/r` to ask for the answer.
@@ -244,14 +252,18 @@ model loads. Later answers start in well under a second, because Ollama keeps th
 ### Starting a session
 
 ```bash
-rp-core new --card <file or library id> [--model conn:model] [--persona me.json] [--max-tokens 400] [--title "..."]
+rp-core new --card <file or library id> [--model conn:model] [--preset <id or file>] [--lore <id or file>] [--persona me.json] [--max-tokens 400] [--title "..."]
 ```
 
 - **The card.** `--card` takes a PNG or JSON card. The card is imported into your library first;
   later sessions can name it by its library id (`rp-core import card.png` prints it).
 - **Your persona.** `--persona` is a small JSON file: `{"name": "Ника", "description": "...",
   "aliases": ["Nika"]}`. It fills `{{user}}` in the card and greetings. Without it, `{{user}}` is
-  `User`.
+  `User`. It may carry a lorebook of its own under `"book"`, in rp-core's format:
+  `{"name": "Nika's notes", "entries": [{"id": "1", "keys": ["compass"], "content": "...",
+  "position": "before"}]}`. That book is scanned first, before the card's.
+- **Preset and lorebooks.** `--preset` and `--lore` take SillyTavern files or library ids; see
+  [Presets and lorebooks](#presets-and-lorebooks).
 - **Reply length.** `--max-tokens` caps the length of the answers.
 - **Without opening the chat.** With `--no-chat`, or when not on a terminal, `new` only prints the
   session id.
@@ -290,8 +302,12 @@ Maren Vell › …
 | `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session |
 | `/note <text> [@depth]`, `/note off` | The author's note, inserted *depth* messages from the end (default 4) |
 | `/think show`, `/think hide` | Show the model's reasoning, or fold it |
+| `/preset [id\|file]` | Show the preset, or switch it ([details](#presets-and-lorebooks)) |
+| `/lore`, `/lore add <id\|file>`, `/lore rm <id>` | The session's lorebooks: list, add, remove |
+| `/lore test <text>` | Which lore entries a message would wake, and why; nothing is sent |
+| `/preview [n] [--wire] [--verdicts]` | The exact request of the next answer (or of answer *n*), without sending it; `--verdicts` adds the lore test |
 | `/usage` | Tokens and cost of the current path (cost needs `[prices]` or a server that reports it) |
-| `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed |
+| `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not |
 | `/sessions`, `/open <id>` | List sessions, switch to one |
 | `/help`, `/quit` | Help, leave |
 
@@ -377,6 +393,178 @@ end.
   editor. If you are already stuck, close the editor from another terminal with `pkill -f
   rp-core-edit`; the edit is cancelled and the chat goes on.
 
+## Presets and lorebooks
+
+rp-core reads SillyTavern's chat-completion presets and its world info (lorebook) files. You import
+a file once into your library; from then on a session names it by its library id.
+
+### Importing
+
+`rp-core import` recognises the file by its content, whatever its name.
+
+```bash
+rp-core import "My Preset.json"
+```
+
+```bash
+rp-core import ~/worlds/Eldoria.json
+```
+
+- **Where to find them.** SillyTavern keeps presets in `data/default-user/OpenAI Settings/` and
+  world info in `data/default-user/worlds/`; its export buttons give the same files.
+- **Library ids.** Presets go to `library/presets`, world info to `library/lorebooks`. The id is the
+  name in lower case with its words joined by `-`. SillyTavern writes no name into presets and world
+  info, so those are named after the file: `My Preset.json` becomes `my-preset`. Cards and bare
+  `character_book` files carry a name of their own and are named by it (a `character_book` without
+  one, by its file). `--as <name>` picks another name. Importing the same file twice changes nothing.
+  `builtin` is the built-in layout's id: a preset called that is saved as `builtin-2`.
+- **Warnings.** Settings rp-core does not honour are named in a warning and kept in the imported
+  file. A preset's connection settings (API source, model names, proxy and its password) are left
+  out on purpose: the connection comes from `config.toml`.
+- **Not a preset.** Instruct and context templates, system prompts and reasoning templates (the
+  Advanced Formatting files), SillyTavern's text-completion presets (NovelAI, KoboldAI, text
+  generation: the reason names which) and API request bodies are refused, with the reason. A
+  chat-completion preset is told by its prompts, its prompt order or its chat-completion settings,
+  not by its samplers.
+- **Which prompts are sent.** As in SillyTavern: the order and the on/off switches come from the
+  preset's global prompt order; without one, SillyTavern's default order is used and the preset's
+  own extra prompts come in switched off. A custom prompt among the others is sent only when it is
+  not marked as a system prompt (`system_prompt: false`, which SillyTavern writes for every prompt
+  you add). Presets made in RoleCall (they say `prompt_post_processing` or `{{message_history}}`)
+  keep RoleCall's reading, and the import says so.
+- **The preset's context size.** A SillyTavern preset carries its own context size
+  (`openai_max_context`), and rp-core honours it: it can only make the window smaller. SillyTavern's
+  `Default.json` says 4095, so a session on it gets a 4095-token window even on a 16k model. The
+  banner and `/preset` say so (`ctx ≤4095` in the banner when the model's own window is not known
+  yet); raise the value in the file (or use another preset) for more.
+- **The preset's reply length.** A SillyTavern preset's reply length (`openai_max_tokens`) becomes
+  the reply reserve, the part of the window kept for the answer, capped at half the window. Geechan's
+  v5.2 asks for 10000 tokens: on a 16k model 8192 are kept for the reply, which halves the room for
+  the prompt and, with it, the lore budget. `--max-tokens` at `new` (the session's narrator binding)
+  overrides the preset's value.
+- **SillyBunny-only macros.** Some newer presets (Geechan's, for example) use SillyBunny's macro
+  engine: `{{#if …}}…{{/if}}` blocks and `{{.variable = …}}` shorthands; RoleCall-born ones use
+  `{{if …}}`, `{{choice::…}}` and the like. rp-core does not know those forms; they are sent as
+  written. The import names each one in a warning, and `/trace` lists them under "unknown macros".
+- **Book settings SillyTavern ignores.** A card book's own `scan_depth` and `recursive_scanning` are
+  kept in the file but not applied: SillyTavern scans every world at its global depth (2) with
+  recursion on, and so does rp-core. The import says so when the values differ.
+- **Entry decorators.** An entry that starts with `@@activate` fires without a key, one with
+  `@@dont_activate` never fires, as in SillyTavern. Other `@@` lines at the start (`@@depth`,
+  `@@role`) are stripped, as SillyTavern strips them.
+- **The card's own book** needs no import: it comes with the card and is used in every session of
+  that card. A book without a name is called "Mira's Lorebook", as SillyTavern calls it. A book is
+  read once by name, as in SillyTavern: if you also add a library book with the same name (the
+  card's `Eldoria` and `Eldoria.json`, say), the library one is read and the card's copy is not.
+  `/lore` shows which. An open sticky or cooldown follows the world, not the copy.
+
+### Choosing them for a session
+
+When you start a session, `--preset` and `--lore` take a library id or a file (a file is imported
+on the way). `--lore` may be given more than once.
+
+```bash
+rp-core new --card mira.png --model ollama:magmell-16k:latest --preset my-preset --lore eldoria --lore harbor
+```
+
+In the chat:
+
+| Command | What it does |
+|---|---|
+| `/preset` | The session's preset and the presets in your library |
+| `/preset <id\|file>` | Switch the preset from the next answer. `builtin` is the built-in layout. A file is imported first and its warnings are shown |
+| `/lore` | The lorebooks this session scans, in order: your persona's (the `book` of your `--persona` file), the card's own, then the ones you added |
+| `/lore add <id\|file>` | Add a lorebook from the next answer; a world info file is imported first. A book with the name of one already in the session takes its place: a changed copy of `Harbor.json`, imported as `harbor-2`, replaces `harbor` |
+| `/lore rm <id>` | Take a lorebook out of the session. It stays in the library |
+| `/lore test <text>` | Which entries a message with this text would wake, and why. Nothing is sent or saved |
+
+Changing the preset or the lorebooks is refused while an answer is being written.
+
+### Testing the lore
+
+```
+you  › /lore test We walk up to the lighthouse.
+lore test: a reply to your text (nothing is sent)
+  ✓ "Gull Point lighthouse" harbor:0 · key · keys: lighthouse · 13 tok
+  ✗ "Evening fog" harbor:1 · no-key-match
+  ✗ "The keeper" harbor:2 · disabled
+1 of 3 fired · 13 tok of lore · 15 of 1973 budget tok (counts ×1.15 for this model)
+```
+
+Each line is one entry: its title, then `book:entry`, then the reason. A fired entry ends with its own
+token count, the same count `/preview` shows. The last line measures the budget in budget tokens:
+those counts times rp-core's correction for this model, which starts at ×1.15 and then follows the
+server's own counts. An entry cut with "skipped: an earlier entry had already used up the budget" was
+never tried: once one entry overflows the budget, SillyTavern stops trying the rest.
+
+- **Why an entry fired:** `key`, `secondary`, `constant`, `sticky` (still inside its sticky window)
+  or `recursion` (woken by the text of another entry).
+- **Why it did not:** `no-key-match`, `secondary-logic` (its secondary keys failed), `chance` (its
+  probability roll, with the numbers), `cooldown` and `delay` (with the messages left), `budget-cut`
+  (the lore budget was full: what the entry would have cost and the most that was left, in budget
+  tokens),
+  `group-lost` (another entry of its inclusion group won), `exclude-recursion`, `disabled`,
+  `regex-error` (a `/regex/` key that does not compile).
+- **Recursion** wakes entries through the text of others for at most 3 loops. An entry the next
+  loop would have woken says so ("recursion would wake it, but it stops after 3 loops").
+  SillyTavern's default has no limit.
+- **Not sent.** An entry that fired into a place the preset does not send (its `worldInfoBefore` is
+  switched off, say) is marked "not sent", here and in `/trace`. A book that is skipped (missing from
+  the library, invalid) is named below the list.
+- **The budget** is a quarter of the prompt part of the context window, SillyTavern's default.
+- **Rolls.** Entries with a probability below 100 % roll for every answer. In the chat, `/lore test`
+  and `/preview` use the next answer's own seed, so they agree with it; a one-shot
+  `rp-core preview` rolls its own (below). `/trace` shows what really fired.
+
+Entries behave as in SillyTavern: keys are looked for in the last 2 messages (an entry may set its
+own scan depth), ignoring case and as whole words unless the entry says otherwise. A hidden message
+(`/hide`) is not read, and it does not count in the messages that sticky, cooldown and delay count
+either: SillyTavern leaves it out of its chat the same way, so hiding one keeps a sticky entry one
+message longer.
+
+### Seeing what was sent
+
+**`/trace`** after an answer shows the lore that fired, with the reason, and what the budget cut.
+Below that, the entries that did not fire: the answer's request is rebuilt with its own seed and
+clock, nothing sent, and each entry with a reason of its own (a lost roll, a cooldown, a budget
+cut, …) gets a line; the plain no-key-match and disabled ones are counted on one line. When the
+preset, a book, the history or the model changed since, a notice says what changed, as for
+`/preview n`.
+
+```
+trace of 16a7c58e · ollama:magmell-16k:latest
+  window 16384 · reserve 400 · prompt ~1210 tok · 9 messages sent
+  trimmed: nothing · prefill: none
+  unknown macros: none
+  lore fired: 1 · budget 3996 tok
+    ✓ "Gull Point lighthouse" harbor:0 (key)
+  lore not fired (recomputed from its seed):
+    ✗ "Storm" harbor:3 · chance · keys: lighthouse · roll 0.71 > 0.50
+    ✗ 2 more: no-key-match 1, disabled 1
+```
+
+**`/preview`** prints the exact request of the next answer without sending it. Every message comes
+numbered, with its role, where it came from (`main`, `worldInfoBefore`, `history`, …) and its token
+count, followed by its full text. Then the prefill, the reply limit and the samplers the connection
+sends; a preset's samplers it does not send (`top_k` on most OpenAI-style servers, say) are named on
+their own line.
+
+- **`/preview n`** rebuilds the request of answer *n* (its number in `/show`) with that turn's own
+  seed and clock, under today's preset and lorebooks. When the rebuild cannot match what was sent, a
+  notice says what changed: the preset, a book, the history (an edit or a hidden message since),
+  which old messages the budget leaves out, the author's note, the window, the model, or how the
+  messages are shaped for it (another model's connection may merge or re-role them).
+- **`/preview --verdicts`** (also with *n*) adds every lore entry's verdict, as `/lore test` prints
+  them.
+- **`/preview --wire`** prints the JSON body as the server would receive it, then the notices. Headers,
+  and with them your key, are left out.
+- **From the shell:** `rp-core preview <session>` does the same; `--draft "text"` previews a reply to
+  a message you have not sent (a session with only its greeting needs one), `--verdicts` adds the lore
+  test, `--json` prints everything as one JSON object. With `--wire` the body is all that goes to
+  stdout; the notices and the verdicts go to stderr. A one-shot preview draws its own seed: `{{random}}`, `{{roll}}` and lore entries with
+  a probability below 100 % can come out differently in the next `send`. Inside the chat, `/preview`
+  and `/lore test` use the next answer's seed.
+
 ## Other servers
 
 Every server that speaks the OpenAI Chat Completions API works through the `openai-chat` dialect.
@@ -438,8 +626,8 @@ with `--debug`, with keys and header values replaced by `[redacted]`.
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
 
 Dates must be quoted strings (`as_of = "2026-10-26"`): a bare TOML date is refused. A broken file
-makes the commands that read it (`new`, `chat`, `send`, `probe`, `models`) exit with code 64 and name
-the file, the line and the key. `sessions`, `show` and `import` do not need it.
+makes the commands that read it (`new`, `chat`, `send`, `preview`, `probe`, `models`) exit with code
+64 and name the file, the line and the key. `sessions`, `show` and `import` do not need it.
 
 ## One-shot commands and scripting
 
@@ -461,6 +649,7 @@ rp-core send "$id" "Hello there"
 | `rp-core send "$id" --kind continue` | Extends the last answer |
 | `rp-core send "$id" "Hi" --json` | The turn's events, one JSON object per line |
 | `rp-core show "$id"` | The active path; safe to run while another process plays |
+| `rp-core preview "$id" --draft "Hi"` | The request a reply to "Hi" would send; nothing is sent |
 
 - **`--json`** prints events: `start`, then `text`… deltas, then `changed` and `done`, or `stopped` /
   `failed`. These are the events a UI will consume.
@@ -482,6 +671,46 @@ rp-core send "$id" "Hello there"
   The step types are `text`, `reasoning`, `delay` (ms), `pause`, `error`, `usage`, `cut` (end the
   stream abruptly) and `finish`. Each process starts the script from its first line.
 
+## Recording and replaying a chat
+
+`--provider record:<file>` plays as usual, against your real connections, and appends every model
+call to `<file>`: the request, the streamed answer and the server's raw response, one JSON line per
+call. `--provider replay:<file>` plays those calls back without a network, a model or a bill.
+
+```bash
+printf 'Hello\nIs the lighthouse lit?\n/quit\n' | rp-core chat "$id" --provider record:calls.jsonl
+```
+
+```bash
+id2=$(rp-core new --card mira.png --model ollama:magmell-16k:latest --no-chat)
+```
+
+```bash
+printf 'Hello\nIs the lighthouse lit?\n/quit\n' | rp-core chat "$id2" --provider replay:calls.jsonl
+```
+
+- **Secrets.** API keys and header values become `[redacted]` before a line is written. Your story
+  stays in the file, as it is in the session, so keep recordings where you keep sessions.
+- **A changed request fails loudly.** On replay every request must match the recorded one exactly.
+  If the preset, a lorebook, the card or a message differs, the answer fails with `replay_mismatch`
+  and a short diff: the first message that differs, with the text around the first changed
+  character. A piped chat then stops and exits with code 3, as `send` does, so a CI job notices;
+  so does a chat that runs out of recorded calls ("the recording ran out of calls",
+  `script_exhausted`; a piped `script:` chat says "the script ran out of calls").
+- **Same config.toml and model.** A request is shaped for the model's capabilities. Replay takes them
+  from the connection a call was recorded on, so replay with the `config.toml` and the model you
+  recorded with. When it cannot, the mismatch ends with a note saying why (another model, or the
+  connection missing from `config.toml`).
+- **Stopped calls.** A call you stopped (or that timed out) while recording replays its text and
+  then, in an interactive chat, waits for your Ctrl+C. Anywhere else (a piped chat, `send`) it fails
+  at once with `replay_aborted`.
+- **Randomness.** `{{random}}`, `{{roll}}`, dates and times, and lore entries with a probability below
+  100 % change from run to run, so prompts that use them do not replay.
+- **Order.** Each process plays the calls from the first line. To replay several answers, record
+  and replay them in one process, as with the piped chat above.
+- **Appending.** `record:` never truncates the file: a second run adds its calls after the first.
+  Use a new file for a new recording.
+
 ## Where your data lives
 
 Everything is under `~/.rp-core`. Change it with `--home <dir>` or `RP_CORE_HOME`; `--sandbox` uses
@@ -492,6 +721,8 @@ a temporary folder that is removed at exit.
   config.toml          connections, roles, overrides, prices (no secrets)
   caps-cache.json      what `probe --write` learned
   library/characters/  imported cards in the native format
+  library/presets/     imported presets
+  library/lorebooks/   imported world info and lorebooks
   sessions/<id>.jsonl  one session = one append-only journal
   sessions/<id>.lock   held while a process has the session open
 ```
@@ -521,14 +752,18 @@ redacted.
 | Command | What it does |
 |---|---|
 | `init [--json]` | Writes the starter `config.toml` unless one exists; prints its path |
-| `new --card <file\|library id> [--model conn:model] [--max-tokens n] [--persona <json>] [--title t] [--no-chat] [--json] [--provider script:<f>]` | Imports the card and creates a session; opens the chat on a terminal, else prints the id (`--json`: `{sessionId, title, greetings}`) |
-| `chat <session> [--provider script:<f>]` | The chat on a session (lock and crash recovery first) |
-| `import <file> [--as name] [--json]` | Imports a card into the library; prints its id |
-| `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider script:<f>]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
+| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--no-chat] [--json] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal, else prints the id (`--json`: `{sessionId, title, greetings}`) |
+| `chat <session> [--provider …]` | The chat on a session (lock and crash recovery first) |
+| `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info or a character_book into the library; prints its id |
+| `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
+| `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |
 | `probe [conn[:model]] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only) and the caps a model gets; `--write` stores it |
 | `models <conn> [--json]` | The connection's model ids |
 | `sessions [--json]` | Sessions, newest first |
 | `show <session> [--json]` | The active path with markers `[interrupted]`, `[stopped]`, `[hidden]`, `[edited]`. Never takes the lock |
+
+**`--provider`** takes `script:<file>` (a scripted fake model), `record:<file>` or `replay:<file>`
+([details](#recording-and-replaying-a-chat)).
 
 **Global flags** may go anywhere on the line: `--home <dir>`, `--sandbox`, `--debug`, `--help`
 (also `rp-core help <command>`) and `--version`.
@@ -542,11 +777,11 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | Code | Meaning |
 |---|---|
 | `0` | done |
-| `1` | other error (unreadable card or script, missing session, unreachable server for `probe`/`models`) |
+| `1` | other error (unreadable card, script or recording, a missing session for `show`, unreachable server for `probe`/`models`) |
 | `2` | stopped |
-| `3` | failed |
+| `3` | failed; also a piped `chat` under `--provider script:` or `replay:` in which an answer failed |
 | `4` | conflict |
-| `5` | refused before the turn opened; stderr ends with `{"type":"refusal","code":…,"message":…}` |
+| `5` | refused before the turn opened (`send`, `chat` and `preview` on a missing session: `session_not_found`), or a preview that cannot be built (`--turn` naming no message: `not_found`); stderr ends with `{"type":"refusal","code":…,"message":…}` |
 | `64` | usage or `config.toml` error |
 | `130`, `143` | SIGINT, SIGTERM |
 
@@ -556,7 +791,7 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite, about 1500 tests |
+| `bun test` | The full suite, about 2100 tests |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
@@ -568,14 +803,17 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `src/engine` | Turns, recovery, scheduling |
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
-| `src/providers` | Transport, the openai-chat adapter, capability data, the scripted provider |
-| `src/formats` | Cards, world info, library |
+| `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
+| `src/formats` | Cards, presets, world info, library |
+| `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
 | `src/config` | Config and keys |
 | `src/cli` | Commands and the chat |
 
 The design and its decisions (D-1…D-89) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
-milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md) and
-[`docs/M1B-DEMO.md`](docs/M1B-DEMO.md).
+milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md),
+[`docs/M1B-DEMO.md`](docs/M1B-DEMO.md) and [`docs/M2-DEMO.md`](docs/M2-DEMO.md). How rp-core differs
+from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](docs/PARITY-RC.md) and
+[`test/golden/st/README.md`](test/golden/st/README.md).
 
 **Ported code.** Code taken from RoleCall and Bunraku keeps its copyright headers and is listed in
 [`PROVENANCE.md`](PROVENANCE.md).

@@ -5,17 +5,20 @@
 // §15 M1b). The REPL itself lives in repl.ts; this file opens the engine with the configured
 // connections, hands the session over and shuts down in the right order.
 //
+// Exit codes: 0 after /quit or the end of input; 3 when the chat plays --provider script: or
+// replay: and an answer failed (a replay_mismatch, an exhausted script), so a piped replay in CI
+// fails loudly; 130 / 143 as below.
 // Signals: the REPL owns SIGINT (stop the turn; twice at the prompt quits). SIGTERM is handled here:
 // close the engine (the running turn stops with its partial text kept, the lock is released), then
 // exit 143; a second SIGTERM leaves at once. Exit 130 from the REPL means a turn would not settle
 // after Stop: the engine is not waited for (the next open recovers that turn, as after a crash).
 
 import { Engine } from '../engine/engine.ts';
-import { Refusal, type EngineHandle, type EngineOptions, type SessionHandle } from '../engine/api.ts';
+import { Refusal, type Connection, type EngineHandle, type EngineOptions, type SessionHandle } from '../engine/api.ts';
 import type { Io } from './io.ts';
 import { EXIT, reportRefusal } from './oneshot.ts';
-import { runRepl } from './repl.ts';
-import { connectionProblem, engineOptions, redactor, windowOf, type Runtime } from './runtime.ts';
+import { runRepl, type ReplDeps } from './repl.ts';
+import { connectionProblem, connectionWindow, engineOptions, redactor, windowOf, type Runtime } from './runtime.ts';
 import { EXIT_SIGINT, EXIT_SIGTERM, type SignalSource } from './signals.ts';
 
 export interface ChatArgs {
@@ -44,6 +47,15 @@ export async function cmdChat(a: ChatArgs & { sessionId: string }): Promise<numb
 }
 
 /** Run the REPL on an open session of `engine`; closes the engine when the REPL ends. */
+/** ReplDeps.override of a --provider script: / replay: connection (its origin says which). */
+export function overrideOf(conn: Connection): NonNullable<ReplDeps['override']> {
+  return {
+    conn: conn.id,
+    plays: conn.origin.startsWith('replay:') ? 'recording' : 'script',
+    windowOf: (model) => connectionWindow(conn, model),
+  };
+}
+
 export async function runChat(engine: EngineHandle, session: SessionHandle, a: ChatArgs): Promise<number> {
   const source: SignalSource = a.signals ?? process;
   let terminating = false;
@@ -82,6 +94,9 @@ export async function runChat(engine: EngineHandle, session: SessionHandle, a: C
       ...(debugTap ? { debugTap } : {}),
       // Under --provider every role plays the script: /model only checks config.toml's names then.
       ...(a.rt.provider ? {} : { connectionProblem: (conn: string) => connectionProblem(a.rt, conn) }),
+      // A script or a replay is a test of the turn loop: a failed answer fails the run (exit 3).
+      // Every turn runs on that connection: the banner takes its window from it.
+      ...(a.rt.provider ? { failExit: true, override: overrideOf(a.rt.provider) } : {}),
     });
   } catch (e) {
     source.removeListener('SIGTERM', onTerm);

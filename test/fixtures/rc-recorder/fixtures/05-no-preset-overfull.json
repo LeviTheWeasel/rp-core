@@ -1,0 +1,124 @@
+{
+  "name": "05-no-preset-overfull",
+  "about": "No preset, a card depth note larger than the window: RoleCall's budget pass keeps its floor of the last four messages anyway, and its final pass then drops the oldest turns it can.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 5,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [
+        {
+          "id": "c-05",
+          "user_id": "u-owner",
+          "config": {}
+        }
+      ],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [
+        {
+          "id": "ch-05",
+          "name": "Vera",
+          "creator_id": "u-owner",
+          "status": "private",
+          "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+          "personality": "Dry, patient, suspicious of strangers.",
+          "scenario": "A storm has stranded {{user}} at the lighthouse.",
+          "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+          "alternate_greetings": [],
+          "mes_example": "",
+          "system_prompt": "",
+          "post_history_instructions": "",
+          "creator_notes": "",
+          "character_version": "1.0",
+          "creator_profiles": null,
+          "character_tags": [],
+          "details": {
+            "prompt_depth_injections": [
+              {
+                "content": "Remember: the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. ",
+                "depth": 2,
+                "role": "system"
+              }
+            ]
+          },
+          "accent_color": null,
+          "extensions": null
+        }
+      ]
+    },
+    "rpc": {
+      "resolve_chat_summary_checkpoint": null
+    }
+  },
+  "input": {
+    "characterId": "ch-05",
+    "chatId": "c-05",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}."
+      },
+      {
+        "role": "user",
+        "content": "Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail."
+      },
+      {
+        "role": "user",
+        "content": "Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white."
+      },
+      {
+        "role": "user",
+        "content": "Turn 5. The lamp needs oil again before midnight. Turn 5. The lamp needs oil again before midnight. Turn 5. The lamp needs oil again before midnight. Turn 5. The lamp needs oil again before midnight. Turn 5. The lamp needs oil again before midnight."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 6. Gulls are sheltering under the gallery rail. Turn 6. Gulls are sheltering under the gallery rail. Turn 6. Gulls are sheltering under the gallery rail. Turn 6. Gulls are sheltering under the gallery rail. Turn 6. Gulls are sheltering under the gallery rail."
+      },
+      {
+        "role": "user",
+        "content": "Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 8. Salt has crusted the lower windows white. Turn 8. Salt has crusted the lower windows white. Turn 8. Salt has crusted the lower windows white. Turn 8. Salt has crusted the lower windows white. Turn 8. Salt has crusted the lower windows white."
+      },
+      {
+        "role": "user",
+        "content": "Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail."
+      },
+      {
+        "role": "user",
+        "content": "Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white."
+      },
+      {
+        "role": "user",
+        "content": "Turn 13. The lamp needs oil again before midnight. Turn 13. The lamp needs oil again before midnight. Turn 13. The lamp needs oil again before midnight. Turn 13. The lamp needs oil again before midnight. Turn 13. The lamp needs oil again before midnight."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 14. Gulls are sheltering under the gallery rail. Turn 14. Gulls are sheltering under the gallery rail. Turn 14. Gulls are sheltering under the gallery rail. Turn 14. Gulls are sheltering under the gallery rail. Turn 14. Gulls are sheltering under the gallery rail."
+      }
+    ],
+    "currentMessage": "Then we wait out the storm together, and in the morning I will look at that lamp properly, if you let me near it.",
+    "contextLimit": 1400,
+    "maxResponseTokens": 300
+  }
+}

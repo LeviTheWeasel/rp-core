@@ -1,0 +1,89 @@
+{
+  "name": "07-in-chat-depths",
+  "about": "History comes from a relative prompt with text before/after an inline {{message_history}} marker, plus in-chat prompts at depth 0 (x2, different injection_order, declared out of injection_order sequence to prove sort order is not being substituted for it), depth 2 (user-role), and depth 10 (overflow: 10 exceeds the conversational message count so it injects before the earliest history message). One prompt ships disabled and promptEnabledStates turns it on; one ships enabled and promptEnabledStates turns it off.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 7,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-07", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-07", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }],
+      "presets": [{
+        "id": "preset-07", "name": "In-Chat Depths", "creator_id": "u-owner",
+        "status": "private", "deleted_at": null, "is_soft_hidden": false, "listing_preset_id": null,
+        "temperature": 1, "top_p": 0.97, "top_k": 64, "top_a": 0, "min_p": 0,
+        "max_context": 2000000, "max_tokens": 8192,
+        "frequency_penalty": 0, "presence_penalty": 0, "repetition_penalty": 1,
+        "prompt_post_processing": "none",
+        "system_prompts": {
+          "impersonation_prompt": "", "new_chat_prompt": "", "new_group_chat_prompt": "",
+          "new_example_chat_prompt": "[Example Chat]", "continue_nudge_prompt": "",
+          "group_nudge_prompt": "", "assistant_prefill": "", "assistant_impersonation": ""
+        },
+        "settings": null, "raw_settings": {}
+      }],
+      "preset_prompts": [
+        { "id": "pp-07-0", "preset_id": "preset-07", "identifier": "historyWrap", "name": "History Wrap", "content": "BEFORE-HISTORY-TEXT {{message_history}} AFTER-HISTORY-TEXT", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 0 },
+        { "id": "pp-07-1", "preset_id": "preset-07", "identifier": "toggleOn", "name": "Toggle On", "content": "TOGGLE-ON-CONTENT", "role": "system", "enabled": false, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 1 },
+        { "id": "pp-07-2", "preset_id": "preset-07", "identifier": "toggleOff", "name": "Toggle Off", "content": "TOGGLE-OFF-CONTENT", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 2 },
+        { "id": "pp-07-3", "preset_id": "preset-07", "identifier": "d0second", "name": "Depth0 Second", "content": "DEPTH0-ORDER20-CONTENT", "role": "system", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 1, "injection_depth": 0, "injection_order": 20, "forbid_overrides": false, "is_default": false, "sort_order": 3 },
+        { "id": "pp-07-4", "preset_id": "preset-07", "identifier": "d0first", "name": "Depth0 First", "content": "DEPTH0-ORDER10-CONTENT", "role": "system", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 1, "injection_depth": 0, "injection_order": 10, "forbid_overrides": false, "is_default": false, "sort_order": 4 },
+        { "id": "pp-07-5", "preset_id": "preset-07", "identifier": "d2user", "name": "Depth2 User", "content": "DEPTH2-USER-CONTENT", "role": "user", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 1, "injection_depth": 2, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 5 },
+        { "id": "pp-07-6", "preset_id": "preset-07", "identifier": "d10assistant", "name": "Depth10 Assistant Overflow", "content": "DEPTH10-OVERFLOW-CONTENT", "role": "assistant", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 1, "injection_depth": 10, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 6 }
+      ]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "stPreset": {
+    "name": "In-Chat Depths",
+    "prompts": [
+      { "identifier": "historyWrap", "name": "History Wrap", "content": "BEFORE-HISTORY-TEXT {{message_history}} AFTER-HISTORY-TEXT", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "toggleOn", "name": "Toggle On", "content": "TOGGLE-ON-CONTENT", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "toggleOff", "name": "Toggle Off", "content": "TOGGLE-OFF-CONTENT", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "d0second", "name": "Depth0 Second", "content": "DEPTH0-ORDER20-CONTENT", "role": "system", "system_prompt": false, "injection_position": 1, "injection_depth": 0, "injection_order": 20 },
+      { "identifier": "d0first", "name": "Depth0 First", "content": "DEPTH0-ORDER10-CONTENT", "role": "system", "system_prompt": false, "injection_position": 1, "injection_depth": 0, "injection_order": 10 },
+      { "identifier": "d2user", "name": "Depth2 User", "content": "DEPTH2-USER-CONTENT", "role": "user", "system_prompt": false, "injection_position": 1, "injection_depth": 2, "injection_order": 100 },
+      { "identifier": "d10assistant", "name": "Depth10 Assistant Overflow", "content": "DEPTH10-OVERFLOW-CONTENT", "role": "assistant", "system_prompt": false, "injection_position": 1, "injection_depth": 10, "injection_order": 100 }
+    ],
+    "prompt_order": [{
+      "character_id": 100001,
+      "order": [
+        { "identifier": "historyWrap", "enabled": true },
+        { "identifier": "toggleOn", "enabled": false },
+        { "identifier": "toggleOff", "enabled": true },
+        { "identifier": "d0second", "enabled": true },
+        { "identifier": "d0first", "enabled": true },
+        { "identifier": "d2user", "enabled": true },
+        { "identifier": "d10assistant", "enabled": true }
+      ]
+    }]
+  },
+  "input": {
+    "characterId": "ch-07",
+    "chatId": "c-07",
+    "presetId": "preset-07",
+    "promptEnabledStates": { "toggleOn": true, "toggleOff": false },
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." },
+      { "role": "user", "content": "Turn one: the wind is picking up outside." },
+      { "role": "assistant", "content": "Turn two: she bars the door and lights the lamp." },
+      { "role": "user", "content": "Turn three: I ask about the logbook on the shelf." },
+      { "role": "assistant", "content": "Turn four: she says the last keeper left in March." }
+    ],
+    "currentMessage": "Turn five: why did he really leave?"
+  }
+}

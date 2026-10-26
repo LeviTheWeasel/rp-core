@@ -1,0 +1,55 @@
+{
+  "entries": {
+    "0": {
+      "uid": 0,
+      "key": [
+        "lighthouse"
+      ],
+      "keysecondary": [],
+      "comment": "Gull Point lighthouse",
+      "content": "The Gull Point lighthouse has been dark for nine years.",
+      "constant": false,
+      "selective": false,
+      "order": 100,
+      "position": 0,
+      "disable": false,
+      "probability": 100,
+      "useProbability": true,
+      "depth": 4
+    },
+    "1": {
+      "uid": 1,
+      "key": [
+        "fog"
+      ],
+      "keysecondary": [],
+      "comment": "Evening fog",
+      "content": "Fog rolls in from the bay every evening.",
+      "constant": false,
+      "selective": false,
+      "order": 100,
+      "position": 0,
+      "disable": false,
+      "probability": 100,
+      "useProbability": true,
+      "depth": 4
+    },
+    "2": {
+      "uid": 2,
+      "key": [
+        "keeper"
+      ],
+      "keysecondary": [],
+      "comment": "The keeper",
+      "content": "The old keeper, Anselm, vanished in the last storm.",
+      "constant": false,
+      "selective": false,
+      "order": 100,
+      "position": 0,
+      "disable": true,
+      "probability": 100,
+      "useProbability": true,
+      "depth": 4
+    }
+  }
+}

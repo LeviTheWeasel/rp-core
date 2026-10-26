@@ -1,0 +1,124 @@
+{
+  "name": "03-no-preset-long-history-trimmed",
+  "about": "No preset, a long history against a small window: RoleCall trims history in its budget pass and again in its final pass, so the budget seam is proven against its real trimming.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 3,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [
+        {
+          "id": "c-03",
+          "user_id": "u-owner",
+          "config": {}
+        }
+      ],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [
+        {
+          "id": "ch-03",
+          "name": "Vera",
+          "creator_id": "u-owner",
+          "status": "private",
+          "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+          "personality": "Dry, patient, suspicious of strangers.",
+          "scenario": "A storm has stranded {{user}} at the lighthouse.",
+          "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+          "alternate_greetings": [],
+          "mes_example": "",
+          "system_prompt": "",
+          "post_history_instructions": "",
+          "creator_notes": "",
+          "character_version": "1.0",
+          "creator_profiles": null,
+          "character_tags": [],
+          "details": null,
+          "accent_color": null,
+          "extensions": null
+        }
+      ]
+    },
+    "rpc": {
+      "resolve_chat_summary_checkpoint": null
+    }
+  },
+  "input": {
+    "characterId": "ch-03",
+    "chatId": "c-03",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}."
+      },
+      {
+        "role": "user",
+        "content": "Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight. Turn 1. The lamp needs oil again before midnight."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail. Turn 2. Gulls are sheltering under the gallery rail."
+      },
+      {
+        "role": "user",
+        "content": "Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white. Turn 4. Salt has crusted the lower windows white."
+      },
+      {
+        "role": "user",
+        "content": "Turn 5. A ship light blinked twice to the north. Turn 5. A ship light blinked twice to the north. Turn 5. A ship light blinked twice to the north. Turn 5. A ship light blinked twice to the north. Turn 5. A ship light blinked twice to the north."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 6. The stairs count one hundred and twelve steps. Turn 6. The stairs count one hundred and twelve steps. Turn 6. The stairs count one hundred and twelve steps. Turn 6. The stairs count one hundred and twelve steps. Turn 6. The stairs count one hundred and twelve steps."
+      },
+      {
+        "role": "user",
+        "content": "Turn 7. Rain is coming sideways off the headland. Turn 7. Rain is coming sideways off the headland. Turn 7. Rain is coming sideways off the headland. Turn 7. Rain is coming sideways off the headland. Turn 7. Rain is coming sideways off the headland."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 8. The kettle on the stove has gone cold. Turn 8. The kettle on the stove has gone cold. Turn 8. The kettle on the stove has gone cold. Turn 8. The kettle on the stove has gone cold. Turn 8. The kettle on the stove has gone cold."
+      },
+      {
+        "role": "user",
+        "content": "Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight. Turn 9. The lamp needs oil again before midnight."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail. Turn 10. Gulls are sheltering under the gallery rail."
+      },
+      {
+        "role": "user",
+        "content": "Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white. Turn 12. Salt has crusted the lower windows white."
+      },
+      {
+        "role": "user",
+        "content": "Turn 13. A ship light blinked twice to the north. Turn 13. A ship light blinked twice to the north. Turn 13. A ship light blinked twice to the north. Turn 13. A ship light blinked twice to the north. Turn 13. A ship light blinked twice to the north."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 14. The stairs count one hundred and twelve steps. Turn 14. The stairs count one hundred and twelve steps. Turn 14. The stairs count one hundred and twelve steps. Turn 14. The stairs count one hundred and twelve steps. Turn 14. The stairs count one hundred and twelve steps."
+      },
+      {
+        "role": "user",
+        "content": "Turn 15. Rain is coming sideways off the headland. Turn 15. Rain is coming sideways off the headland. Turn 15. Rain is coming sideways off the headland. Turn 15. Rain is coming sideways off the headland. Turn 15. Rain is coming sideways off the headland."
+      },
+      {
+        "role": "assistant",
+        "content": "Turn 16. The kettle on the stove has gone cold. Turn 16. The kettle on the stove has gone cold. Turn 16. The kettle on the stove has gone cold. Turn 16. The kettle on the stove has gone cold. Turn 16. The kettle on the stove has gone cold."
+      }
+    ],
+    "currentMessage": "Then we wait out the storm together.",
+    "contextLimit": 1200,
+    "maxResponseTokens": 400
+  }
+}

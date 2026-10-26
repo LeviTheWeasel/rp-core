@@ -1,0 +1,92 @@
+{
+  "fixture": "07-in-chat-depths",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "BEFORE-HISTORY-TEXT"
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, User."
+    },
+    {
+      "role": "assistant",
+      "content": "DEPTH10-OVERFLOW-CONTENT"
+    },
+    {
+      "role": "user",
+      "content": "Turn one: the wind is picking up outside."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn two: she bars the door and lights the lamp."
+    },
+    {
+      "role": "user",
+      "content": "DEPTH2-USER-CONTENT"
+    },
+    {
+      "role": "user",
+      "content": "Turn three: I ask about the logbook on the shelf."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn four: she says the last keeper left in March."
+    },
+    {
+      "role": "system",
+      "content": "DEPTH0-ORDER10-CONTENT"
+    },
+    {
+      "role": "system",
+      "content": "DEPTH0-ORDER20-CONTENT"
+    },
+    {
+      "role": "user",
+      "content": "Turn five: why did he really leave?"
+    },
+    {
+      "role": "system",
+      "content": "AFTER-HISTORY-TEXT"
+    },
+    {
+      "role": "system",
+      "content": "TOGGLE-ON-CONTENT"
+    }
+  ],
+  "samplerSettings": {
+    "temperature": 1,
+    "top_p": 0.97,
+    "top_k": 64,
+    "top_a": 0,
+    "min_p": 0,
+    "max_tokens": 8192,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "repetition_penalty": 1,
+    "prompt_post_processing": "none"
+  },
+  "presetName": "In-Chat Depths",
+  "assistantPrefill": null,
+  "budgetReport": null,
+  "messagesTrimmed": 0,
+  "personaXml": null,
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "preset_prompts",
+    "presets",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 5.78,
+    "medianWarmMs": 1.74,
+    "note": "wall clock, database time excluded"
+  }
+}

@@ -5,11 +5,12 @@
 // Bunraku (M9) are thin clients of exactly this. CONTRACT FILE (types only): the engine agent
 // implements it in engine.ts; the CLI agent codes against it.
 
-import type { Character, Persona } from '../formats/native.ts';
-import type { ModelCaps, Provider, ProviderError } from '../providers/types.ts';
-import type { DeepPartial, SessionConfig, SessionHeader, TurnKind } from '../session/entries.ts';
+import type { Character, Persona, Samplers } from '../formats/native.ts';
+import type { LoreVerdict } from '../lore/engine.ts';
+import type { ModelCaps, PromptMsg, Provider, ProviderError, ToolSpec } from '../providers/types.ts';
+import type { DeepPartial, SessionConfig, SessionHeader, Trace, TurnKind } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
-import type { Event } from '../protocol/events.ts';
+import type { Event, Notice } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
 import type { DelayTimers } from './abort.ts';
 
@@ -142,6 +143,57 @@ export interface TurnHandle {
   stop(): void;
 }
 
+/** M2 (§6.1 `preview`, §12.4 /preview, /lore test) [D-45]. */
+export interface PreviewOptions {
+  /**
+   * A user message that is not sent: the prompt of a reply to it, as if it were the head. Without
+   * it the preview is of what the next turn would send: a reply when the head is a user message,
+   * else a swipe of the head answer.
+   */
+  draft?: string;
+  /**
+   * Rebuild the prompt of this past answer (an assistant message id on the path): the path up to
+   * the user message it answers, its turn's seed and clock from its trace, today's preset, books
+   * and config (a notice 'preview_inputs_changed' says so when their hashes differ from the trace).
+   */
+  turn?: string;
+  /** Also recompute the lore verdicts. */
+  explain?: boolean;
+}
+
+export type PreviewResult =
+  | {
+      ok: true;
+      kind: TurnKind;
+      /** The message the request is built up to (U, or A for a continue); 'draft' for a draft. */
+      upTo: string;
+      model: { connection: string; model: string };
+      /** Exactly what the primary model would get: assemble, then shape. */
+      messages: PromptMsg[];
+      prefill: string | null;
+      tools: ToolSpec[];
+      maxTokens: number;
+      /** The samplers of the request (preset and binding), as the request carries them. */
+      samplers: Partial<Samplers>;
+      /**
+       * M2 (fix): the names among `samplers` the primary connection's caps do not send
+       * (caps.samplers.accepted, or all of them when the model's sampling is fixed). Absent when none.
+       */
+      samplersNotSent?: string[];
+      trace: Trace;
+      notices: Notice[];
+      verdicts?: LoreVerdict[];
+      /**
+       * M2 (final fix), with explain: the lore budget as the run used it, in budget tokens (raw
+       * counts × factor, the model's EMA correction; factor 1 = none yet). The verdicts' rawTokens
+       * are the raw counts the request rows show.
+       */
+      loreUse?: { used: number; factor: number };
+      /** Provider.wire() of the primary connection, when it has one (no headers). */
+      wire?: { url: string; body: unknown };
+    }
+  | { ok: false; code: RefusalCode | 'context_length_exceeded' | 'preset_invalid' | 'assemble_failed'; message: string };
+
 export interface SessionHandle {
   readonly id: string;
   header(): SessionHeader;
@@ -177,6 +229,12 @@ export interface SessionHandle {
   fork(input: { at: string }): string;
   /** Append a config entry (does not change the version). */
   configure(patch: DeepPartial<SessionConfig>): void;
+  /**
+   * M2: build the request a turn would send, without sending or writing anything (§6.1). Same path
+   * as a turn: the same admission checks (as ok:false, never thrown), assemble and shape; the
+   * Director is never called (M4: a stub directive).
+   */
+  preview(opts?: PreviewOptions): PreviewResult;
 
   /** Stop any running turn (keeping partial text), wait for it to settle, release the lock. */
   close(): Promise<void>;

@@ -930,5 +930,12 @@ export function createOpenAIChatProvider(o: OpenAIChatOptions): Provider {
     stream(req: ModelRequest, env: ProviderEnv): AsyncIterable<StreamEv> {
       return streamChat(req, env, opts);
     },
+    // M2 /preview --wire: the request as stream() would send it, built with no key and returned
+    // without headers, so neither the key nor a header value can leak into a preview. Throws what
+    // buildChatRequest throws (tool_protocol_invalid, a bad base URL).
+    wire(req: ModelRequest): { url: string; body: unknown } {
+      const http = buildChatRequest(req, opts, null);
+      return { url: http.url, body: JSON.parse(http.body ?? 'null') as unknown };
+    },
   };
 }

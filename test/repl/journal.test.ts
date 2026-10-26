@@ -143,5 +143,8 @@ describe('journal helpers', () => {
     expect(windowFor(j, path, { conn: 'local', model: 'q' }, {}, 3000)).toBe(3000);
     expect(windowFor(j, path, { conn: 'other', model: 'm' }, { 'other:m': { contextLength: 32768 } }, 16000)).toBe(16000);
     expect(windowFor(j, path, { conn: 'other', model: 'm' }, {}, undefined)).toBeNull();
+    // the preset's limit applies to the model's own window, not to a trace's (which already has it)
+    expect(windowFor(j, path, { conn: 'other', model: 'm' }, { 'other:m': { contextLength: 32768 } }, undefined, 4095)).toBe(4095);
+    expect(windowFor(j, path, { conn: 'local', model: 'q' }, {}, undefined, 2000)).toBe(4096);
   });
 });

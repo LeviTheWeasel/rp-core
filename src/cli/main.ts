@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 the rp-core authors
 //
-// The `rp-core` command (ARCHITECTURE.md §12.3, §12.4, §13, §15 M1a/M1b, §19.2 cli/main.ts): strict
-// flag parsing with zero dependencies, global flags anywhere on the line, one function per subcommand.
-// M1a: new, import, send, sessions, show. M1b: init, chat (the REPL), probe, models; config.toml's
-// connections behind every turn. `--stdio` comes in M6.
+// The `rp-core` command (ARCHITECTURE.md §12.3, §12.4, §13, §14, §15 M1a/M1b/M2, §19.2 cli/main.ts):
+// strict flag parsing with zero dependencies, global flags anywhere on the line, one function per
+// subcommand. M1a: new, import, send, sessions, show. M1b: init, chat (the REPL), probe, models;
+// config.toml's connections behind every turn. M2: import of presets and world info, new --preset /
+// --lore, preview, --provider record:/replay:. `--stdio` comes in M6.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
@@ -13,16 +14,16 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigError } from '../config/config.ts';
-import type { Connection } from '../engine/api.ts';
 import { systemClock } from '../engine/system.ts';
-import { bool, parseArgs, str, UsageError, type FlagKind, type Parsed } from './args.ts';
+import { bool, list, parseArgs, str, UsageError, type FlagKind, type Parsed } from './args.ts';
 import { cmdModels, cmdProbe } from './catalog.ts';
 import { cmdChat, runChat } from './chat.ts';
 import { cmdImport, cmdInit, cmdNew, cmdSessions, cmdShow, CliError } from './commands.ts';
 import { resolveHome, type Home } from './home.ts';
 import { processIo, type Io } from './io.ts';
 import { EXIT, runSend } from './oneshot.ts';
-import { ScriptFileError, scriptConnection } from './provider.ts';
+import { cmdPreview } from './preview.ts';
+import { prepareProvider, ScriptFileError, type PreparedProvider } from './provider.ts';
 import { loadRuntime, type Runtime } from './runtime.ts';
 import type { SignalSource } from './signals.ts';
 import type { TurnKind } from '../session/entries.ts';
@@ -43,7 +44,12 @@ interface Command {
   help: string;
 }
 
-const PROVIDER_HELP = '  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role';
+const PROVIDER_HELP = `  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role
+  --provider record:<file>  use the configured connections and append every model call to <file>
+                            (JSONL; keys and header values are scrubbed)
+  --provider replay:<file>  play a recording back instead of the network; a request that differs
+                            from the recorded one fails with replay_mismatch and a diff`;
+const PROVIDER_FLAG = '--provider script:<f>|record:<f>|replay:<f>';
 
 const COMMANDS: Record<string, Command> = {
   init: {
@@ -64,17 +70,25 @@ unless the file exists, and prints its path. Edit [connections] and [roles] narr
       json: 'bool',
       'no-chat': 'bool',
       provider: 'string',
+      preset: 'string',
+      lore: 'list',
     },
-    usage:
-      'rp-core new --card <file> [--model conn:model] [--max-tokens n] [--persona <json file>] [--title text] [--no-chat] [--json] [--provider script:<file>]',
+    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <json file>] [--title text] [--no-chat] [--json] [${PROVIDER_FLAG}]`,
     summary: 'import a card and start a session (opens the chat on a terminal)',
-    help: `Imports the card (PNG or JSON, CCv2/V3) into the library and creates a session with its
+    help: `Imports the card (PNG or JSON, CCv1/V2/V3) into the library and creates a session with its
 greetings; its config starts from config.toml ([roles], [narrator], [director]). On a terminal
 the chat opens right away; otherwise (or with --no-chat / --json) the session id is printed.
 --card may also name a character already in the library (its id).
   --model conn:model  the narrator's binding; the connection must be in config.toml
-  --max-tokens <n>    the narrator's reply limit (default: the preset's, else min(2048, window/2))
-  --persona <file>    a persona JSON {name, description, aliases?}
+  --preset <id|file>  the session's preset: builtin, a library id, or a SillyTavern chat-completion
+                      preset file (imported into the library first)
+  --lore <id|file>    a lorebook for the session: a library id, or a SillyTavern world info /
+                      character_book file (imported first); repeat for more books
+  --max-tokens <n>    the narrator's reply limit, kept free in the window (default: the preset's,
+                      e.g. an ST preset's openai_max_tokens, else 2048, or 8192 from a 24576-token
+                      window; never more than half the window)
+  --persona <file>    a persona JSON {name, description, aliases?, book?}; book is a lorebook in
+                      rp-core's own format, scanned before the card's
   --title <text>      the session title (default: the character's name)
   --no-chat           only create the session and print its id
   --json              print {"sessionId","title","greetings":[{id,text}]} (implies --no-chat)
@@ -82,26 +96,36 @@ ${PROVIDER_HELP}`,
   },
   chat: {
     flags: { provider: 'string' },
-    usage: 'rp-core chat <session> [--provider script:<file>]',
-    summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, ...)',
+    usage: `rp-core chat <session> [${PROVIDER_FLAG}]`,
+    summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, /preset, /lore, ...)',
     help: `Opens the session (lock + recovery of an interrupted answer) and reads lines: text is your
 message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /tails, /goto,
-/fork, /model, /usage, /trace, /quit). Ctrl+C stops an answer and keeps what arrived; twice at
-the prompt quits. Piped stdin is a script: each line waits for the previous answer.
-${PROVIDER_HELP}`,
+/fork, /model, /preset, /lore, /preview, /usage, /trace, /quit). Ctrl+C stops an answer and keeps
+what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
+previous answer.
+${PROVIDER_HELP}
+Exit 0 at /quit or the end of input; 3 under --provider script: or replay: when an answer failed
+(a piped script or replay also stops at the first replay_mismatch, or when it runs out of calls).`,
   },
   import: {
     flags: { as: 'string', json: 'bool' },
     usage: 'rp-core import <file> [--as name] [--json]',
-    summary: 'import a card into the library; prints its library id',
-    help: `Detects the file (PNG card, JSON card; presets and world info arrive in M2) and writes
-library/characters/<id>.json, where id = canonicalId(name).
-  --as <name>  save under this name instead of the card's
+    summary: 'import a card, preset or lorebook into the library; prints its library id',
+    help: `Detects the file and converts it to the native format, in this order: PNG card, JSON card
+(CCv1/V2/V3), SillyTavern chat-completion preset, SillyTavern world info, a bare character_book.
+It lands in library/characters, library/presets or library/lorebooks as <id>.json, where id is
+the name in lower case with its words joined by "-". The name is the file's own name field when
+it has one (cards and character_books do); SillyTavern writes none into presets and world info,
+so those are named after the file: "My Preset.json" becomes my-preset. The preset id "builtin"
+is the built-in layout's: a preset of that name becomes builtin-2.
+Importing the same file twice is a no-op; a different file with the same name gets id-2.
+Warnings name what the file holds that rp-core does not honour.
+  --as <name>  save under this name instead
   --json       print {"kind","id","path","name","warnings"}`,
   },
   send: {
     flags: { kind: 'string', guidance: 'string', json: 'bool', provider: 'string' },
-    usage: 'rp-core send <session> [text] [--kind reply|swipe|continue] [--guidance text] [--json] [--provider script:<file>]',
+    usage: `rp-core send <session> [text] [--kind reply|swipe|continue] [--guidance text] [--json] [${PROVIDER_FLAG}]`,
     summary: 'run one turn and print it',
     help: `reply (the default) appends your text and answers it; "-" reads the text from stdin.
 swipe re-rolls the last answer as a sibling; continue extends it. Both take no text.
@@ -112,6 +136,27 @@ ${PROVIDER_HELP}
 A failure after output keeps the partial answer, marked [interrupted].
 Ctrl+C stops the turn and keeps what arrived; Ctrl+C again quits at once.
 Exit codes: 0 done, 2 stopped, 3 failed, 4 conflict, 5 refused before the turn opened.`,
+  },
+  preview: {
+    flags: { draft: 'string', turn: 'string', wire: 'bool', verdicts: 'bool', json: 'bool', provider: 'string' },
+    usage: `rp-core preview <session> [--draft text] [--turn id] [--wire] [--verdicts] [--json] [${PROVIDER_FLAG}]`,
+    summary: 'print the exact request a turn would send, without sending it',
+    help: `Opens the session (no turn runs; the preview sends and writes nothing) and prints the request
+of the next turn: a reply when your message is the last one, else a swipe of the last answer. Each
+message comes numbered with its role, its source in the preset and its token count, then its
+full text; then prefill, max tokens, the samplers the connection sends (the ones it drops on
+their own line), and the lore that fired. This process draws its own seed: {{random}}, {{roll}}
+and lore entries with a probability below 100 % can differ in the next send (inside the chat,
+/preview uses the next answer's own seed).
+  --draft <text>  the request of a reply to this text, as if you had sent it
+  --turn <id>     rebuild the request of a past answer (an id or a unique prefix, as show prints)
+  --verdicts      also every lore entry's verdict: fired or not, and why
+  --wire          print the HTTP body the connection would send (stdout) instead; the URL, the
+                  notices and the verdicts go to stderr
+  --json          print the whole preview result as one JSON object
+${PROVIDER_HELP}
+Exit 5 when the request cannot be built (the reason as for send's refusals; --turn naming no
+message is not_found).`,
   },
   probe: {
     flags: { write: 'bool', json: 'bool' },
@@ -158,7 +203,7 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M1b)
+  return `rp-core — headless roleplay agent core (milestone M2)
 
 Usage: rp-core <command> [flags]
 
@@ -211,16 +256,25 @@ function noPositionals(p: Parsed, command: string, max: number): void {
 
 const KINDS: readonly TurnKind[] = ['reply', 'swipe', 'continue'];
 
-/** --provider script:<file>, read now (a bad file fails before anything is opened). */
-function providerOf(p: Parsed, command: string): Connection | undefined {
+/**
+ * --provider script:|record:|replay:<file>, its file read or opened now (a bad file fails before
+ * anything is opened). `interactive`: a chat with a person at a terminal (a replayed call that was
+ * stopped while recording then waits for Ctrl+C instead of failing at once).
+ */
+function providerOf(p: Parsed, command: string, interactive = false): PreparedProvider | undefined {
   const spec = str(p, 'provider');
-  return spec !== undefined ? scriptConnection(spec, command) : undefined;
+  return spec !== undefined ? prepareProvider(spec, command, { interactive }) : undefined;
 }
 
-/** config.toml and its connections; ConfigError propagates to main (exit 64). --debug wires the raw-failure tap. */
-function runtimeOf(home: Home, deps: MainDeps, p: Parsed, provider?: Connection): Runtime {
+/**
+ * config.toml and its connections, with --provider attached (script/replay: the override; record:
+ * every connection wrapped). ConfigError propagates to main (exit 64). --debug wires the raw-failure tap.
+ */
+function runtimeOf(home: Home, deps: MainDeps, p: Parsed, provider?: PreparedProvider): Runtime {
   const debug = bool(p, 'debug') ? (line: string): void => deps.io.err.write(`rp-core: debug: ${line}\n`) : undefined;
-  return loadRuntime(home.dir, deps.env, { ...(provider ? { provider } : {}), ...(debug ? { debug } : {}) });
+  const rt = loadRuntime(home.dir, deps.env, debug ? { debug } : {});
+  provider?.attach(rt);
+  return rt;
 }
 
 function positiveInt(p: Parsed, flag: string, command: string): number | undefined {
@@ -247,8 +301,8 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const card = str(p, 'card');
       if (card === undefined) throw new UsageError('--card <file> is required', name);
       const maxTokens = positiveInt(p, 'max-tokens', name);
-      const rt = runtimeOf(home, deps, p, providerOf(p, name));
       const chat = deps.tty === true && !json && !bool(p, 'no-chat');
+      const rt = runtimeOf(home, deps, p, providerOf(p, name, chat));
       return cmdNew({
         home: home.dir,
         card,
@@ -257,6 +311,8 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         rt,
         ...(chat ? { chat: (engine, session) => runChat(engine, session, { rt, io, exitNow, ...(deps.signals ? { signals: deps.signals } : {}) }) } : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(str(p, 'preset') !== undefined ? { preset: str(p, 'preset')! } : {}),
+        ...(list(p, 'lore').length > 0 ? { lore: list(p, 'lore') } : {}),
         ...(str(p, 'persona') !== undefined ? { persona: str(p, 'persona')! } : {}),
         ...(str(p, 'model') !== undefined ? { model: str(p, 'model')! } : {}),
         ...(str(p, 'title') !== undefined ? { title: str(p, 'title')! } : {}),
@@ -266,7 +322,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       noPositionals(p, name, 1);
       const sessionId = p.positionals[0];
       if (sessionId === undefined) throw new UsageError('which session? rp-core chat <session>', name);
-      const rt = runtimeOf(home, deps, p, providerOf(p, name));
+      const rt = runtimeOf(home, deps, p, providerOf(p, name, deps.tty === true));
       return cmdChat({ rt, io, sessionId, exitNow, ...(deps.signals ? { signals: deps.signals } : {}) });
     }
     case 'probe': {
@@ -325,8 +381,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         if (!deps.readStdin) throw new UsageError('reading the text from stdin is not available here', name);
         text = (await deps.readStdin()).replace(/\r?\n$/, '');
       }
-      const provider = providerOf(p, name);
-      const rt = runtimeOf(home, deps, p, provider);
+      const rt = runtimeOf(home, deps, p, providerOf(p, name));
       return runSend({
         home: home.dir,
         sessionId,
@@ -338,8 +393,29 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         exitNow,
         ...(text !== undefined ? { text } : {}),
         ...(guidance !== undefined ? { guidance } : {}),
-        ...(provider ? { provider } : {}),
+        ...(rt.provider ? { provider: rt.provider } : {}),
         ...(deps.signals ? { signals: deps.signals } : {}),
+      });
+    }
+    case 'preview': {
+      noPositionals(p, name, 1);
+      const sessionId = p.positionals[0];
+      if (sessionId === undefined) throw new UsageError('which session? rp-core preview <session>', name);
+      const draft = str(p, 'draft');
+      const turn = str(p, 'turn');
+      if (draft !== undefined && turn !== undefined) throw new UsageError('--draft and --turn cannot be combined: a draft is a new message, --turn a past answer', name);
+      if (turn !== undefined && !/^[0-9a-f]+$/i.test(turn)) throw new UsageError(`--turn takes a message id (hex), got ${JSON.stringify(turn)}`, name);
+      const rt = runtimeOf(home, deps, p, providerOf(p, name));
+      return cmdPreview({
+        home: home.dir,
+        sessionId,
+        json,
+        wire: bool(p, 'wire'),
+        verdicts: bool(p, 'verdicts'),
+        io,
+        rt,
+        ...(draft !== undefined ? { draft } : {}),
+        ...(turn !== undefined ? { turn: turn.toLowerCase() } : {}),
       });
     }
     default:

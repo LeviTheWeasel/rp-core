@@ -1,7 +1,9 @@
-// prompt/tokens.ts: the M1 character estimate (§11).
+// prompt/tokens.ts: the M1 character estimate (§11), CHARS_COUNTER. The o200k default is tested in test/prompt-m2.
 import { describe, expect, test } from 'bun:test';
-import { estimateBlock, estimateMessages, estimateTokens } from '../../src/prompt/tokens.ts';
+import { CHARS_COUNTER, estimateBlock, estimateMessages, estimateTokens as estimate } from '../../src/prompt/tokens.ts';
 import type { PromptMsg } from '../../src/providers/types.ts';
+
+const estimateTokens = (text: string): number => estimate(text, CHARS_COUNTER);
 
 describe('estimateTokens', () => {
   test('empty text is 0', () => {
@@ -40,8 +42,8 @@ describe('estimateMessages', () => {
       { role: 'system', blocks: [{ k: 'text', text: 'abcabc' }], src: 'preset:main' },
       { role: 'user', blocks: [], src: 'history' },
     ];
-    expect(estimateMessages(ms)).toBe(2 + 4 + 0 + 4);
-    expect(estimateMessages([])).toBe(0);
+    expect(estimateMessages(ms, CHARS_COUNTER)).toBe(2 + 4 + 0 + 4);
+    expect(estimateMessages([], CHARS_COUNTER)).toBe(0);
   });
 
   test('counts reasoning and tool blocks', () => {
@@ -59,8 +61,8 @@ describe('estimateMessages', () => {
       blocks: [{ k: 'tool_result', callId: 'c1', name: 'roll', text: '17' }],
       src: 'history',
     };
-    expect(estimateBlock(m.blocks[1]!)).toBe(1 + 2 + 3);
-    expect(estimateMessages([m])).toBe(4 + 1 + 6 + 1);
-    expect(estimateMessages([m, tool])).toBe(12 + 4 + 1 + 2 + 1);
+    expect(estimateBlock(m.blocks[1]!, CHARS_COUNTER)).toBe(1 + 2 + 3);
+    expect(estimateMessages([m], CHARS_COUNTER)).toBe(4 + 1 + 6 + 1);
+    expect(estimateMessages([m, tool], CHARS_COUNTER)).toBe(12 + 4 + 1 + 2 + 1);
   });
 });

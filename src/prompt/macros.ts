@@ -70,6 +70,12 @@ export interface MacroEnv {
   seed: number;
   /** {{pick}} is stable per session: seeded from hash(sessionId, source, block text, offset) [D-43]. */
   sessionId: string;
+  /**
+   * {{outlet::name}} outside a preset block's own slots (author's note, card fields, depth prompts,
+   * lore content): its text, as ST's outlet macro gives it. Without a resolver the tag stays
+   * structural (passed through untouched).
+   */
+  outlet?: (name: string) => string;
 }
 
 export interface MacroRun {
@@ -118,6 +124,30 @@ interface Frame {
   pairs?: Map<number, number>;
 }
 
+/** An environment with nothing in it, for looking at a template without a session. */
+const INERT_ENV: MacroEnv = {
+  char: 'Char',
+  user: 'User',
+  card: { description: '', personality: '', scenario: '', examples: '', systemPrompt: '', postHistory: '', firstMessage: '' },
+  persona: '',
+  vars: {},
+  now: '1970-01-01T00:00:00.000Z',
+  timeZone: 'UTC',
+  seed: 0,
+  sessionId: '',
+};
+
+/**
+ * The unknown macros of a template, as MacroRun.unknown() would report them when it is expanded
+ * (importers name them, D-70). Structural slots and escaped tags are not macros here either.
+ */
+export function unknownMacrosIn(text: string): string[] {
+  if (!text.includes('{{')) return [];
+  const run = createMacroRun(INERT_ENV);
+  run.block(text, 'import');
+  return run.unknown();
+}
+
 export function createMacroRun(env: MacroEnv): MacroRun {
   const overlay = new Map<string, string | number>();
   const unknownSeen = new Set<string>();
@@ -159,12 +189,21 @@ export function createMacroRun(env: MacroEnv): MacroRun {
   function evalMacro(node: MacroNode, frame: Frame, bs: BlockState, depth: number): string {
     if (depth > MAX_MACRO_DEPTH) return '';
     const raw = frame.text.slice(node.start, node.end);
-    if (isStructuralSlot(node.body)) return raw;
+    if (isStructuralSlot(node.body)) {
+      // ST's outlet is an ordinary macro: resolved wherever it stands (the preset's own top-level
+      // slots never get here; assemble fills them).
+      const parts = node.body.split('::');
+      if (env.outlet && (parts[0] ?? '').trim().toLowerCase() === 'outlet') return env.outlet((parts[1] ?? '').trim());
+      return raw;
+    }
     const def = lookupMacro(node.name);
     if (!def) {
-      if (REPORTABLE.test(node.name) && !unknownSeen.has(node.name)) {
-        unknownSeen.add(node.name);
-        unknownList.push(node.name);
+      // ST macro-engine forms are reported by their leading tag: a block opener ({{#if .x}}, like its
+      // {{/if}}) and a variable shorthand with an operator ({{.x = 1}}, {{$x += 2}}).
+      const name = /^[#.$]/.test(node.name) ? (/^[#.$][\p{L}\p{N}_.\-]*/u.exec(node.name)?.[0] ?? node.name) : node.name;
+      if (REPORTABLE.test(name) && !unknownSeen.has(name)) {
+        unknownSeen.add(name);
+        unknownList.push(name);
       }
       return unknownMacro(node, frame, bs, depth);
     }

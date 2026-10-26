@@ -36,13 +36,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
-import { Refusal, type EngineHandle, type SessionHandle, type TurnHandle, type TurnOutcome } from '../engine/api.ts';
+import { Refusal, type EngineHandle, type PreviewOptions, type SessionHandle, type TurnHandle, type TurnOutcome } from '../engine/api.ts';
 import { ConfigError, type RpConfig } from '../config/config.ts';
+import { listLibrary } from '../formats/library.ts';
+import { CARD_BOOK_KEY, PERSONA_BOOK_KEY } from '../lore/engine.ts';
 import type { Event } from '../protocol/events.ts';
-import type { DeepPartial, Roles, SessionConfig } from '../session/entries.ts';
+import type { DeepPartial, Roles, SessionConfig, Trace } from '../session/entries.ts';
 import { readSessionFile } from '../session/log.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import type { Io } from './io.ts';
+import { addLoreId, bookRows, entryTitles, resolveLoreRef, resolvePresetRef } from './refs.ts';
 import { describeEvent, hasServerWords, messageText, redactEvent } from './render.ts';
 import { EXIT_SIGINT } from './signals.ts';
 import {
@@ -74,14 +77,23 @@ import {
   makeStyle,
   noticeText,
   prefix,
+  previewFailureText,
   refusalText,
   renderBindings,
+  renderImported,
+  renderLoreBooks,
   renderNote,
   renderNumberedPath,
+  presetCapText,
+  renderPresets,
+  renderPreview,
   renderSessionList,
   renderTails,
   renderTrace,
+  renderTraceMisses,
   renderUsage,
+  renderVerdicts,
+  renderWire,
   Screen,
   statusLine,
   TurnPrinter,
@@ -122,9 +134,23 @@ export interface ReplDeps {
   /**
    * The context window a binding's resolved caps state (host preset, catalog, probe cache, user
    * override), or null when unknown. Used by the banner before the binding's first answer; the
-   * window of that answer's trace wins afterwards. Optional: without it the banner says `ctx ?`.
+   * window of that answer's trace wins afterwards. Optional: without it the banner says `ctx ?`, or
+   * `ctx ≤N` when the preset (or the session) caps the window at N.
    */
   windowOf?: (conn: string, model: string) => number | null;
+  /**
+   * The chat plays a script or a recording (--provider script: / replay:): a turn that failed makes
+   * the REPL end with exit 3 instead of 0, so a CI job running a piped replay notices a changed
+   * request. Without a person at the keyboard the REPL also stops at the first replay_mismatch or
+   * script_exhausted: every later call would be misaligned with the recording.
+   */
+  failExit?: boolean;
+  /**
+   * The --provider script: / replay: connection every turn runs on instead of the binding's: its id
+   * (what the answers' traces name), what it plays (for the wording of a stop) and its window for a
+   * model. The banner and /preset then take the window from it, not from config.toml's caps.
+   */
+  override?: { conn: string; plays: 'script' | 'recording'; windowOf(model: string): number | null };
 }
 
 /** Knobs outside the fixed contract (tests and hosts that inject their own input). */
@@ -145,6 +171,9 @@ export interface ReplOptions {
   /** Environment for $VISUAL / $EDITOR / NO_COLOR (default process.env). */
   env?: Record<string, string | undefined>;
 }
+
+/** The exit code of a chat whose replayed or scripted turns failed (ReplDeps.failExit): oneshot's EXIT.failed. */
+export const REPL_FAILED = 3;
 
 /** Run until /quit, EOF or a double Ctrl+C at the prompt. Returns the process exit code. */
 export function runRepl(deps: ReplDeps): Promise<number> {
@@ -392,14 +421,19 @@ class Repl {
   private debugHinted = false;
   private left = false;
   private finished = false;
+  /** failExit: the turns that failed, by code (the exit code says so at the end). */
+  private failedTurns: string[] = [];
   /** Set while /e edits in place: the next line (or null on Ctrl+C / end of input) is the result. */
   private editing: ((line: string | null) => void) | null = null;
+  /** $HOME for `~/` in /preset and /lore add files. */
+  private readonly env: Record<string, string | undefined>;
 
   constructor(
     private readonly deps: ReplDeps,
     opts: ReplOptions,
   ) {
     const env = opts.env ?? process.env;
+    this.env = env;
     this.session = deps.session;
     this.style = makeStyle(deps.color ?? (process.stdout.isTTY === true && !env.NO_COLOR));
     this.screen = new Screen((s) => deps.io.out.write(s));
@@ -462,9 +496,26 @@ class Repl {
     for (;;) {
       if (this.queue.length === 0) this.prompt();
       const item = await this.take();
-      if (item.t !== 'line') return 0;
+      if (item.t !== 'line') return this.endCode();
       await this.process(item);
+      // A piped script or replay that ran out of calls, or a request the recording no longer
+      // matches: every later call would be misaligned.
+      const last = this.failedTurns.at(-1);
+      if (this.deps.failExit && !this.source.interactive && (last === 'replay_mismatch' || last === 'script_exhausted')) {
+        const what = this.deps.override?.plays ?? 'script';
+        const why = last === 'replay_mismatch' ? 'the recording no longer matches this chat' : `the ${what} ran out of calls`;
+        this.say(this.style.dim(`(stopped: ${why} (${last}); the rest of the input is not run)`));
+        return this.endCode();
+      }
     }
+  }
+
+  /** 0, or EXIT.failed (3) when failExit is on and a turn failed. */
+  private endCode(): number {
+    if (!this.deps.failExit || this.failedTurns.length === 0) return 0;
+    const n = this.failedTurns.length;
+    this.say(this.style.dim(`(${n} answer${n === 1 ? '' : 's'} failed: ${[...new Set(this.failedTurns)].join(', ')}; exit 3)`));
+    return REPL_FAILED;
   }
 
   private async readLoop(): Promise<void> {
@@ -655,12 +706,21 @@ class Repl {
     this.showReasoning = config.reasoningShown;
     const view = this.session.view();
     const narrator = config.roles.narrator;
-    let window = windowFor(j, view.path.map((m) => m.id), narrator, this.deps.config.caps, config.window);
-    if (window === null && this.deps.windowOf) {
-      const w = this.deps.windowOf(narrator.conn, narrator.model);
-      if (w !== null && w > 0) window = typeof config.window === 'number' && config.window > 0 ? Math.min(w, config.window) : w;
+    // The preset and the session config may only shrink the model's window (§10.2, budget.ts).
+    const presetWindow = this.presetMaxContext(config.preset);
+    const limits = [config.window, presetWindow].filter((n): n is number => typeof n === 'number' && n > 0);
+    // Under --provider script:/replay: every turn runs on the override connection: its traces and
+    // its caps say the window, not config.toml's caps for the binding.
+    const o = this.deps.override;
+    const binding = o ? { conn: o.conn, model: narrator.model } : narrator;
+    let window = windowFor(j, view.path.map((m) => m.id), binding, o ? {} : this.deps.config.caps, config.window, presetWindow);
+    if (window === null) {
+      const w = this.modelWindow(narrator);
+      if (w !== null && w > 0) window = Math.min(w, ...limits);
     }
-    this.say(bannerLine(header, narrator, window, this.style));
+    // The model's window unknown: the preset's (or the session's) limit still bounds it.
+    const cap = limits.length > 0 ? Math.min(...limits) : undefined;
+    this.say(bannerLine(header, narrator, window, this.style, cap));
     for (const ev of this.session.openEvents()) this.openEvent(ev);
     this.whereYouAre(view);
   }
@@ -739,6 +799,7 @@ class Repl {
       this.stopPresses = 0;
       this.source.mute(false);
     }
+    if (outcome.type === 'failed') this.failedTurns.push(outcome.code);
     const answer = this.answerOf(outcome, turn, printer.kept);
     if (answer) this.say(statusLine(answer, this.style));
     if (outcome.type === 'failed' && hasServerWords(outcome) && !this.deps.debugTap && !this.debugHinted) {
@@ -804,6 +865,12 @@ class Repl {
       }
       case 'trace':
         return this.trace();
+      case 'preset':
+        return this.preset(c.ref);
+      case 'lore':
+        return this.lore(c);
+      case 'preview':
+        return this.preview(c);
       case 'probe':
         return this.say(
           'Probes run from the shell: rp-core probe <connection>[:<model>] [--write]. They ask the server for its models and\n' +
@@ -1039,7 +1106,11 @@ class Repl {
     this.say(this.style.dim(`author's note set @${depth} (from the next turn)`));
   }
 
-  /** /trace: the newest trace of the last answer on the path. */
+  /**
+   * /trace: the newest trace of the last answer on the path, then the lore entries it missed and why:
+   * the trace stores only what fired and what the budget cut, so the verdicts are recomputed from its
+   * seed and clock by rebuilding that answer's request [D-45] (session.preview, nothing is sent).
+   */
   private trace(): void {
     const view = this.session.view();
     const j = this.journal();
@@ -1047,8 +1118,177 @@ class Repl {
       const m = view.path[i]!;
       if (m.role !== 'assistant') continue;
       const t = latestTrace(j, m.id);
-      if (t) return this.say(renderTrace(m.id, t));
+      if (!t) continue;
+      const titles = this.titles();
+      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles))));
     }
     this.say(this.style.dim('no answer with a trace on this path yet (greetings have none)'));
+  }
+
+  /** The recomputed misses of answer `id` for /trace, with the notice when today's inputs differ. */
+  private traceMisses(id: string, t: { trace: Trace; continued: boolean }, titles: Map<string, string>): string[] {
+    const r = this.session.preview({ turn: id, explain: true });
+    if (!r.ok) return [this.style.dim(`  (the lore verdicts cannot be recomputed: ${previewFailureText(r)})`)];
+    const lines = renderTraceMisses(r.verdicts ?? [], t.trace.lore, this.style, titles, t.continued);
+    for (const n of r.notices) if (n.code === 'preview_inputs_changed') lines.push(this.style.yellow(`  ${noticeText(n)}`));
+    return lines;
+  }
+
+  // ---- presets, lorebooks, preview (M2) -----------------------------------------------------------
+
+  /** Entry titles of every book a turn scans now, for /trace, /lore test and /preview. */
+  private titles(): Map<string, string> {
+    return entryTitles(this.deps.home, this.session.header().cast, configOf(this.journal()).lorebooks);
+  }
+
+  /**
+   * /preset (§12.4): show it and the library, or switch to 'builtin', a library id or a file (an ST
+   * preset, imported first). The preset must load and validate before the session points at it; the
+   * next turn reads it.
+   */
+  private preset(ref: string | undefined): void {
+    const config = configOf(this.journal());
+    const current = config.preset;
+    // Say so when the preset shrinks the model's window (an ST preset's openai_max_context, §10.2),
+    // or bounds it when the model's own window is unknown.
+    const model = this.modelWindow(config.roles.narrator);
+    if (ref === undefined) {
+      const maxContext = this.presetMaxContext(current);
+      return this.say(renderPresets(current, listLibrary(this.deps.home, 'presets'), { ...(maxContext !== undefined ? { maxContext } : {}), model }));
+    }
+    const r = resolvePresetRef(this.deps.home, ref, this.env);
+    if (r.imported) this.say(this.style.dim(renderImported('preset', r.imported, r.id)));
+    if (r.id === current) return this.say(this.style.dim(`the session already uses preset ${r.id}`));
+    this.session.configure({ preset: r.id });
+    const caps = presetCapText(r.value.context?.maxContext, model);
+    this.say(this.style.dim(`preset → ${r.id}${r.value.name !== r.id ? ` "${r.value.name}"` : ''} (from the next turn${caps ? `; ${caps}` : ''})`));
+  }
+
+  /** The narrator model's own window from its caps (the --provider override's, when one is set), or null. */
+  private modelWindow(narrator: { conn: string; model: string }): number | null {
+    const o = this.deps.override;
+    const w = o ? o.windowOf(narrator.model) : (this.deps.windowOf?.(narrator.conn, narrator.model) ?? null);
+    return w !== null && w > 0 ? w : null;
+  }
+
+  /** The session preset's own window limit (an ST preset's openai_max_context), when it loads. */
+  private presetMaxContext(id: string): number | undefined {
+    try {
+      return resolvePresetRef(this.deps.home, id, this.env).value.context?.maxContext;
+    } catch {
+      return undefined; // a missing or broken preset is the next turn's refusal to tell
+    }
+  }
+
+  /** /lore, /lore add|rm|test. */
+  private lore(c: Extract<Command, { name: 'lore' }>): void {
+    const home = this.deps.home;
+    const current = configOf(this.journal()).lorebooks;
+    switch (c.action) {
+      case 'list':
+        return this.say(renderLoreBooks(bookRows(home, this.session.header().cast, current), listLibrary(home, 'lorebooks')));
+      case 'add': {
+        const r = resolveLoreRef(home, c.ref, this.env);
+        if (r.imported) this.say(this.style.dim(renderImported('lorebook', r.imported, r.id)));
+        if (current.includes(r.id)) return this.say(this.style.dim(`lorebook ${r.id} is already in this session`));
+        // A world is read once by name: a changed copy of a world (harbor-2 "Harbor") replaces it.
+        const next = addLoreId(home, current, r.id, r.value.name);
+        this.session.configure({ lorebooks: next.ids });
+        const n = r.value.entries.length;
+        const entries = `${n} entr${n === 1 ? 'y' : 'ies'}`;
+        if (next.replaced !== undefined) {
+          return this.say(
+            this.style.dim(
+              `lorebook ${r.id} "${r.value.name}" replaces ${next.replaced}: same name, and a world is read once by name (${entries}, from the next turn; /lore add ${next.replaced} brings the old one back)`,
+            ),
+          );
+        }
+        return this.say(this.style.dim(`lorebook ${r.id} "${r.value.name}" added: ${entries} (from the next turn)`));
+      }
+      case 'rm': {
+        if (c.id === CARD_BOOK_KEY || c.id === PERSONA_BOOK_KEY) {
+          return this.say(this.style.red(`/lore rm: ${c.id} is the ${c.id === CARD_BOOK_KEY ? "card's" : "persona's"} own book; it comes with it and cannot be removed`));
+        }
+        if (!current.includes(c.id)) {
+          const has = current.length > 0 ? `it has: ${current.join(', ')}` : 'it has none';
+          return this.say(this.style.red(`/lore rm: ${c.id} is not a lorebook of this session (${has})`));
+        }
+        this.session.configure({ lorebooks: current.filter((id) => id !== c.id) });
+        return this.say(this.style.dim(`lorebook ${c.id} removed (from the next turn; it stays in the library)`));
+      }
+      case 'test': {
+        // The reply to `text`, as if it were sent: the engine recomputes the verdicts [D-45].
+        const r = this.session.preview({ draft: c.text, explain: true });
+        if (!r.ok) return this.say(this.style.yellow(previewFailureText(r)));
+        // The lore notices too: a book skipped (missing, invalid), a broken /regex/ key, lore that
+        // fired into a slot the preset does not send. Without them a skipped book reads as no match.
+        const notes = r.notices.filter((n) => n.code.startsWith('lore')).map((n) => this.style.yellow(noticeText({ ...n, message: this.redact(n.message) })));
+        return this.say([`lore test: a reply to your text (nothing is sent)`, renderVerdicts(r.verdicts ?? [], r.trace.lore, this.style, this.titles(), 40, r.loreUse), ...notes].join('\n'));
+      }
+    }
+  }
+
+  /** The answer /preview n|id names (an answer on the active path), or null after saying why not. */
+  private previewTarget(at: { n: number } | { id: string }): string | null {
+    const view = this.session.view();
+    let m: MessageView | undefined;
+    let what: string;
+    if ('n' in at) {
+      m = this.at(view, at.n) ?? undefined;
+      if (!m) return null;
+      what = `message ${at.n}`;
+    } else {
+      const found = resolveMessageId(this.journal(), at.id);
+      if (!found.ok) {
+        this.say(this.style.red(`/preview: ${found.message}`));
+        return null;
+      }
+      m = view.path.find((x) => x.id === found.id);
+      if (!m) {
+        this.say(this.style.red(`/preview: ${found.id} is not on this path (/goto ${found.id} first)`));
+        return null;
+      }
+      what = found.id;
+    }
+    if (m.role !== 'assistant') {
+      this.say(this.style.red(`/preview: ${what} is yours; it takes an answer, whose request it rebuilds (/show numbers them)`));
+      return null;
+    }
+    if (m.gen?.kind === 'greeting') {
+      this.say(this.style.red(`/preview: ${what} is a greeting; it was not generated, so there is no request to rebuild`));
+      return null;
+    }
+    return m.id;
+  }
+
+  /**
+   * /preview [n|id] [--wire] [--verdicts]: the request a turn would send (or a past answer's), never
+   * sent (§6.1). --verdicts adds every lore entry's verdict, as /lore test prints them [D-45]; with
+   * --wire the body comes first, then the verdicts and the notices (preview_inputs_changed among them).
+   */
+  private preview(c: Extract<Command, { name: 'preview' }>): void {
+    const opts: PreviewOptions = {};
+    if (c.at) {
+      const id = this.previewTarget(c.at);
+      if (id === null) return;
+      opts.turn = id;
+    }
+    if (c.verdicts) opts.explain = true;
+    const r = this.session.preview(opts);
+    if (!r.ok) {
+      this.say(this.style.yellow(previewFailureText(r)));
+      if (r.code === 'nothing_to_swipe') this.say(this.style.dim('(nothing to build yet: say something first; /lore test <text> shows what a message would wake)'));
+      return;
+    }
+    const titles = this.titles();
+    const verdicts = c.verdicts ? ['', 'lore verdicts:', renderVerdicts(r.verdicts ?? [], r.trace.lore, this.style, titles, 40, r.loreUse)] : [];
+    if (c.wire) {
+      if (r.wire) {
+        const notes = r.notices.map((n) => this.style.yellow(noticeText(n)));
+        return this.say(this.redact([renderWire(r.wire), ...verdicts, ...(notes.length > 0 ? ['', ...notes] : [])].join('\n')));
+      }
+      this.say(this.style.dim('(no wire form: this connection is an in-process provider; the messages follow)'));
+    }
+    this.say(this.redact([renderPreview(r, this.style, titles), ...verdicts].join('\n')));
   }
 }

@@ -48,7 +48,7 @@ export interface SendOptions {
   guidance?: string;
   json: boolean;
   debug: boolean;
-  /** --provider script:<file>: replaces every role's connection for this process. */
+  /** --provider script:<file> or replay:<file>: replaces every role's connection for this process. */
   provider?: Connection;
   /** config.toml's connections and prices (M1b): the session's bindings resolve against them. */
   rt?: Runtime;

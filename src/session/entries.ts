@@ -46,10 +46,28 @@ export interface Trace {
   now: string;
   window: number;
   reserve: number;
-  tokens: { estimated: number; reported?: number };
+  /**
+   * counter: how `estimated` was counted (M2; absent = 'chars', M1). The EMA compares like with like.
+   * estimated: the messages sent (the sum of `blocks`) plus the prefill the request carried, if any.
+   */
+  tokens: { estimated: number; reported?: number; counter?: 'chars' | 'o200k' };
   /** 1:1 with the messages sent. */
   blocks: { src: string; role: string; tok: number }[];
-  lore: { fired: { book: string; id: string; why: string }[]; cut: string[]; budget: number };
+  /**
+   * M2: book = LoreSource.key ('@card', '@persona' or a library id); why = LoreFireReason; cut =
+   * entryLabel() of each entry the budget dropped; budget = the lore budget in tokens. Verdicts are
+   * never stored: they are recomputed from seed and now [D-45].
+   */
+  lore: {
+    fired: { book: string; id: string; why: string }[];
+    cut: string[];
+    budget: number;
+    /**
+     * M2 (fix): fired entries whose text nothing in the request took (entry label → the slot it
+     * needed, e.g. '{{lore::before}}' of a disabled worldInfoBefore). Absent when every one was sent.
+     */
+    unsent?: Record<string, string>;
+  };
   recap: { ids: string[]; arcs: { key: string; rev: number }[]; boundary: string | null };
   compendium?: Record<string, unknown>; // M5
   prefill: 'sent' | 'tools_off' | 'skipped_for_tools' | 'unsupported' | null;
@@ -62,6 +80,12 @@ export interface Trace {
   hooks?: { name: string; ok: boolean; note?: string }[];
   presetHash: string;
   loreHashes: Record<string, string>;
+  /**
+   * M2 (fix): each lore source's book name (trimmed), keyed like loreHashes. Timers follow a world by
+   * name when it is read under another key later (the card's own book and a same-named session
+   * book, §10.3). Absent in traces written before it; never required.
+   */
+  loreNames?: Record<string, string>;
   partial?: true;
 }
 

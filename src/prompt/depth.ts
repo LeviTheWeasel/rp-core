@@ -5,7 +5,11 @@
 // THE depth function (ARCHITECTURE.md §10.1, D-12, D-47). ST convention: an insert at depth d has
 // exactly d chat messages after it. d = 0: after the last message; d = 1: right above the current
 // user message; d >= count: before the first. Equal depth: order ascending, then source rank
-// preset < lore < compendium < card_depth < author_note < director < guidance.
+// preset < author_note < card_depth < lore < compendium < director < guidance. The first four are
+// SillyTavern's (openai.js populationInjectionPrompts): at one depth, order and role it sends the
+// preset's in-chat prompts, then its extension prompts in key order — author's note, the card's
+// depth prompt, world info. Lore depth inserts all carry ST's extension-prompt order 100 (place.ts):
+// an entry's own `order` sorts it among the lore only.
 // Blocks stay separate (named deviation from ST, which merges same depth/order/role) [D-47].
 // CONTRACT FILE: signatures are fixed; the prompt agent implements the bodies.
 //
@@ -37,10 +41,10 @@ export const DEFAULT_INSERT_ORDER = 100;
  */
 export const SOURCE_RANK: Readonly<Record<InsertSource, number>> = {
   preset: 0,
-  lore: 1,
-  compendium: 2,
-  card_depth: 3,
-  author_note: 4,
+  author_note: 1,
+  card_depth: 2,
+  lore: 3,
+  compendium: 4,
   director: 5,
   guidance: 6,
 };

@@ -1,0 +1,108 @@
+{
+  "name": "08-append-and-pins",
+  "about": "Append prompts (injection_position 2) glued onto existing chat messages: user-role depth 0 (glues onto the current user turn, the last user-role message in the chat-history region), assistant-role depth 1 (glues one assistant message back), and a system-role append at depth 2 (system falls back to the user role per appendAtDepth, so it glues onto the second user message back). Four top pins and three bottom pins with distinct injection_order, each group declared out of injection_order sequence (D,B,A,C and B,C,A) so byte-identical output proves the port sorts by injection_order rather than trusting declaration/sort_order. Preset row carries explicit samplers (temperature/top_p/max_tokens) and an assistant_prefill in system_prompts. max_context is null on the preset row, a state a real ST import can never produce (openai_max_context defaults to 2000000 when absent), so this field is a deliberate hand-edit exercising preset-loader's null branch, not import-reproducible; assemblePrompt never reads presetPrompts.maxContext in this pin, so the field is inert and has no visible effect on conversationHistory here. A persona is attached (no extra prompt row) so the synthetic {{persona}} is visible between the top pins and the greeting. No relative/in-chat/chatHistory prompt is declared, so RoleCall's own auto-inject (lore/persona/summary/message_history) supplies the chat-history region the appends and pins need.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 8,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-08", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-08", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }],
+      "personas": [{
+        "id": "p-08", "name": "Wren", "creator_id": "u-owner", "status": "private",
+        "details": { "pronouns": "she/her", "age": "31", "appearance": "Soaked oilskin coat, a satchel of charts.", "personality": "Curious and stubborn." },
+        "section_order": null
+      }],
+      "presets": [{
+        "id": "preset-08", "name": "Append And Pins", "creator_id": "u-owner",
+        "status": "private", "deleted_at": null, "is_soft_hidden": false, "listing_preset_id": null,
+        "temperature": 0.65, "top_p": 0.8, "top_k": 64, "top_a": 0, "min_p": 0,
+        "max_context": null, "max_tokens": 512,
+        "frequency_penalty": 0, "presence_penalty": 0, "repetition_penalty": 1,
+        "prompt_post_processing": "none",
+        "system_prompts": {
+          "impersonation_prompt": "", "new_chat_prompt": "", "new_group_chat_prompt": "",
+          "new_example_chat_prompt": "[Example Chat]", "continue_nudge_prompt": "",
+          "group_nudge_prompt": "", "assistant_prefill": "Understood. I will continue as instructed.",
+          "assistant_impersonation": ""
+        },
+        "settings": null, "raw_settings": {}
+      }],
+      "preset_prompts": [
+        { "id": "pp-08-0", "preset_id": "preset-08", "identifier": "appendUserD0", "name": "Append User D0", "content": "APPEND-USER-DEPTH0", "role": "user", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 2, "injection_depth": 0, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 0 },
+        { "id": "pp-08-1", "preset_id": "preset-08", "identifier": "appendAssistantD1", "name": "Append Assistant D1", "content": "APPEND-ASSISTANT-DEPTH1", "role": "assistant", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 2, "injection_depth": 1, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 1 },
+        { "id": "pp-08-2", "preset_id": "preset-08", "identifier": "appendSystemD2", "name": "Append System D2", "content": "APPEND-SYSTEM-FALLBACK-DEPTH2", "role": "system", "enabled": true, "system_prompt": false, "marker": false, "injection_position": 2, "injection_depth": 2, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 2 },
+        { "id": "pp-08-3", "preset_id": "preset-08", "identifier": "topPinD", "name": "Top Pin D", "content": "TOP-PIN-D-ORDER20", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 4, "injection_depth": 4, "injection_order": 20, "forbid_overrides": false, "is_default": false, "sort_order": 3 },
+        { "id": "pp-08-4", "preset_id": "preset-08", "identifier": "topPinB", "name": "Top Pin B", "content": "TOP-PIN-B-ORDER10", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 4, "injection_depth": 4, "injection_order": 10, "forbid_overrides": false, "is_default": false, "sort_order": 4 },
+        { "id": "pp-08-5", "preset_id": "preset-08", "identifier": "topPinA", "name": "Top Pin A", "content": "TOP-PIN-A-ORDER5", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 4, "injection_depth": 4, "injection_order": 5, "forbid_overrides": false, "is_default": false, "sort_order": 5 },
+        { "id": "pp-08-6", "preset_id": "preset-08", "identifier": "topPinC", "name": "Top Pin C", "content": "TOP-PIN-C-ORDER15", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 4, "injection_depth": 4, "injection_order": 15, "forbid_overrides": false, "is_default": false, "sort_order": 6 },
+        { "id": "pp-08-7", "preset_id": "preset-08", "identifier": "bottomPinB", "name": "Bottom Pin B", "content": "BOTTOM-PIN-B-ORDER10", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 3, "injection_depth": 4, "injection_order": 10, "forbid_overrides": false, "is_default": false, "sort_order": 7 },
+        { "id": "pp-08-8", "preset_id": "preset-08", "identifier": "bottomPinC", "name": "Bottom Pin C", "content": "BOTTOM-PIN-C-ORDER15", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 3, "injection_depth": 4, "injection_order": 15, "forbid_overrides": false, "is_default": false, "sort_order": 8 },
+        { "id": "pp-08-9", "preset_id": "preset-08", "identifier": "bottomPinA", "name": "Bottom Pin A", "content": "BOTTOM-PIN-A-ORDER5", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 3, "injection_depth": 4, "injection_order": 5, "forbid_overrides": false, "is_default": false, "sort_order": 9 }
+      ]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "stPreset": {
+    "name": "Append And Pins",
+    "temperature": 0.65,
+    "top_p": 0.8,
+    "openai_max_tokens": 512,
+    "assistant_prefill": "Understood. I will continue as instructed.",
+    "prompts": [
+      { "identifier": "appendUserD0", "name": "Append User D0", "content": "APPEND-USER-DEPTH0", "role": "user", "system_prompt": false, "injection_position": 2, "injection_depth": 0, "injection_order": 100 },
+      { "identifier": "appendAssistantD1", "name": "Append Assistant D1", "content": "APPEND-ASSISTANT-DEPTH1", "role": "assistant", "system_prompt": false, "injection_position": 2, "injection_depth": 1, "injection_order": 100 },
+      { "identifier": "appendSystemD2", "name": "Append System D2", "content": "APPEND-SYSTEM-FALLBACK-DEPTH2", "role": "system", "system_prompt": false, "injection_position": 2, "injection_depth": 2, "injection_order": 100 },
+      { "identifier": "topPinD", "name": "Top Pin D", "content": "TOP-PIN-D-ORDER20", "role": "system", "system_prompt": true, "injection_position": 4, "injection_depth": 4, "injection_order": 20 },
+      { "identifier": "topPinB", "name": "Top Pin B", "content": "TOP-PIN-B-ORDER10", "role": "system", "system_prompt": true, "injection_position": 4, "injection_depth": 4, "injection_order": 10 },
+      { "identifier": "topPinA", "name": "Top Pin A", "content": "TOP-PIN-A-ORDER5", "role": "system", "system_prompt": true, "injection_position": 4, "injection_depth": 4, "injection_order": 5 },
+      { "identifier": "topPinC", "name": "Top Pin C", "content": "TOP-PIN-C-ORDER15", "role": "system", "system_prompt": true, "injection_position": 4, "injection_depth": 4, "injection_order": 15 },
+      { "identifier": "bottomPinB", "name": "Bottom Pin B", "content": "BOTTOM-PIN-B-ORDER10", "role": "system", "system_prompt": true, "injection_position": 3, "injection_depth": 4, "injection_order": 10 },
+      { "identifier": "bottomPinC", "name": "Bottom Pin C", "content": "BOTTOM-PIN-C-ORDER15", "role": "system", "system_prompt": true, "injection_position": 3, "injection_depth": 4, "injection_order": 15 },
+      { "identifier": "bottomPinA", "name": "Bottom Pin A", "content": "BOTTOM-PIN-A-ORDER5", "role": "system", "system_prompt": true, "injection_position": 3, "injection_depth": 4, "injection_order": 5 }
+    ],
+    "prompt_order": [{
+      "character_id": 100001,
+      "order": [
+        { "identifier": "appendUserD0", "enabled": true },
+        { "identifier": "appendAssistantD1", "enabled": true },
+        { "identifier": "appendSystemD2", "enabled": true },
+        { "identifier": "topPinD", "enabled": true },
+        { "identifier": "topPinB", "enabled": true },
+        { "identifier": "topPinA", "enabled": true },
+        { "identifier": "topPinC", "enabled": true },
+        { "identifier": "bottomPinB", "enabled": true },
+        { "identifier": "bottomPinC", "enabled": true },
+        { "identifier": "bottomPinA", "enabled": true }
+      ]
+    }]
+  },
+  "input": {
+    "characterId": "ch-08",
+    "chatId": "c-08",
+    "presetId": "preset-08",
+    "personaId": "p-08",
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." },
+      { "role": "user", "content": "Turn one: I step inside out of the rain." },
+      { "role": "assistant", "content": "Turn two: she bars the door behind you." },
+      { "role": "user", "content": "Turn three: I ask where I can dry off." },
+      { "role": "assistant", "content": "Turn four: she points to a chair by the stove." }
+    ],
+    "currentMessage": "Turn five: I sit and finally start to warm up."
+  }
+}

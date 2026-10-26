@@ -7,7 +7,7 @@ import type { EntryInput } from '../../src/session/entries.ts';
 import { foldView } from '../../src/session/fold.ts';
 import { forkSession, planFork } from '../../src/session/fork.ts';
 import { createSessionLog, openSessionLog, readSessionFile, SessionLockedError, sessionsDir } from '../../src/session/log.ts';
-import { fakeClock, tmpHome } from '../helpers.ts';
+import { tmpHome } from '../helpers.ts';
 import { edit, head, hide, makeHeader, msg, text, TS, withVars } from './fixtures.ts';
 
 const SRC = 's_0000a001';
@@ -44,7 +44,7 @@ describe('forkSession', () => {
   test('copies the path up to `at`, renumbers seq, keeps ids, folds config and vars into the header', () => {
     const home = tmpHome();
     const source = seedSource(home);
-    const forked = forkSession(home, source, 'a0000001', { newId: NEW, now: NOW, clock: fakeClock() });
+    const forked = forkSession(home, source, 'a0000001', { newId: NEW, now: NOW });
 
     const h = forked.header;
     expect(h.id).toBe(NEW);

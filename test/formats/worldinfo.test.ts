@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCardObject } from '../../src/formats/card.ts';
 import { validateLoreBook, type LoreEntry } from '../../src/formats/native.ts';
+import { runLore } from '../../src/lore/engine.ts';
 import {
   characterBookToLoreBook,
   coerceStPosition,
@@ -69,13 +70,17 @@ describe('characterBookToLoreBook on a card with positions 0..7 (v2-book-positio
     return e;
   };
 
-  test('book-level fields: fallback name, scan depth, no invented defaults', () => {
+  test('book-level fields: fallback name, no invented defaults; scan depth and recursion ride extras (ST ignores them)', () => {
     expect(book.name).toBe("Archivist's book");
-    expect(book.scanDepth).toBe(3);
-    expect(book.recursive).toBe(false);
+    expect(book.scanDepth).toBeUndefined();
+    expect(book.recursive).toBeUndefined();
     expect(book.match).toBe('literal');
-    expect(book.extras).toEqual({ token_budget: 512, extensions: {} });
+    expect(book.extras).toEqual({ scan_depth: 3, recursive_scanning: false, token_budget: 512, extensions: {} });
     expect(book.caseSensitive).toBeUndefined();
+    const w = warnings.filter((x) => x.code === 'not_honoured' && x.path === 'scan_depth');
+    expect(w).toHaveLength(1);
+    expect(w[0]!.message).toContain('scan_depth 3 and recursive_scanning false are ignored by SillyTavern');
+    expect(warnings.some((x) => x.code === 'unknown_field' && /scan_depth|recursive_scanning/.test(x.path))).toBe(false);
   });
 
   test('every position maps through the ST enum', () => {
@@ -171,7 +176,7 @@ describe('characterBookToLoreBook on a card with positions 0..7 (v2-book-positio
 
   test('inside the card the same book is named by its fallback and warns under data.character_book', () => {
     const { value, warnings: cw } = parseCardObject(card);
-    expect(value.book?.name).toBe("Archivist's book");
+    expect(value.book?.name).toBe("Archivist's Lorebook");
     expect(cw.some((w) => w.path === 'data.character_book.entries[5].extensions.vectorized')).toBe(true);
   });
 });
@@ -332,5 +337,110 @@ describe('worldInfoToLoreBook (ST field names)', () => {
     const r = worldInfoToLoreBook({ entries: [] }, 'B');
     expect(r.value.entries).toEqual([]);
     expect(r.warnings).toHaveLength(1);
+  });
+});
+
+describe('a card book with scan_depth 100 and recursive_scanning false (the Wymare cards) scans as SillyTavern does', () => {
+  // Regression: the book-level fields were applied, so every entry scanned 100 messages back with
+  // recursion off. ST's convertCharacterBook copies the entries only; its globals (depth 2,
+  // recursion on) apply.
+  const { value: book, warnings } = characterBookToLoreBook(
+    {
+      name: 'Varkos',
+      scan_depth: 100,
+      recursive_scanning: false,
+      token_budget: 2048,
+      entries: [
+        { id: 1, keys: ['hunt'], content: 'The Iron Hunt rides at dawn.', enabled: true, insertion_order: 100, extensions: { position: 0 } },
+        { id: 2, keys: ['Iron Hunt'], content: 'Its banner is a black stag.', enabled: true, insertion_order: 90, extensions: { position: 0 } },
+      ],
+    },
+    "Varkos's Lorebook",
+  );
+  const lore = (scan: string[]) =>
+    runLore({ sources: [{ key: '@card', book }], scan, chatLength: scan.length, fires: [], seed: 1, budget: Infinity, count: (t) => t.length, expand: (_k, c) => c });
+
+  test('the book keeps them in extras and says it does not apply them', () => {
+    expect(book.scanDepth).toBeUndefined();
+    expect(book.recursive).toBeUndefined();
+    expect(book.extras).toMatchObject({ scan_depth: 100, recursive_scanning: false, token_budget: 2048 });
+    expect(warnings.filter((w) => w.code === 'not_honoured').map((w) => w.message)).toEqual([
+      "the book's scan_depth 100 and recursive_scanning false are ignored by SillyTavern, which scans every world at its global depth 2 with recursion on; rp-core does the same (kept in extras)",
+    ]);
+  });
+
+  test('a key said 10 messages back fires nothing (depth 2)', () => {
+    const scan = Array.from({ length: 10 }, (_, i) => (i === 9 ? 'Levi: the hunt begins' : `Levi: line ${i}`));
+    expect(lore(scan).fired).toEqual([]);
+  });
+
+  test('recursion between its entries works', () => {
+    expect(lore(['Levi: the hunt']).fired.map((h) => [h.id, h.why])).toEqual([
+      ['1', 'key'],
+      ['2', 'recursion'],
+    ]);
+  });
+});
+
+describe("decorators: SillyTavern's parseDecorators (world-info.js)", () => {
+  const wi = worldInfoToLoreBook(
+    {
+      entries: {
+        0: { uid: 0, key: ['lamp'], content: '@@depth 2\n@@role user\nLAMP LORE', position: 0, selective: true },
+        1: { uid: 1, key: ['lamp'], content: '@@dont_activate\nNEVER BY KEY', position: 0, selective: true },
+        2: { uid: 2, key: ['zzz'], content: '@@activate\nALWAYS ON', position: 0, selective: true, constant: false },
+        3: { uid: 3, key: ['lamp'], content: 'not @@ at the start\n@@activate', position: 0, selective: true },
+        4: { uid: 4, key: ['lamp'], content: '@@unknown\n@@@activate\nFALLBACK', position: 0, selective: true },
+      },
+    },
+    'w',
+  );
+  const e = (id: string): LoreEntry => wi.value.entries.find((x) => x.id === id)!;
+
+  test('leading @@ lines are stripped from the content and kept in extras.decorators', () => {
+    expect(e('0').content).toBe('LAMP LORE');
+    expect(e('0').extras?.decorators).toEqual(['@@depth 2', '@@role user']);
+    expect(e('3').content).toBe('not @@ at the start\n@@activate');
+    expect(e('3').extras?.decorators).toBeUndefined();
+  });
+
+  test('@@activate fires without a key (constant); @@dont_activate never fires (disabled)', () => {
+    expect(e('2')).toMatchObject({ content: 'ALWAYS ON', constant: true, extras: { decorators: ['@@activate'], constant: false } });
+    expect(e('1')).toMatchObject({ content: 'NEVER BY KEY', enabled: false });
+    // '@@@activate' is the fallback for the unknown decorator just before it
+    expect(e('4')).toMatchObject({ content: 'FALLBACK', constant: true });
+  });
+
+  test('only decorators SillyTavern drops too are warned about', () => {
+    const w = wi.warnings.filter((x) => x.code === 'not_honoured');
+    expect(w).toHaveLength(1);
+    expect(w[0]!.message).toContain('decorators other than @@activate / @@dont_activate');
+    expect(w[0]!.message).toContain('(2 entries)');
+  });
+
+  test('assembled: no @@ line reaches the model, @@dont_activate stays out, @@activate goes in', () => {
+    const res = runLore({ sources: [{ key: 'w', book: wi.value }], scan: ['Levi: the lamp'], chatLength: 1, fires: [], seed: 1, budget: Infinity, count: (t) => t.length, expand: (_k, c) => c });
+    const sent = res.fired.map((h) => h.text).join('\n');
+    expect(sent).not.toContain('@@depth');
+    expect(sent).not.toContain('NEVER BY KEY');
+    expect(sent).toContain('ALWAYS ON');
+    expect(sent).toContain('LAMP LORE');
+  });
+});
+
+describe('selective: false is kept when it switches secondary keys off (round trip)', () => {
+  test('a WI entry with secondary keys and selective false keeps selective in extras', () => {
+    const { value } = worldInfoToLoreBook({ entries: { 0: { uid: 0, key: ['a'], keysecondary: ['b'], selective: false, selectiveLogic: 2, content: 'x' } } }, 'w');
+    expect(value.entries[0]!.secondary).toBeUndefined();
+    expect(value.entries[0]!.extras).toEqual({ keysecondary: ['b'], selective: false, selectiveLogic: 2 });
+  });
+
+  test('honoured secondary keys or no secondary keys: nothing extra', () => {
+    const { value } = worldInfoToLoreBook(
+      { entries: { 0: { uid: 0, key: ['a'], keysecondary: ['b'], selective: true, content: 'x' }, 1: { uid: 1, key: ['a'], keysecondary: [], selective: false, content: 'y' } } },
+      'w',
+    );
+    expect(value.entries[0]!.extras).toBeUndefined();
+    expect(value.entries[1]!.extras).toBeUndefined();
   });
 });

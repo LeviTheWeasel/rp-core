@@ -1,6 +1,8 @@
 // Ported from Bunraku:src/formats/_shared/character-book-decode.ts@702d8120,
-// Bunraku:src/formats/_shared/lore-enums.ts@702d8120 and Bunraku:src/formats/sillytavern/lorebook.ts@702d8120.
-// Copyright (C) 2026 Coneja-Chibi, NemoVonNirgend; changes Copyright (C) 2026 the rp-core authors.
+// Bunraku:src/formats/_shared/lore-enums.ts@702d8120, Bunraku:src/formats/sillytavern/lorebook.ts@702d8120
+// and SillyBunny:public/scripts/world-info.js@3021edcae (parseDecorators, KNOWN_DECORATORS).
+// Copyright (C) 2026 Coneja-Chibi, NemoVonNirgend; parseDecorators and KNOWN_DECORATORS Copyright (C)
+// the SillyTavern contributors; changes Copyright (C) 2026 the rp-core authors.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // SillyTavern world info and card character_book → core.lorebook/1 (ARCHITECTURE.md §10.5, §19.8).
@@ -9,7 +11,9 @@
 // RoleCall and Bunraku both map 2/3 to examples: do not port that bug.
 //
 // Behaviour reference (facts, not code): SillyBunny public/scripts/world-info.js convertCharacterBook,
-// newWorldInfoEntryDefinition and world-info-character-book.js normalizeWorldInfoPosition (AGPL-3.0).
+// newWorldInfoEntryDefinition and world-info-character-book.js normalizeWorldInfoPosition (AGPL-3.0);
+// parseDecorators is ported from world-info.js (AGPL-3.0). Book-level scan_depth /
+// recursive_scanning ride extras: ST never applies them (its world_info_depth / _recursive are global).
 // Not ported from Bunraku: its 2/3 → examples position map, scanDepth defaults 100/4, order→priority
 // renames, "Entry N" invented titles and every other stamped default.
 
@@ -133,6 +137,34 @@ export function splitGroups(raw: string): string[] {
     .split(',')
     .map((g) => g.trim())
     .filter((g) => g !== '');
+}
+
+/** ST's KNOWN_DECORATORS (world-info.js): the only ones it honours. */
+const KNOWN_DECORATORS = ['@@activate', '@@dont_activate'];
+
+/**
+ * SillyTavern's parseDecorators (world-info.js), applied to every entry: when the content starts
+ * with '@@', every leading '@@' line is stripped, known or not ('@@@x' is the fallback for an
+ * unknown decorator just before it), and the rest is joined with '\n'. Returns the known decorators
+ * as ST lists them, the content ST sends, and the stripped lines as written.
+ */
+export function parseDecorators(content: string): { decorators: string[]; content: string; stripped: string[] } {
+  if (!content.startsWith('@@')) return { decorators: [], content, stripped: [] };
+  const lines = content.split(/\r?\n/);
+  const decorators: string[] = [];
+  let fallbacked = false;
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (!line.startsWith('@@')) break;
+    if (line.startsWith('@@@') && !fallbacked) continue;
+    const data = line.startsWith('@@@') ? line.slice(1) : line;
+    if (KNOWN_DECORATORS.some((k) => data.startsWith(k))) {
+      decorators.push(data);
+      fallbacked = false;
+    } else fallbacked = true;
+  }
+  return { decorators, content: lines.slice(i).join('\n'), stripped: lines.slice(0, i) };
 }
 
 /** A key written as `/pattern/flags` is a regex in both ST and core (§10.2). */
@@ -308,7 +340,13 @@ function mapEntry(raw: Rec, c: EntryCtx): LoreEntry {
   // a WI file entry missing the field gets ST's template default `true` (addMissingWorldInfoFields).
   const sel = f.take('selective');
   const selective = c.dialect === 'wi' ? sel !== false : sel === true;
+  let keepSelective = false;
   const rawSecondary = f.peek('secondary_keys', 'keysecondary');
+  // A list or nothing; anything else ST resets to [] when it loads the book (world-info.js "Fixing
+  // invalid keysecondary") — dropped here too, but said, as for the primary keys.
+  if (rawSecondary !== undefined && rawSecondary !== null && !Array.isArray(rawSecondary)) {
+    c.sink.fold('invalid_value', ...at('secondary_keys'), 'secondary keys are not a list; ST drops them, so does rp-core');
+  }
   const secondaryAll = Array.isArray(rawSecondary) ? readKeys(rawSecondary, ...at('secondary_keys'), c.sink) : [];
   let secondary: string[] | undefined;
   let logic: LoreEntry['logic'];
@@ -325,7 +363,9 @@ function mapEntry(raw: Rec, c: EntryCtx): LoreEntry {
       }
     }
   }
-  // else: secondary keys without `selective` are ignored by ST too; they stay in extras silently.
+  // else: secondary keys without `selective` are ignored by ST too; they stay in extras silently,
+  // and so does `selective` itself, so a reverse export cannot switch them on.
+  else keepSelective = sel !== undefined;
 
   const comment = nonBlank(f.take('comment'));
   const altName = nonBlank(f.peek('name'));
@@ -333,21 +373,36 @@ function mapEntry(raw: Rec, c: EntryCtx): LoreEntry {
   const title = comment ?? altName;
 
   const rawContent = f.take('content');
-  const content = optStr(rawContent) ?? '';
+  let content = optStr(rawContent) ?? '';
   if (rawContent !== undefined && typeof rawContent !== 'string') {
     c.sink.fold('invalid_value', ...at('content'), 'content is not a string; imported as empty');
+  }
+  // Decorators, as ST reads them: stripped from the content; @@activate fires the entry without a
+  // key (like constant), @@dont_activate never lets it fire (like disabled); the rest are dropped.
+  const deco = parseDecorators(content);
+  content = deco.content;
+  const activate = deco.decorators.includes('@@activate');
+  const dontActivate = !activate && deco.decorators.includes('@@dont_activate');
+  const dropped = deco.stripped.filter((line) => {
+    const data = line.startsWith('@@@') ? line.slice(1) : line;
+    return data !== '@@activate' && data !== '@@dont_activate';
+  });
+  if (dropped.length > 0) {
+    c.sink.fold('not_honoured', ...at('content'), 'decorators other than @@activate / @@dont_activate (@@depth, @@role, ...) are ignored and stripped from the content, as SillyTavern does; kept in extras.decorators');
   }
 
   const enabledRaw = optBool(f.take('enabled'));
   const disable = optBool(f.take('disable'));
-  const enabled =
+  const enabledRead =
     c.dialect === 'wi'
       ? disable !== undefined
         ? !disable
         : enabledRaw
       : enabledRaw ?? (disable !== undefined ? !disable : undefined);
+  const enabled = dontActivate ? false : enabledRead;
 
-  const constant = optBool(f.take('constant'));
+  const constantRead = optBool(f.take('constant'));
+  const constant = activate ? true : constantRead;
   const order = optNum(f.take('insertion_order', 'order'));
 
   // Position: CCv2 keeps the precise ST slot in extensions.position and a coarse before_char/after_char
@@ -432,15 +487,17 @@ function mapEntry(raw: Rec, c: EntryCtx): LoreEntry {
   if (raw.use_regex === true && [...keys, ...(secondary ?? [])].some((k) => !isRegexKey(k))) {
     c.sink.fold('not_honoured', ...at('use_regex'), 'use_regex is not honoured: keys are literal unless written /re/flags');
   }
-  // CCv3 decorators (@@depth, @@role, ...) are text to rp-core, as to ST.
-  if (/^\s*@@/.test(content)) {
-    c.sink.fold('not_honoured', ...at('content'), 'CCv3 @@decorators are not honoured; they stay in the content as text');
-  }
-
   const left = f.leftovers();
   classifyLeftovers(left.top, c, false);
   classifyLeftovers(left.ext, c, true);
   const extras: Rec = { ...left.top };
+  if (keepSelective) extras.selective = sel;
+  if (deco.stripped.length > 0) {
+    extras.decorators = deco.stripped;
+    // What the entry said before the decorators set it, for a reverse export.
+    if (activate && constantRead !== undefined) extras.constant = constantRead;
+    if (dontActivate && enabledRead !== undefined) extras.enabled = enabledRead;
+  }
   if (Object.keys(left.ext).length > 0) extras.extensions = left.ext;
   if (Object.keys(extras).length > 0) entry.extras = extras;
   return entry;
@@ -465,13 +522,37 @@ function classifyLeftovers(left: Rec, c: EntryCtx, inExt: boolean): void {
 /** Book-level keys a CCv2 book or ST WI file may carry that rp-core keeps silently in extras. */
 const SILENT_BOOK = new Set(['description', 'token_budget', 'extensions', 'originalData', 'spec', 'spec_version']);
 
+/**
+ * Book-level scan settings. SillyTavern never reads them: convertCharacterBook copies the entries
+ * only (an entry's own extensions.scan_depth is read), and its global world_info_depth (2) and
+ * world_info_recursive (on) apply to every world. So they ride extras, unapplied; a value that would
+ * change the scan if it were applied is named in one warning. A native core.lorebook may still set
+ * scanDepth / recursive.
+ */
+const BOOK_SCAN = ['scan_depth', 'recursive_scanning'];
+const ST_SCAN_DEPTH = 2;
+
+function bookScanWarning(raw: Rec, prefix: string, sink: WarningSink): void {
+  const depth = optCount(raw.scan_depth);
+  const parts: string[] = [];
+  if (depth !== undefined && depth !== ST_SCAN_DEPTH) parts.push(`scan_depth ${depth}`);
+  if (raw.recursive_scanning === false) parts.push('recursive_scanning false');
+  if (parts.length === 0) return;
+  sink.add(
+    'not_honoured',
+    joinPath(prefix, parts[0]!.split(' ')[0]!),
+    `the book's ${parts.join(' and ')} ${parts.length === 1 ? 'is' : 'are'} ignored by SillyTavern, which scans every world at its global depth 2 with recursion on; rp-core does the same (kept in extras)`,
+  );
+}
+
 function bookExtras(raw: Rec, consumed: string[], prefix: string, sink: WarningSink): Rec | undefined {
   const extras: Rec = {};
   for (const [k, v] of Object.entries(raw)) {
     if (consumed.includes(k)) continue;
     extras[k] = v;
-    if (!SILENT_BOOK.has(k)) sink.add('unknown_field', joinPath(prefix, k), `unknown book field "${k}" kept in extras`);
+    if (!SILENT_BOOK.has(k) && !BOOK_SCAN.includes(k)) sink.add('unknown_field', joinPath(prefix, k), `unknown book field "${k}" kept in extras`);
   }
+  bookScanWarning(raw, prefix, sink);
   return Object.keys(extras).length > 0 ? extras : undefined;
 }
 
@@ -498,13 +579,12 @@ export function characterBookAt(book: unknown, fallbackName: string, prefix: str
     }
     entries.push(mapEntry(e, { dialect: 'book', path, star: `${entriesPath}[*]`, fallbackId: String(i), sink }));
   });
+  // Book-level scan_depth / recursive_scanning ride extras: SillyTavern ignores them (bookExtras).
   const value: LoreBook = compact({
     name: nonBlank(b.name) ?? fallbackName,
-    scanDepth: optCount(b.scan_depth),
-    recursive: optBool(b.recursive_scanning),
     match: 'literal' as const,
     entries: uniqueIds(entries),
-    extras: bookExtras(b, ['name', 'scan_depth', 'recursive_scanning', 'entries'], prefix, sink),
+    extras: bookExtras(b, ['name', 'entries'], prefix, sink),
   });
   return { value, warnings: sink.list() };
 }
@@ -532,11 +612,9 @@ export function worldInfoToLoreBook(json: unknown, fallbackName: string): Import
   }
   const value: LoreBook = compact({
     name: nonBlank(json.name) ?? fallbackName,
-    scanDepth: optCount(json.scan_depth),
-    recursive: optBool(json.recursive_scanning),
     match: 'literal' as const,
     entries: uniqueIds(entries),
-    extras: bookExtras(json, ['name', 'scan_depth', 'recursive_scanning', 'entries'], '', sink),
+    extras: bookExtras(json, ['name', 'entries'], '', sink),
   });
   return { value, warnings: sink.list() };
 }

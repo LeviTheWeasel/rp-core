@@ -9,8 +9,11 @@
 // copied to trace.tokens.reported). An answer contributes its `msg` line, and every continue `edit`
 // of it contributes its own call. Samples are ordered by seq (oldest → newest) so the EMA weighs the
 // newest calls most. prompt/tokens.ts emaFactor folds them.
+//
+// M2: only calls counted the way the next prompt is counted are samples (trace.tokens.counter; an
+// absent counter is M1's 'chars'). A ratio learned against chars/3 says nothing about o200k.
 
-import { EMA_DISCARD_BELOW, emaFactor } from '../prompt/tokens.ts';
+import { defaultCounter, EMA_DISCARD_BELOW, emaFactor, type TokenCounter } from '../prompt/tokens.ts';
 import type { Generation, Trace } from '../session/entries.ts';
 import type { TreeIndex } from '../session/tree.ts';
 import type { PathView } from '../session/view.ts';
@@ -20,11 +23,20 @@ export interface EmaSample {
   reported: number;
 }
 
-/** One call's sample, when its commit has both counts and the model matches. */
-function sampleOf(gen: Generation | undefined, trace: Trace | undefined, model: string): EmaSample | null {
+/** A counter id: what trace.tokens.counter holds. */
+export type CounterId = TokenCounter['id'];
+
+/** How a trace's estimate was counted: absent means 'chars' (M1 traces). */
+export function counterOf(trace: Trace): CounterId {
+  return trace.tokens?.counter ?? 'chars';
+}
+
+/** One call's sample, when its commit has both counts and the model and the counter match. */
+function sampleOf(gen: Generation | undefined, trace: Trace | undefined, model: string, counter: CounterId): EmaSample | null {
   if (!gen || gen.kind !== 'model' || gen.model !== model || !trace) return null;
   // A recovered (partial) answer has no usage of its own; skip it explicitly all the same.
   if (trace.partial) return null;
+  if (counterOf(trace) !== counter) return null;
   const reported = gen.usage?.inputTotal ?? trace.tokens?.reported;
   const estimated = trace.tokens?.estimated;
   if (typeof reported !== 'number' || typeof estimated !== 'number') return null;
@@ -32,20 +44,21 @@ function sampleOf(gen: Generation | undefined, trace: Trace | undefined, model: 
 }
 
 /**
- * The samples of `model` along the path, oldest → newest. Hidden answers count: hiding changes what
- * the next prompt holds, not what an earlier call measured.
+ * The samples of `model` along the path, oldest → newest, counted by `counter` (default: the
+ * default counter's id). Hidden answers count: hiding changes what the next prompt holds, not what
+ * an earlier call measured.
  */
-export function emaSamples(idx: TreeIndex, view: Pick<PathView, 'path'>, model: string): EmaSample[] {
+export function emaSamples(idx: TreeIndex, view: Pick<PathView, 'path'>, model: string, counter: CounterId = defaultCounter().id): EmaSample[] {
   const found: { seq: number; s: EmaSample }[] = [];
   for (const m of view.path) {
     if (m.role !== 'assistant') continue;
     const entry = idx.msgs.get(m.id);
     if (!entry) continue;
-    const own = sampleOf(entry.gen, entry.trace, model);
+    const own = sampleOf(entry.gen, entry.trace, model, counter);
     if (own) found.push({ seq: entry.seq, s: own });
     for (const e of idx.edits.get(m.id) ?? []) {
       if (e.reason !== 'continue') continue;
-      const s = sampleOf(e.gen, e.trace, model);
+      const s = sampleOf(e.gen, e.trace, model, counter);
       if (s) found.push({ seq: e.seq, s });
     }
   }
@@ -67,7 +80,7 @@ export function truncatedByServer(estimated: number, reported: number | undefine
   return reported / estimated < EMA_DISCARD_BELOW;
 }
 
-/** AssembleInput.tokenFactor for a turn of `model` (EMA_START when the path has no sample). */
-export function tokenFactorFor(idx: TreeIndex, view: Pick<PathView, 'path'>, model: string): number {
-  return emaFactor(emaSamples(idx, view, model));
+/** AssembleInput.tokenFactor for a turn of `model` counted by `counter` (EMA_START when the path has no sample). */
+export function tokenFactorFor(idx: TreeIndex, view: Pick<PathView, 'path'>, model: string, counter: CounterId = defaultCounter().id): number {
+  return emaFactor(emaSamples(idx, view, model, counter));
 }

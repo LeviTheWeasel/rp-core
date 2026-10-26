@@ -98,8 +98,14 @@ export function providerFinish(reason: FinishReason): FinishReason {
   return PROVIDER_FINISHES.has(reason) ? reason : 'end';
 }
 
-/** The request the provider sees. The signal is the call's own child controller. */
-function buildRequest(input: CallInput, signal: AbortSignal): ModelRequest {
+/** What of a call goes into its ModelRequest. */
+export type RequestFields = Pick<CallInput, 'conn' | 'model' | 'caps' | 'messages' | 'prefill' | 'maxTokens' | 'samplers' | 'reasoning' | 'callKey'>;
+
+/**
+ * The request the provider sees. The signal is the call's own child controller. Exported for the
+ * preview's wire() (session.ts), which must show the very request a call would send.
+ */
+export function modelRequest(input: RequestFields, signal: AbortSignal): ModelRequest {
   const req: ModelRequest = {
     model: { connection: input.conn.id, model: input.model },
     caps: input.caps,
@@ -269,7 +275,7 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
 
   let finished = false;
   try {
-    const stream = input.conn.provider.stream(buildRequest(input, call.signal), {
+    const stream = input.conn.provider.stream(modelRequest(input, call.signal), {
       fetch: input.fetch,
       key: keyed.key,
       onActivity: () => watch.bytes(),

@@ -28,6 +28,11 @@
 // the budget held back (never more, so prompt + max_tokens fits the window; capped by the model's
 // caps.maxOutput too); a server that reports far fewer prompt tokens than were sent cut the prompt,
 // which is told once and kept out of the EMA.
+//
+// M2: steps 4–5 (window, reserve, the starting view, the EMA, the session's lorebooks, assemble,
+// shape) live in request.ts, shared with preview, so a preview is what the turn sends. The lore
+// fires assemble puts in the trace ride `prep` and the commit (traceForSent keeps them), which is
+// where fold.ts reads the timers of later turns from (§5.10).
 
 import { abortableDelay, abortWith, type AbortReason } from './abort.ts';
 import type { TurnOutcome } from './api.ts';
@@ -37,20 +42,17 @@ import { Checkpointer } from './checkpoint.ts';
 import { messageViewOf, placeCommit, type Journal, type Placed } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
 import { priceFor, usageCost } from './cost.ts';
-import { tokenFactorFor, truncatedByServer } from './ema.ts';
+import { truncatedByServer } from './ema.ts';
 import { hookBeforeAssemble, hookTransformReply, hookTransformRequest, type HookCtx } from './hooks.ts';
 import { streamCall, timeoutsFor, type CallResult } from './narrate.ts';
+import { buildRequest, maxTokensFor, shapeRequest, type AssembledOk, type KeyedNotice, type ReplyLimits, type Shaped } from './request.ts';
 import { isRetryable, modelLabel, retryDelayMs } from './route.ts';
-import { assemble, traceForSent, type AssembleResult } from '../prompt/assemble.ts';
-import { estimateMessages } from '../prompt/tokens.ts';
-import { contextWindow, replyReserve } from '../prompt/budget.ts';
-import { continuationResult, shape } from '../prompt/shape.ts';
+import { traceForSent } from '../prompt/assemble.ts';
+import { continuationResult } from '../prompt/shape.ts';
 import type { Event, EventBody, Notice } from '../protocol/events.ts';
 import { stripToolCallLeaks } from '../tools/leaks.ts';
-import type { FinishReason, ProviderError, PromptMsg, Usage } from '../providers/types.ts';
-import type { Samplers } from '../formats/native.ts';
-import type { Binding, Block, Generation, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
-import { foldViewAt } from '../session/fold.ts';
+import type { FinishReason, ProviderError, Usage } from '../providers/types.ts';
+import type { Block, Generation, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
 import { SessionLockedError } from '../session/log.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 
@@ -75,13 +77,6 @@ interface Ending {
   terminal: EventBody;
 }
 
-/** The request one route sends, shaped for that route's caps. */
-interface Shaped {
-  messages: PromptMsg[];
-  prefill?: string;
-  cont?: { mode: 'prefill' | 'cue'; base: string };
-}
-
 /** What the routed narration came to. */
 interface Narrated {
   res: CallResult;
@@ -92,21 +87,6 @@ interface Narrated {
 }
 
 const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-/** A usable token limit: a positive finite number, floored; anything else means "not set". */
-const tokenLimit = (n: unknown): number | undefined =>
-  typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
-
-/**
- * The reply's token limit and the samplers to forward [D-89, §11]: `max_tokens` set by the binding
- * (maxTokens, then its samplers) or by the preset's samplers. It leaves the samplers, so a request
- * carries exactly one limit (ModelRequest.maxTokens).
- */
-export function replyLimits(binding: Binding, presetSamplers: Partial<Samplers> | undefined): { maxTokens?: number; samplers: Partial<Samplers> } {
-  const { max_tokens, ...samplers } = { ...(presetSamplers ?? {}), ...(binding.samplers ?? {}) };
-  const maxTokens = tokenLimit(binding.maxTokens) ?? tokenLimit(max_tokens);
-  return maxTokens !== undefined ? { maxTokens, samplers } : { samplers };
-}
 
 /** reasoning block(s) first, then one text block (§5.4: reasoning is never glued into the text). */
 function answerBlocks(text: string, reasoning: string): Block[] {
@@ -134,6 +114,8 @@ export class TurnRun {
   /** The answer is in hand and being written: a failure now must keep the checkpoint (D-38). */
   private committing = false;
   private ended = false;
+  /** traceForSent of the last shaped request: counted once, reused by the server check and the commit. */
+  private sentCache: { messages: readonly unknown[]; prefill: string | undefined; trace: Trace } | null = null;
 
   constructor(
     private readonly host: TurnHost,
@@ -188,73 +170,24 @@ export class TurnRun {
     const placements = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx);
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
 
-    // Step 4: assemble (pure). The window and reserve follow the primary route.
-    const primary = plan.primary;
-    const window = contextWindow({
-      caps: primary.caps,
-      local: primary.conn.local,
-      preset: plan.preset,
-      ...(plan.config.window !== undefined ? { configWindow: plan.config.window } : {}),
+    // Steps 4–5: assemble and shape for the primary model (request.ts, the same function preview runs).
+    const built = buildRequest({
+      home: this.ctx.home,
+      sessionId: this.host.sessionId,
+      header: this.host.header(),
+      tree: this.host.tree(),
+      view: this.host.view(),
+      plan,
+      seed: this.entry.seed,
+      now: this.entry.now,
+      timeZone: this.ctx.timeZone,
+      counter: this.ctx.counter,
+      placements,
     });
-    const limits = replyLimits(plan.binding, plan.preset.samplers);
-    // The reply may ask for no more than the model can write (caps.maxOutput, e.g. OpenRouter's
-    // top_provider.max_completion_tokens) and no more than the budget held back for it: the request
-    // carries the reserve itself, so the prompt the budget packed plus max_tokens fits the window.
-    const maxOutput = tokenLimit(primary.caps.maxOutput);
-    const wanted = limits.maxTokens !== undefined && maxOutput !== undefined ? Math.min(limits.maxTokens, maxOutput) : (limits.maxTokens ?? maxOutput);
-    const reserve = replyReserve(window, wanted);
-    if (limits.maxTokens !== undefined && reserve < limits.maxTokens && this.host.firstNotice('max_tokens_reduced')) {
-      this.notice({
-        level: 'info',
-        code: 'max_tokens_reduced',
-        message:
-          maxOutput !== undefined && maxOutput < limits.maxTokens && reserve === maxOutput
-            ? `max_tokens ${limits.maxTokens} is above what ${modelLabel(primary.conn.id, primary.model)} can write; ${reserve} is sent.`
-            : `max_tokens ${limits.maxTokens} does not fit: the context window is ${window} tokens and at most half of it is kept for the reply, so ${reserve} is sent.`,
-      });
-    }
-    // The state the turn starts from: the head, except on a swipe, which regrows the answer from U
-    // (§6.3), so the replaced answer's variables and fires must not reach its sibling (§5.10).
-    const current = this.host.view();
-    const view = current.head === plan.upTo ? current : foldViewAt(this.host.header(), this.host.tree(), plan.upTo);
-    // D-50: the model's token correction, learned from the earlier answers on this path.
-    const tokenFactor = tokenFactorFor(this.host.tree(), view, primary.model);
-    let asm: AssembleResult;
-    try {
-      asm = assemble({
-        sessionId: this.host.sessionId,
-        view,
-        upTo: plan.upTo,
-        kind: plan.kind,
-        cast: this.host.header().cast,
-        preset: plan.preset,
-        lorebooks: [],
-        placements,
-        ...(plan.config.authorNote ? { authorNote: plan.config.authorNote } : {}),
-        ...(plan.guidance ? { guidance: { text: plan.guidance, ...(plan.rejected !== undefined ? { rejected: plan.rejected } : {}) } } : {}),
-        caps: primary.caps,
-        window,
-        reserve,
-        tokenFactor,
-        seed: this.entry.seed,
-        now: this.entry.now,
-        timeZone: this.ctx.timeZone,
-        tools: [],
-        prefillVsTools: plan.config.narrator.prefillVsTools,
-      });
-    } catch (e) {
-      return this.failEarly('request', 'assemble_failed', errMessage(e));
-    }
-    if (!asm.ok) return this.failEarly('request', asm.code, asm.message);
-    this.notices(asm.notices);
-
-    // Step 5: shape for the primary model.
-    let shaped: Shaped;
-    try {
-      shaped = this.shapeFor(primary, asm);
-    } catch (e) {
-      return this.failEarly('request', 'shape_failed', errMessage(e));
-    }
+    this.keyedNotices(built.notices);
+    if (!built.ok) return this.failEarly('request', built.code, built.message);
+    const { asm, shaped, reserve, limits, window } = built;
+    const primary = plan.primary;
 
     // Step 6: `prep`, durable, before anything is sent. vars ride the commit, not this line's
     // application: a turn that never commits changes no variable (D-30).
@@ -262,7 +195,7 @@ export class TurnRun {
     this.host.append({
       t: 'prep',
       turn: this.entry.turn,
-      trace: traceForSent(asm.trace, shaped.messages),
+      trace: this.sentTrace(asm, shaped),
       // Recovery has nothing else to name the model of an interrupted answer by.
       model: { connection: primary.conn.id, model: primary.model },
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
@@ -288,7 +221,7 @@ export class TurnRun {
     // Every byte that arrived goes to a chk before anything can commit or crash (§6.2 step 8).
     this.chk.flush();
     const { res } = narrated;
-    this.checkServerWindow(narrated, window);
+    this.checkServerWindow(asm, narrated, window);
     // Step 9: post-processing, before anything commits or is handed back.
     this.postProcess();
     if (res.tailError) {
@@ -303,33 +236,33 @@ export class TurnRun {
     return this.onFinished(asm, narrated);
   }
 
-  /** Shape (pure) for one route's caps (the model's, not the connection default). */
-  private shapeFor(route: Route, asm: Extract<AssembleResult, { ok: true }>): Shaped {
-    const { character, persona } = this.host.header().cast;
-    const out = shape({
-      messages: asm.messages,
-      caps: route.caps,
-      prefill: asm.prefill,
-      kind: this.plan.kind,
-      ...(this.plan.preset.postProcessing ? { postProcessing: this.plan.preset.postProcessing } : {}),
-      // Speaker prefixes for the 'single' post-processing mode, as the macros name them.
-      names: { char: character.name, user: persona?.name || 'User' },
-    });
-    this.notices(out.notices);
-    const shaped: Shaped = { messages: out.messages };
-    if (out.prefill !== undefined) shaped.prefill = out.prefill;
-    if (this.plan.kind === 'continue' && out.continueMode) {
-      shaped.cont = { mode: out.continueMode, base: out.continueBase ?? '' };
-    }
-    return shaped;
+  /**
+   * traceForSent for what this request sends, the prefill included (an EMA sample compares the
+   * estimate with the prompt tokens the server counted, and a continue's prefill is the whole answer
+   * so far). Cached on the shaped messages: the prep line, the server check and the commit share one
+   * count of a long chat instead of three.
+   */
+  private sentTrace(asm: AssembledOk, shaped: Shaped): Trace {
+    const c = this.sentCache;
+    if (c && c.messages === shaped.messages && c.prefill === shaped.prefill) return c.trace;
+    const trace = traceForSent(asm.trace, shaped.messages, shaped.prefill);
+    this.sentCache = { messages: shaped.messages, prefill: shaped.prefill, trace };
+    return trace;
+  }
+
+  /** Shape (pure) for a fallback route's caps; its notices keep the once-per-session rule. */
+  private shapeFor(route: Route, asm: AssembledOk): Shaped {
+    const out = shapeRequest(route, asm, this.plan, this.host.header().cast);
+    this.keyedNotices(out.notices);
+    return out.shaped;
   }
 
   /** One retry of the same model, then one fallback, both only before any output (§6.6). */
   private async narrate(
-    asm: Extract<AssembleResult, { ok: true }>,
+    asm: AssembledOk,
     primaryShape: Shaped,
     reserve: number,
-    limits: ReturnType<typeof replyLimits>,
+    limits: ReplyLimits,
   ): Promise<Narrated> {
     const { plan } = this;
     const callKey = `${this.entry.turn}:narrator:0`;
@@ -338,7 +271,6 @@ export class TurnRun {
     const samplers = limits.samplers;
     // The reserve (it already holds the binding's max_tokens and the primary's maxOutput); a fallback
     // with a smaller output limit gets its own.
-    const maxTokensFor = (r: Route): number => Math.min(reserve, tokenLimit(r.caps.maxOutput) ?? reserve);
     this.chk.start();
 
     const call = async (r: Route, shaped: Shaped): Promise<CallResult> => {
@@ -349,7 +281,7 @@ export class TurnRun {
         caps: r.caps,
         messages: shaped.messages,
         ...(shaped.prefill !== undefined ? { prefill: shaped.prefill } : {}),
-        maxTokens: maxTokensFor(r),
+        maxTokens: maxTokensFor(r, reserve),
         samplers,
         ...(plan.binding.reasoning ? { reasoning: plan.binding.reasoning } : {}),
         callKey,
@@ -436,9 +368,11 @@ export class TurnRun {
    * window than the one budgeted for (Ollama does so silently at its num_ctx, keeping only the newest
    * messages). Told once per session, with what to do; the call is no EMA sample (tokens.ts).
    */
-  private checkServerWindow(n: Narrated, window: number): void {
+  private checkServerWindow(asm: AssembledOk, n: Narrated, window: number): void {
     const reported = n.res.usage?.inputTotal;
-    const estimated = estimateMessages(n.shaped.messages);
+    if (reported === undefined) return;
+    // The messages and the prefill the server counted, as the trace counts them.
+    const estimated = this.sentTrace(asm, n.shaped).tokens.estimated;
     if (!truncatedByServer(estimated, reported) || !this.host.firstNotice('context_truncated_by_server')) return;
     const label = modelLabel(n.active.conn.id, n.active.model);
     this.notice({
@@ -485,7 +419,7 @@ export class TurnRun {
   }
 
   /** §6.5: text in hand → commit as 'stopped'; nothing → end{stopped-empty}. */
-  private async onStopped(asm: Extract<AssembleResult, { ok: true }>, n: Narrated): Promise<Ending> {
+  private async onStopped(asm: AssembledOk, n: Narrated): Promise<Ending> {
     if (!this.hasAnswerText(n)) return this.stoppedEmpty();
     const placed = await this.commit(asm, n, answerBlocks(this.answerText, this.reasoning), 'stopped');
     if (placed.kind === 'end') return this.lostToConflict(placed);
@@ -494,7 +428,7 @@ export class TurnRun {
   }
 
   /** §6.6 / D-22: a failure. After output with onError 'keep' the text is committed as 'interrupted'. */
-  private async onFailure(asm: Extract<AssembleResult, { ok: true }>, n: Narrated, err: ProviderError): Promise<Ending> {
+  private async onFailure(asm: AssembledOk, n: Narrated, err: ProviderError): Promise<Ending> {
     const draft = this.answerText;
     if (n.res.output && this.plan.onError === 'keep' && this.hasAnswerText(n)) {
       const placed = await this.commit(asm, n, answerBlocks(this.answerText, this.reasoning), 'interrupted');
@@ -506,7 +440,7 @@ export class TurnRun {
   }
 
   /** The stream finished: commit, or one of the empty-answer failures (§6.4, §7.1, D-31). */
-  private async onFinished(asm: Extract<AssembleResult, { ok: true }>, n: Narrated): Promise<Ending> {
+  private async onFinished(asm: AssembledOk, n: Narrated): Promise<Ending> {
     const finish: FinishReason = n.res.finish?.reason ?? 'end';
     if (this.plan.kind === 'continue') {
       if (this.addition(n) === '') {
@@ -543,7 +477,7 @@ export class TurnRun {
 
   /** Write the answer (§6.2 step 10) and announce `changed`. Throws only when the write itself fails. */
   private async commit(
-    asm: Extract<AssembleResult, { ok: true }>,
+    asm: AssembledOk,
     n: Narrated,
     blocks: Block[],
     finish: FinishReason,
@@ -566,7 +500,7 @@ export class TurnRun {
       ...(plan.guidance ? { guidance: plan.guidance } : {}),
       route: n.route,
     };
-    const sent = traceForSent(asm.trace, shaped.messages);
+    const sent = this.sentTrace(asm, shaped);
     const trace: Trace = {
       ...sent,
       tokens: { ...sent.tokens, ...(res.usage?.inputTotal !== undefined ? { reported: res.usage.inputTotal } : {}) },
@@ -676,10 +610,10 @@ export class TurnRun {
     });
   }
 
-  private notices(list: readonly Notice[]): void {
-    // Assemble/shape notices (prefill/tools D-28, post-processing) come once per session; the
-    // assembler and shape emit them on every call.
-    for (const n of list) if (this.host.firstNotice(n.code)) this.notice(n);
+  private keyedNotices(list: readonly KeyedNotice[]): void {
+    // Request notices (prefill/tools D-28, post-processing, missing books, broken lore keys) come
+    // once per session under their key; the assembler and shape emit them on every call.
+    for (const n of list) if (this.host.firstNotice(n.key)) this.notice(n.notice);
   }
 
   private notice(n: Notice): void {

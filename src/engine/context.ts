@@ -11,6 +11,7 @@ import type { CheckpointCadence } from './checkpoint.ts';
 import type { HostHooks } from './hooks.ts';
 import type { CallTimeouts } from './narrate.ts';
 import type { Scheduler } from './sched.ts';
+import type { TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
 
@@ -35,6 +36,11 @@ export interface EngineCtx {
   hooks?: HostHooks;
   /** EngineOptions.onProviderError: the host's debug tap for raw provider failures (§13). */
   onProviderError?: EngineOptions['onProviderError'];
+  /**
+   * M2: how every prompt of this engine is counted (assemble's budgets, trace.tokens, the EMA's
+   * samples, D-50). defaultCounter() unless a test pins another (engine.ts EngineSeams).
+   */
+  counter: TokenCounter;
 }
 
 /** ISO timestamp from the injected clock. */

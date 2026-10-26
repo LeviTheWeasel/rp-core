@@ -42,6 +42,21 @@ export type Command =
   | { name: 'open'; id: string }
   | { name: 'usage' }
   | { name: 'trace' }
+  /** /preset alone shows the preset and the library; with a ref (library id, 'builtin' or a file) switches. */
+  | { name: 'preset'; ref?: string }
+  /** /lore (or /lore list): the books a turn scans. */
+  | { name: 'lore'; action: 'list' }
+  /** /lore add <id|file>: a file is imported first. */
+  | { name: 'lore'; action: 'add'; ref: string }
+  | { name: 'lore'; action: 'rm'; id: string }
+  /** /lore test <text>: the verdicts of a reply to `text`, nothing sent [D-45]. */
+  | { name: 'lore'; action: 'test'; text: string }
+  /**
+   * /preview [n|id] [--wire] [--verdicts]: the request of the next turn, or (with a target) of a
+   * past answer: `n` is its /show number, `id` a message id or a unique prefix (/preview --turn <id>
+   * too). --verdicts adds every lore entry's verdict, as /lore test prints them [D-45].
+   */
+  | { name: 'preview'; at?: { n: number } | { id: string }; wire: boolean; verdicts: boolean }
   | { name: 'probe' }
   | { name: 'help' }
   | { name: 'quit' }
@@ -87,6 +102,12 @@ export function commandClass(c: Command): CommandClass {
       return c.spec === undefined ? 'read' : 'edit';
     case 'note':
       return c.action === 'show' ? 'read' : 'edit';
+    case 'preset':
+      return c.ref === undefined ? 'read' : 'edit';
+    case 'lore':
+      return c.action === 'add' || c.action === 'rm' ? 'edit' : 'read';
+    case 'preview':
+      return 'read';
     default:
       return 'edit';
   }
@@ -94,9 +115,6 @@ export function commandClass(c: Command): CommandClass {
 
 /** §12.4 commands that arrive with later milestones (§15). */
 const LATER: Readonly<Record<string, string>> = {
-  preset: 'M2 (presets and lorebooks)',
-  lore: 'M2 (presets and lorebooks)',
-  preview: 'M2',
   memory: 'M3 (manual notes) and M5 (Compendium)',
   director: 'M4 (Story Director)',
   persona: 'a later milestone',
@@ -179,6 +197,12 @@ export function parseLine(raw: string): ParsedLine {
       return noArgs({ name: 'usage' });
     case 'trace':
       return noArgs({ name: 'trace' });
+    case 'preset':
+      return rest === '' ? cmd({ name: 'preset' }) : cmd({ name: 'preset', ref: unquote(rest) });
+    case 'lore':
+      return parseLore(rest);
+    case 'preview':
+      return parsePreview(rest);
     case 'probe':
       return cmd({ name: 'probe' });
     case 'help':
@@ -194,6 +218,78 @@ export function parseLine(raw: string): ParsedLine {
       return err(`unknown command /${name}; /help lists the commands (start with // to send text that begins with "/")`);
     }
   }
+}
+
+/** One argument that may hold spaces (a file name): the rest of the line, outer quotes removed. */
+export function unquote(s: string): string {
+  const t = s.trim();
+  const q = t[0];
+  return t.length >= 2 && (q === '"' || q === "'") && t.endsWith(q) ? t.slice(1, -1) : t;
+}
+
+function parseLore(rest: string): ParsedLine {
+  const m = /^(\S+)\s*([\s\S]*)$/.exec(rest);
+  const sub = m ? m[1]!.toLowerCase() : '';
+  const arg = m ? m[2]!.trim() : '';
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const cmd = (command: Command): ParsedLine => ({ kind: 'command', command });
+  switch (sub) {
+    case '':
+    case 'list':
+      return arg === '' ? cmd({ name: 'lore', action: 'list' }) : err('/lore list takes no arguments');
+    case 'add':
+      if (arg === '') return err('/lore add needs a library id or a file (SillyTavern world info, a character_book, or a card with a book)');
+      return cmd({ name: 'lore', action: 'add', ref: unquote(arg) });
+    case 'rm':
+    case 'remove': {
+      const id = unquote(arg);
+      if (id === '' || /\s/.test(id)) return err('/lore rm needs one lorebook id, as /lore lists them');
+      return cmd({ name: 'lore', action: 'rm', id });
+    }
+    case 'test':
+      if (arg === '') return err('/lore test needs text to scan, e.g. /lore test the lighthouse at night');
+      return cmd({ name: 'lore', action: 'test', text: arg });
+    default:
+      return err(`/lore: "${m![1]}" is not a subcommand; /lore lists the books, /lore add <id|file>, /lore rm <id>, /lore test <text>`);
+  }
+}
+
+function parsePreview(rest: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const words = rest === '' ? [] : rest.split(/\s+/);
+  let wire = false;
+  let verdicts = false;
+  let at: { n: number } | { id: string } | undefined;
+  const target = (t: { n: number } | { id: string }): ParsedLine | null => {
+    if (at !== undefined) return err('/preview takes one answer: its /show number or its id');
+    at = t;
+    return null;
+  };
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    let bad: ParsedLine | null = null;
+    if (w === '--wire') {
+      wire = true;
+    } else if (w === '--verdicts') {
+      verdicts = true;
+    } else if (w === '--turn') {
+      const id = words[++i];
+      if (id === undefined || !/^[0-9a-f]+$/i.test(id)) return err('/preview --turn needs a message id (hex, as /show prints it)');
+      bad = target({ id: id.toLowerCase() });
+    } else if (w.startsWith('--')) {
+      return err(`/preview: unknown flag ${w} (it takes [n|id] [--wire] [--verdicts])`);
+    } else if (/^\d+$/.test(w)) {
+      const n = positive(w);
+      if (n === null) return err(`/preview: "${w}" is not a message number (1, 2, … as /show numbers them)`);
+      bad = target({ n });
+    } else if (/^[0-9a-f]+$/i.test(w)) {
+      bad = target({ id: w.toLowerCase() });
+    } else {
+      return err(`/preview: "${w}" is neither a message number nor an id (/preview [n|id] [--wire] [--verdicts])`);
+    }
+    if (bad) return bad;
+  }
+  return { kind: 'command', command: at === undefined ? { name: 'preview', wire, verdicts } : { name: 'preview', at, wire, verdicts } };
 }
 
 function parseModel(rest: string): ParsedLine {
@@ -253,7 +349,7 @@ export function resolveBindingArg(
   return { ok: true, value: parts };
 }
 
-/** /help text (the M1b set; later commands are listed with their milestone). */
+/** /help text (the M2 set; later commands are listed with their milestone). */
 export function helpText(): string {
   return [
     'Type to speak. Commands:',
@@ -270,10 +366,16 @@ export function helpText(): string {
     '  /note <text> [@depth], /note off   the author\'s note (default depth 4)',
     '  /think show|hide   show the model\'s reasoning or fold it to one line',
     '  /show              the story so far, numbered      /usage   tokens and cost of this path',
-    '  /trace             what the last answer\'s prompt held   /probe   how to probe a server',
+    '  /trace             what the last answer\'s prompt held: the lore that fired, and why the rest did not',
+    '  /probe             how to probe a server',
+    '  /preset [id|file]  show the preset and the library, or switch (builtin, a library id, or an ST preset file to import)',
+    '  /lore              the lorebooks of this session; /lore add <id|file> (a world info file is imported), /lore rm <id>',
+    '  /lore test <text>  which lore entries a message would wake, and why (nothing is sent)',
+    '  /preview [n] [--wire] [--verdicts]   the exact request of the next turn (or of answer n), without sending it;',
+    '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',
-    'Later: /preset /lore /preview (M2), /memory (M3), /director (M4).',
+    'Later: /memory (M3), /director (M4).',
     'Start a line with // to send text that begins with "/".',
   ].join('\n');
 }

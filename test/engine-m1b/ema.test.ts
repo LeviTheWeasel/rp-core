@@ -53,6 +53,8 @@ const user = (id: string, parent: string | null): EntryInput => ({ t: 'msg', ts:
 const asst = (id: string, parent: string, g?: Generation, tr?: Trace): EntryInput =>
   ({ t: 'msg', ts: TS, id, parent, role: 'assistant', blocks: [{ k: 'text', text: 'a' }], ...(g ? { gen: g } : {}), ...(tr ? { trace: tr } : {}) }) as EntryInput;
 
+// The fixture traces name no counter (M1 traces: 'chars'), so the samples are read for 'chars' (M2:
+// only samples counted like the next prompt count).
 describe('emaSamples', () => {
   test('answers of the bound model with both counts, oldest → newest; continue edits are their own calls', () => {
     const { idx, view } = fixture(
@@ -72,12 +74,12 @@ describe('emaSamples', () => {
       ],
       ['g', 'u1', 'a1', 'u2', 'a2', 'u3', 'a3', 'u4', 'a4', 'u5', 'a5'],
     );
-    expect(emaSamples(idx, view, 'm')).toEqual([
+    expect(emaSamples(idx, view, 'm', 'chars')).toEqual([
       { estimated: 100, reported: 120 },
       { estimated: 200, reported: 300 },
       { estimated: 130, reported: 260 },
     ]);
-    expect(tokenFactorFor(idx, view, 'm')).toBeCloseTo(emaFactor([
+    expect(tokenFactorFor(idx, view, 'm', 'chars')).toBeCloseTo(emaFactor([
       { estimated: 100, reported: 120 },
       { estimated: 200, reported: 300 },
       { estimated: 130, reported: 260 },
@@ -89,9 +91,9 @@ describe('emaSamples', () => {
       [user('u1', null), asst('a1', 'u1', gen('m', 400), trace(100)), asst('a1b', 'u1', gen('m', 100), trace(100))],
       ['u1', 'a1b'],
     );
-    expect(emaSamples(idx, view, 'm')).toEqual([{ estimated: 100, reported: 100 }]);
+    expect(emaSamples(idx, view, 'm', 'chars')).toEqual([{ estimated: 100, reported: 100 }]);
     const empty = fixture([user('u1', null)], ['u1']);
-    expect(tokenFactorFor(empty.idx, empty.view, 'm')).toBe(EMA_START);
+    expect(tokenFactorFor(empty.idx, empty.view, 'm', 'chars')).toBe(EMA_START);
   });
 });
 

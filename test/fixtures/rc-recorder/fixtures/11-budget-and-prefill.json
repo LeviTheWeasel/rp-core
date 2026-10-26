@@ -1,0 +1,96 @@
+{
+  "name": "11-budget-and-prefill",
+  "about": "A preset with three relative prompts, a persona, and system_prompts.assistant_prefill carrying raw macro syntax ('{{char}} looks at {{user}}:') to prove assemblePrompt passes assistantPrefill through UNEXPANDED: preset-loader.ts reads presetAssistantPrefill straight off the system_prompts blob (readSystemPrompt) and assemblePrompt's final return statement assigns it to result.assistantPrefill verbatim -- there is no macro-processing call on that variable anywhere in between, so the recorded field still contains the literal '{{char}}'/'{{user}}' macro syntax. input.contextLimit (1100) and maxResponseTokens (300) are small next to 13 history messages of ~300 chars each (12 numbered turns plus the character's greeting), so history gets trimmed and it is visibly partial, not 0 and not the whole history like 05-no-preset-overfull: the recorded conversationHistory keeps the greeting and turns 5-12, drops turns 1-4, and keeps the current-turn message. Recording-verified quirk worth a note for the port: messagesTrimmed reports 1, not the 4 history entries actually missing. prompt-assembly.ts touches history in at least three places before returning -- a loose pre-trim ahead of chatMessages construction (~line 3273, PRE_TRIM_RESERVE=2048, historyBudget = max(floor(contextLimit*0.6), contextLimit-2048)) that is invisible to messagesTrimmed entirely, then the mid-assembly budgetManager pass ('messagesTrimmed = originalMessageCount - trimmedChatMessages.length'), then a final hard-cap re-measure (finalPassBudgetTrim) that adds its own dropped count. Only the latter two are counted, so the uncounted first pass is the most likely reason the counter undercounts here. This fixture records the undercount as ground truth; a faithful port must reproduce messagesTrimmed = 1 for this input, not a value corrected to match the visible history delta.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 11,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-11", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-11", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }],
+      "personas": [{
+        "id": "p-11", "name": "Wren", "creator_id": "u-owner", "status": "private",
+        "details": { "pronouns": "she/her", "age": "31", "appearance": "Soaked oilskin coat, a satchel of charts.", "personality": "Curious and stubborn." },
+        "section_order": null
+      }],
+      "presets": [{
+        "id": "preset-11", "name": "Budget And Prefill", "creator_id": "u-owner",
+        "status": "private", "deleted_at": null, "is_soft_hidden": false, "listing_preset_id": null,
+        "temperature": 1, "top_p": 0.97, "top_k": 64, "top_a": 0, "min_p": 0,
+        "max_context": 2000000, "max_tokens": 300,
+        "frequency_penalty": 0, "presence_penalty": 0, "repetition_penalty": 1,
+        "prompt_post_processing": "none",
+        "system_prompts": {
+          "impersonation_prompt": "", "new_chat_prompt": "", "new_group_chat_prompt": "",
+          "new_example_chat_prompt": "[Example Chat]", "continue_nudge_prompt": "",
+          "group_nudge_prompt": "", "assistant_prefill": "{{char}} looks at {{user}}:", "assistant_impersonation": ""
+        },
+        "settings": null, "raw_settings": {}
+      }],
+      "preset_prompts": [
+        { "id": "pp-11-0", "preset_id": "preset-11", "identifier": "main", "name": "Main Prompt", "content": "You are {{char}}, keeping watch through a long night with {{user}}. Speak plainly and stay grounded in the lighthouse.", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 0 },
+        { "id": "pp-11-1", "preset_id": "preset-11", "identifier": "styleNote", "name": "Style Note", "content": "Keep sentences short. Let silence do some of the work.", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 1 },
+        { "id": "pp-11-2", "preset_id": "preset-11", "identifier": "closingNote", "name": "Closing Note", "content": "Never rush {{user}} toward the ending; let the night breathe.", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 2 }
+      ]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "stPreset": {
+    "name": "Budget And Prefill",
+    "temperature": 1,
+    "top_p": 0.97,
+    "openai_max_tokens": 300,
+    "assistant_prefill": "{{char}} looks at {{user}}:",
+    "prompts": [
+      { "identifier": "main", "name": "Main Prompt", "content": "You are {{char}}, keeping watch through a long night with {{user}}. Speak plainly and stay grounded in the lighthouse.", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "styleNote", "name": "Style Note", "content": "Keep sentences short. Let silence do some of the work.", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "closingNote", "name": "Closing Note", "content": "Never rush {{user}} toward the ending; let the night breathe.", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 }
+    ],
+    "prompt_order": [{
+      "character_id": 100001,
+      "order": [
+        { "identifier": "main", "enabled": true },
+        { "identifier": "styleNote", "enabled": true },
+        { "identifier": "closingNote", "enabled": true }
+      ]
+    }]
+  },
+  "input": {
+    "characterId": "ch-11",
+    "chatId": "c-11",
+    "presetId": "preset-11",
+    "personaId": "p-11",
+    "contextLimit": 1100,
+    "maxResponseTokens": 300,
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." },
+      { "role": "user", "content": "Turn 1. The lamp needs oil again before the fog comes in. Turn 1. The lamp needs oil again before the fog comes in. Turn 1. The lamp needs oil again before the fog comes in. Turn 1. The lamp needs oil again before the fog comes in. Turn 1. The lamp needs oil again before the fog comes in." },
+      { "role": "assistant", "content": "Turn 2. Gulls are sheltering low under the gallery rail. Turn 2. Gulls are sheltering low under the gallery rail. Turn 2. Gulls are sheltering low under the gallery rail. Turn 2. Gulls are sheltering low under the gallery rail. Turn 2. Gulls are sheltering low under the gallery rail." },
+      { "role": "user", "content": "Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March. Turn 3. The logbook says the last keeper left in March." },
+      { "role": "assistant", "content": "Turn 4. Salt has crusted thick on the lower windows again. Turn 4. Salt has crusted thick on the lower windows again. Turn 4. Salt has crusted thick on the lower windows again. Turn 4. Salt has crusted thick on the lower windows again. Turn 4. Salt has crusted thick on the lower windows again." },
+      { "role": "user", "content": "Turn 5. The lamp needs oil again before the fog comes in. Turn 5. The lamp needs oil again before the fog comes in. Turn 5. The lamp needs oil again before the fog comes in. Turn 5. The lamp needs oil again before the fog comes in. Turn 5. The lamp needs oil again before the fog comes in." },
+      { "role": "assistant", "content": "Turn 6. Gulls are sheltering low under the gallery rail. Turn 6. Gulls are sheltering low under the gallery rail. Turn 6. Gulls are sheltering low under the gallery rail. Turn 6. Gulls are sheltering low under the gallery rail. Turn 6. Gulls are sheltering low under the gallery rail." },
+      { "role": "user", "content": "Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March. Turn 7. The logbook says the last keeper left in March." },
+      { "role": "assistant", "content": "Turn 8. Salt has crusted thick on the lower windows again. Turn 8. Salt has crusted thick on the lower windows again. Turn 8. Salt has crusted thick on the lower windows again. Turn 8. Salt has crusted thick on the lower windows again. Turn 8. Salt has crusted thick on the lower windows again." },
+      { "role": "user", "content": "Turn 9. The lamp needs oil again before the fog comes in. Turn 9. The lamp needs oil again before the fog comes in. Turn 9. The lamp needs oil again before the fog comes in. Turn 9. The lamp needs oil again before the fog comes in. Turn 9. The lamp needs oil again before the fog comes in." },
+      { "role": "assistant", "content": "Turn 10. Gulls are sheltering low under the gallery rail. Turn 10. Gulls are sheltering low under the gallery rail. Turn 10. Gulls are sheltering low under the gallery rail. Turn 10. Gulls are sheltering low under the gallery rail. Turn 10. Gulls are sheltering low under the gallery rail." },
+      { "role": "user", "content": "Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March. Turn 11. The logbook says the last keeper left in March." },
+      { "role": "assistant", "content": "Turn 12. Salt has crusted thick on the lower windows again. Turn 12. Salt has crusted thick on the lower windows again. Turn 12. Salt has crusted thick on the lower windows again. Turn 12. Salt has crusted thick on the lower windows again. Turn 12. Salt has crusted thick on the lower windows again." }
+    ],
+    "currentMessage": "Then let's finish the watch together, and I'll help you check the lamp before dawn."
+  }
+}

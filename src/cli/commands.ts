@@ -2,7 +2,8 @@
 // Copyright (C) 2026 the rp-core authors
 //
 // The non-turn subcommands: `init` (M1b), `new`, `import`, `sessions`, `show` (ARCHITECTURE.md §12.3,
-// §13, §15 M1a/M1b, D-72). `sessions` and `show` never take the session lock: they read the journal
+// §13, §15 M1a/M1b/M2, D-72). M2: `import` takes presets and world info too, `new` takes --preset and
+// --lore. `sessions` and `show` never take the session lock: they read the journal
 // with readSessionFile/listSessions and fold it themselves, so they work while another process runs a
 // turn. The price is that they never recover anything (recovery only runs on a locked open), so
 // `show` says so when the journal has turns without a closing line.
@@ -15,7 +16,7 @@ import { CONFIG_TEMPLATE, configPath } from '../config/config.ts';
 import { openTurns } from '../engine/recover.ts';
 import { parseModelRef } from '../engine/route.ts';
 import { systemClock } from '../engine/system.ts';
-import { importFile, ImportError } from '../formats/import.ts';
+import { importCard, importFile, ImportError } from '../formats/import.ts';
 import { loadFromLibrary } from '../formats/library.ts';
 import { validateCharacter, validatePersona, type Character, type ImportWarning, type Persona } from '../formats/native.ts';
 import type { DeepPartial, Entry, SessionConfig } from '../session/entries.ts';
@@ -24,6 +25,7 @@ import { DEFAULT_LOCK_TTL_MS, isLockStale, listSessions, readLock, readSessionFi
 import { UsageError } from './args.ts';
 import type { Io } from './io.ts';
 import { EXIT } from './oneshot.ts';
+import { addLoreId, RefError, resolveLoreRef, resolvePresetRef, type Resolved } from './refs.ts';
 import { messageText, renderPath, renderSessions } from './render.ts';
 import { connectionProblem, engineOptions, type Runtime } from './runtime.ts';
 
@@ -115,9 +117,17 @@ export function cmdImport(a: ImportArgs): number {
     warn(a.io, r.warnings);
     a.io.out.write(`${r.id}\n`);
     a.io.err.write(`rp-core: imported ${r.kind} "${r.value.name}" as ${r.path}\n`);
+    const use = USE_HINT[r.kind];
+    if (use) a.io.err.write(`rp-core: hint: ${use(r.id)}\n`);
   }
   return EXIT.done;
 }
+
+/** How to use what was imported. */
+const USE_HINT: Partial<Record<string, (id: string) => string>> = {
+  preset: (id) => `/preset ${id} in the chat, or rp-core new --preset ${id}`,
+  lorebook: (id) => `/lore add ${id} in the chat, or rp-core new --lore ${id}`,
+};
 
 // ---- new -----------------------------------------------------------------------------------------
 
@@ -128,6 +138,10 @@ export interface NewArgs {
   model?: string;
   /** The narrator binding's maxTokens (the reply limit; else the preset's, else the §11 reserve). */
   maxTokens?: number;
+  /** M2: the session's preset: 'builtin', a library id or an ST preset file (imported first). */
+  preset?: string;
+  /** M2: the session's lorebooks: library ids or world info / character_book files (imported first). */
+  lore?: string[];
   title?: string;
   json: boolean;
   io: Io;
@@ -145,7 +159,7 @@ export interface NewArgs {
 function resolveCard(a: NewArgs): { character: Character; warnings: ImportWarning[]; libraryId: string; imported: boolean } {
   if (existsSync(a.card)) {
     try {
-      const r = importFile(a.home, a.card);
+      const r = importCard(a.home, a.card);
       return { character: r.value, warnings: r.warnings, libraryId: r.id, imported: true };
     } catch (e) {
       if (e instanceof ImportError) throw new CliError(`cannot use the card: ${e.message}`);
@@ -208,10 +222,45 @@ function newSessionConfig(a: NewArgs): DeepPartial<SessionConfig> | undefined {
   return config;
 }
 
+/** A --preset / --lore ref resolved (a file imported, its warnings and the import said on stderr). */
+function useRef<T>(a: NewArgs, flag: string, resolve: () => Resolved<T>): Resolved<T> {
+  let r: Resolved<T>;
+  try {
+    r = resolve();
+  } catch (e) {
+    if (e instanceof RefError) throw new CliError(`${flag}: ${e.message}`);
+    throw e;
+  }
+  if (r.imported) {
+    warn(a.io, r.imported.warnings);
+    a.io.err.write(`rp-core: imported ${r.imported.file} as ${r.imported.path}\n`);
+  }
+  return r;
+}
+
+/** --preset and --lore on top of the config (books deduplicated, in the order given). */
+function withPresetAndLore(a: NewArgs, config: DeepPartial<SessionConfig> | undefined): DeepPartial<SessionConfig> | undefined {
+  const patch: DeepPartial<SessionConfig> = {};
+  if (a.preset !== undefined) patch.preset = useRef(a, '--preset', () => resolvePresetRef(a.home, a.preset!)).id;
+  if (a.lore && a.lore.length > 0) {
+    let ids: string[] = [];
+    for (const ref of a.lore) {
+      const r = useRef(a, '--lore', () => resolveLoreRef(a.home, ref));
+      // A world is read once by name: a later book with the same name takes the earlier one's place.
+      const next = addLoreId(a.home, ids, r.id, r.value.name);
+      if (next.replaced !== undefined) a.io.err.write(`rp-core: --lore ${r.id} "${r.value.name.trim()}" replaces ${next.replaced} (same name; a world is read once by name)\n`);
+      ids = next.ids;
+    }
+    patch.lorebooks = ids;
+  }
+  return Object.keys(patch).length > 0 ? mergePatch<DeepPartial<SessionConfig>>(config ?? {}, patch) : config;
+}
+
 /** `rp-core new --card <file>`: import the card, create the session, print its id (or open the REPL). */
 export async function cmdNew(a: NewArgs): Promise<number> {
-  const config = newSessionConfig(a);
+  const base = newSessionConfig(a);
   const persona = a.persona !== undefined ? resolvePersona(a.persona) : undefined;
+  const config = withPresetAndLore(a, base);
   const card = resolveCard(a);
   warn(a.io, card.warnings);
 
@@ -247,7 +296,11 @@ export async function cmdNew(a: NewArgs): Promise<number> {
     a.io.out.write(`${sessionId}\n`);
     const how = card.imported ? `card imported as library character ${card.libraryId}` : `library character ${card.libraryId}`;
     const n = greetings.length;
-    a.io.err.write(`rp-core: created session ${sessionId} "${title ?? ''}" with ${n} greeting${n === 1 ? '' : 's'} (${how})\n`);
+    const extra = [
+      ...(config?.preset !== undefined ? [`preset ${config.preset}`] : []),
+      ...(config?.lorebooks && config.lorebooks.length > 0 ? [`lorebooks ${config.lorebooks.join(', ')}`] : []),
+    ];
+    a.io.err.write(`rp-core: created session ${sessionId} "${title ?? ''}" with ${n} greeting${n === 1 ? '' : 's'} (${[how, ...extra].join('; ')})\n`);
   }
   return EXIT.done;
 }

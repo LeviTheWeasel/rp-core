@@ -108,7 +108,6 @@ describe('parseLine: commands', () => {
   });
 
   test('later milestones are named, unknown commands get a hint', () => {
-    expect(cmd('/preset')).toEqual({ name: 'later', command: 'preset', when: 'M2 (presets and lorebooks)' });
     expect(cmd('/memory list')).toMatchObject({ name: 'later', command: 'memory' });
     expect(cmd('/director on')).toMatchObject({ name: 'later', command: 'director' });
     expect(error('/me waves')).toContain('/help');

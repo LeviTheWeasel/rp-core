@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { detectKind, ImportError, importFile } from '../../src/formats/import.ts';
+import { detect, detectKind, ImportError, importFile } from '../../src/formats/import.ts';
 import { listLibrary, loadFromLibrary } from '../../src/formats/library.ts';
 import { tmpHome } from '../helpers.ts';
 import { b64json, chunk, makePng } from './png-writer.ts';
@@ -29,8 +29,9 @@ describe('detectKind', () => {
   });
 
   test('order: a card that also looks like something else is still a card; WI beats character_book', () => {
-    // a preset-looking flat object is never a card (firewall), so preset wins there
-    expect(detectKind(enc({ name: 'x', description: 'd', temperature: 1 }), 'x.json')).toBe('st_preset');
+    // a settings-looking flat object is never a card (firewall); with samplers only it is no preset either
+    expect(detectKind(enc({ name: 'x', description: 'd', temperature: 1 }), 'x.json')).toBe('unknown');
+    expect(detectKind(enc({ name: 'x', description: 'd', temperature: 1, prompt_order: [] }), 'x.json')).toBe('st_preset');
     // a V2 envelope is a card even if its data carries entries-like fields
     expect(detectKind(enc({ ...card, data: { ...card.data, entries: [] } }), 'x.json')).toBe('json_card');
     // an object with both an entries object and preset markers is a preset (preset comes first)
@@ -56,6 +57,20 @@ describe('detectKind', () => {
     expect(detectKind(enc({ name: 'm', entries: [{ keywords: ['a'], entry: 'x' }] }), 'x.json')).toBe('unknown');
   });
 
+  test('only chat-completion presets are SillyTavern presets (D-72): text-completion presets and request bodies are refused with a reason', () => {
+    // SillyBunny's NovelAI presets (default/content/presets/novel/*.json) carry temperature and no prompts.
+    const novel = { temperature: 1.16, max_length: 150, min_length: 1, top_k: 175, tail_free_sampling: 0.9, repetition_penalty: 1.68, order: [1, 0, 3] };
+    expect(detect(enc(novel))).toEqual({
+      kind: 'unknown',
+      reason: 'this is a SillyTavern text-completion preset (NovelAI samplers: max_length, min_length, tail_free_sampling), not a chat-completion preset; it is not imported',
+    });
+    expect(detect(enc({ model: 'gpt-4o', temperature: 0.7, messages: [{ role: 'user', content: 'hi' }] })).reason).toContain('an API request body');
+    expect(detect(enc({ temperature: 0.7 })).reason).toContain('not a SillyTavern chat-completion preset');
+    // A legacy (pre prompt-manager) preset and one with only a global order still are presets.
+    expect(detectKind(enc({ temperature: 0.9, main_prompt: 'Be {{char}}.' }), 'p.json')).toBe('st_preset');
+    expect(detectKind(enc({ temperature: 0.9, openai_max_context: 4095 }), 'p.json')).toBe('st_preset');
+  });
+
   test('a PNG card in iTXt is detected', () => {
     expect(detectKind(makePng([{ type: 'iTXt', keyword: 'ccv3', text: b64json(card), compressed: true }]), 'x.png')).toBe('png_card');
   });
@@ -75,7 +90,9 @@ describe('importFile', () => {
     expect(r.id).toBe('seraphina');
     expect(r.path).toBe(join(home, 'library', 'characters', 'seraphina.json'));
     expect(r.value.name).toBe('Seraphina');
-    expect(r.warnings.map((w) => w.path)).toContain('data.extensions.world');
+    // Seraphina's linked world "Eldoria" is its embedded character_book: no "import it separately" warning.
+    expect(r.warnings.map((w) => w.path)).not.toContain('data.extensions.world');
+    expect(r.kind === 'character' ? r.value.book?.name : undefined).toBe('Eldoria');
     expect(loadFromLibrary(home, 'characters', 'seraphina')).toEqual(JSON.parse(JSON.stringify(r.value)));
   });
 
@@ -101,7 +118,19 @@ describe('importFile', () => {
     expect(r.warnings.map((w) => w.code)).toContain('repaired_json');
   });
 
-  test('other kinds are refused until M2; unknown files say why; missing files are unreadable', () => {
+  test('M2: presets and world books import into their library folders', () => {
+    const home = tmpHome();
+    const src = tmpHome('rp-core-src-');
+    const p = importFile(home, write(src, 'p.json', preset));
+    expect([p.kind, p.id, p.path]).toEqual(['preset', 'p', join(home, 'library', 'presets', 'p.json')]);
+    const w = importFile(home, write(src, 'w.json', worldInfo));
+    expect([w.kind, w.id, w.path]).toEqual(['lorebook', 'w', join(home, 'library', 'lorebooks', 'w.json')]);
+    const b = importFile(home, write(src, 'b.json', charBook));
+    expect([b.kind, b.id]).toEqual(['lorebook', 'b']);
+    expect(listLibrary(home, 'lorebooks').map((x) => x.id)).toEqual(['b', 'w']);
+  });
+
+  test('unknown files say why; missing files are unreadable', () => {
     const home = tmpHome();
     const src = tmpHome('rp-core-src-');
     const err = (file: string): ImportError => {
@@ -113,9 +142,6 @@ describe('importFile', () => {
       }
       throw new Error('expected ImportError');
     };
-    expect(err(write(src, 'p.json', preset)).code).toBe('unsupported_until_m2');
-    expect(err(write(src, 'w.json', worldInfo)).code).toBe('unsupported_until_m2');
-    expect(err(write(src, 'b.json', charBook)).code).toBe('unsupported_until_m2');
     const unknown = err(write(src, 'u.json', { hello: 1 }));
     expect(unknown.code).toBe('unknown_format');
     expect(unknown.message).toContain('u.json');

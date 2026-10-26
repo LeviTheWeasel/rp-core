@@ -161,6 +161,7 @@ export function windowFor(
   binding: { conn: string; model: string },
   capsOverrides: Readonly<Record<string, { contextLength?: number }>>,
   sessionWindow: number | undefined,
+  presetWindow?: number,
 ): number | null {
   let w: number | null = null;
   for (let i = pathIds.length - 1; i >= 0 && w === null; i--) {
@@ -169,7 +170,8 @@ export function windowFor(
   }
   if (w === null) {
     const c = capsOverrides[`${binding.conn}:${binding.model}`]?.contextLength;
-    if (typeof c === 'number' && c > 0) w = c;
+    // A trace's window already holds the preset's limit; the model's own window does not (§10.2).
+    if (typeof c === 'number' && c > 0) w = typeof presetWindow === 'number' && presetWindow > 0 ? Math.min(c, presetWindow) : c;
   }
   if (w !== null && typeof sessionWindow === 'number' && sessionWindow > 0) w = Math.min(w, sessionWindow);
   return w;

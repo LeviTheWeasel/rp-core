@@ -1,0 +1,21 @@
+{
+  "about": "Key matching: whole words (Latin and Cyrillic), case sensitivity, regex keys, secondary logic, per-entry scan depth, speaker names in the scan text. Every entry has preventRecursion, so only direct matches fire.",
+  "messages": [
+    {
+      "user": false,
+      "text": "*Mira looks up from the logbook.* You came through that weather? Sit down and dry off."
+    },
+    {
+      "user": true,
+      "text": "I tie the boat to the anchor ring outside."
+    },
+    {
+      "user": false,
+      "text": "Good. The old ferry rope rots in this weather."
+    },
+    {
+      "user": true,
+      "text": "Мирный вечер, правда? Маяк горит. I set the kettle by the lamppost."
+    }
+  ]
+}

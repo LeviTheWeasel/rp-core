@@ -1,0 +1,25 @@
+{
+  "about": "One world entry per ST position (0–7), several orders, an outlet named by a preset prompt, and an author's note for positions 2/3.",
+  "messages": [
+    {
+      "user": false,
+      "text": "*Mira looks up from the logbook.* You came through that weather? Sit down and dry off."
+    },
+    {
+      "user": true,
+      "text": "I shake the rain off and set my satchel down. The ferry nearly turned back."
+    },
+    {
+      "user": false,
+      "text": "*She pours tea without asking.* It should have. Nobody crosses on a night like this."
+    },
+    {
+      "user": true,
+      "text": "I lift the lantern and look toward the harbor."
+    }
+  ],
+  "note": {
+    "text": "Author's note: keep the storm audible.",
+    "depth": 2
+  }
+}

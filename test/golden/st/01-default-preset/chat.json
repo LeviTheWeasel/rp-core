@@ -1,0 +1,21 @@
+{
+  "about": "ST's Default preset with a card that uses every field: system prompt override with {{original}}, post-history instructions, depth prompt, examples, persona.",
+  "messages": [
+    {
+      "user": false,
+      "text": "*Mira looks up from the logbook.* You came through that weather? Sit down and dry off."
+    },
+    {
+      "user": true,
+      "text": "I shake the rain off and set my satchel down. The ferry nearly turned back."
+    },
+    {
+      "user": false,
+      "text": "*She pours tea without asking.* It should have. Nobody crosses on a night like this."
+    },
+    {
+      "user": true,
+      "text": "I lift the lantern and look toward the harbor."
+    }
+  ]
+}

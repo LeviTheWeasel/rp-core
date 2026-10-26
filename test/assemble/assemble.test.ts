@@ -44,7 +44,9 @@ describe('builtin preset', () => {
     expect(t.tokens.estimated).toBe(t.blocks.reduce((a, b) => a + b.tok, 0));
     // "Hi." = 3 chars → ceil(3/3) = 1, plus 4 overhead.
     expect(t.blocks[6]).toEqual({ src: 'history', role: 'user', tok: 5 });
-    expect(t.lore).toEqual({ fired: [], cut: [], budget: 0 });
+    // M2: no book, nothing fired; the budget is 25 % of window − reserve (24 576).
+    expect(t.lore).toEqual({ fired: [], cut: [], budget: 6144 });
+    expect(t.tokens.counter).toBe('chars');
     expect(t.recap).toEqual({ ids: [], arcs: [], boundary: null });
     expect(t.prefill).toBeNull();
     expect(t.macros).toEqual({ unknown: [] });
@@ -103,7 +105,7 @@ describe('depth inserts (§10.1)', () => {
       m('u3', 'user', 'U3'),
     ]);
 
-  test('depth 0/1/4; at equal depth preset < card depth note < author note', () => {
+  test("depth 0/1/4; at equal depth preset < author note < card depth note (ST's extension-prompt key order)", () => {
     const p = preset([
       { id: 'main', role: 'system', enabled: true, content: 'MAIN', at: 'relative' },
       HISTORY_BLOCK,
@@ -123,8 +125,8 @@ describe('depth inserts (§10.1)', () => {
       'assistant|history|G',
       'user|history|U1',
       'system|preset:d4|DEPTH4',
-      'system|card_depth|CARD Mira',
       'user|author_note|NOTE Mira',
+      'system|card_depth|CARD Mira',
       'assistant|history|A1',
       'user|history|U2',
       'assistant|history|A2',
@@ -564,12 +566,22 @@ describe('budget (§11, D-49)', () => {
     for (let i = 1; i < dropped.length; i++) expect(dropped[i]!).toBeLessThanOrEqual(dropped[i - 1]!);
   });
 
-  test('mandatory part over the window → context_length_exceeded, nothing assembled', () => {
-    const r = run(100 + 22);
+  test('the greeting is the last resort: left out (as ST does) when only it does not fit, with a notice', () => {
+    // budget 22: greeting 10 + U 13 = 23 does not fit; U alone does.
+    const r = ok(run(100 + 22));
+    expect(r.messages.map((x) => textOf(x))).toEqual(['x'.repeat(27)]);
+    expect(r.trace.trimmed).toEqual({ from: 'g', to: 'm38' });
+    expect(r.notices.map((n) => n.code)).toEqual(['greeting_dropped']);
+  });
+
+  test('mandatory part over the window → context_length_exceeded, nothing assembled; the message names the parts', () => {
+    const r = run(100 + 12);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.code).toBe('context_length_exceeded');
-      expect(r.message).toContain('23 tokens');
+      expect(r.message).toContain('needs about 13 tokens');
+      expect(r.message).toContain('lore included: 0 of its budget 3');
+      expect(r.message).toContain('the greeting (10 tokens) is already left out');
     }
     const fat = assemble(input({ window: 200, reserve: 100 }));
     expect(fat.ok ? 'ok' : fat.code).toBe('context_length_exceeded');

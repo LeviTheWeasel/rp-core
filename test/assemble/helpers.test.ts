@@ -41,6 +41,21 @@ describe('slots', () => {
     expect(fillSlots('x﷐7﷑y', [], () => 'z')).toBe('x﷐7﷑y');
   });
 
+  test('example slots meet their neighbours on one newline (M2), other slots are glued as written', () => {
+    const refs: SlotRef[] = [];
+    const t = protectSlots('{{lore::examples_before}}{{lore::examples_after}}|{{lore::before}}{{lore::after}}', refs);
+    const all = (r: SlotRef) => ('name' in r ? r.name.toUpperCase() : '');
+    expect(fillSlots(t, refs, all)).toBe('EXAMPLES_BEFORE\nEXAMPLES_AFTER|BEFOREAFTER');
+    // Empty neighbours add nothing; an existing newline is not doubled.
+    const one = (name: string) => (r: SlotRef) => ('name' in r && r.name === name ? 'X' : '');
+    expect(fillSlots(t, refs, one('examples_before'))).toBe('X\n|');
+    const lone: SlotRef[] = [];
+    expect(fillSlots(protectSlots('{{lore::examples_before}}', lone), lone, () => 'X')).toBe('X');
+    const nl: SlotRef[] = [];
+    expect(fillSlots(protectSlots('A\n{{lore::examples_after}}', nl), nl, () => 'X')).toBe('A\nX');
+    expect(fillSlots(protectSlots('A{{lore::examples_after}}', nl), nl, () => 'X')).toBe('A\nX');
+  });
+
   test('soleMacro recognises a block that is exactly one argless macro', () => {
     expect(soleMacro('{{personality}}')).toBe('personality');
     expect(soleMacro('  {{Scenario}}\n')).toBe('scenario');
@@ -56,18 +71,25 @@ describe('formats (D-70)', () => {
     expect(applyFormat('', 'v')).toBe('v');
   });
 
-  test('wi_format wraps non-empty lore and outlet values only', () => {
+  test('wi_format wraps non-empty lore::before / lore::after values only (ST formatWorldInfo)', () => {
     const formats = { wi: '<lore>{0}</lore>' };
     expect(renderSlot({ kind: 'lore', name: 'before' }, 'L', formats)).toBe('<lore>L</lore>');
-    expect(renderSlot({ kind: 'outlet', name: 'x' }, 'O', formats)).toBe('<lore>O</lore>');
+    expect(renderSlot({ kind: 'lore', name: 'After' }, 'L', formats)).toBe('<lore>L</lore>');
+    // ST sends outlets and example entries unwrapped.
+    expect(renderSlot({ kind: 'outlet', name: 'x' }, 'O', formats)).toBe('O');
+    expect(renderSlot({ kind: 'lore', name: 'examples_before' }, 'E', formats)).toBe('E');
     expect(renderSlot({ kind: 'lore', name: 'before' }, '', formats)).toBe('');
     expect(renderSlot({ kind: 'recap' }, 'R', formats)).toBe('R');
+    // A blank format is no format.
+    expect(renderSlot({ kind: 'lore', name: 'before' }, 'L', { wi: '  ' })).toBe('L');
   });
 
   test('example chats are headed by new_example_chat_prompt; a missing first <START> is implied (ST)', () => {
     expect(formatExamples('a\n<START>\nb\n<start>\n\n', '[Example Chat]')).toBe('[Example Chat]\na\n[Example Chat]\nb');
     expect(formatExamples('<START>\na', undefined)).toBe('<START>\na');
     expect(formatExamples('   ', '[E]')).toBe('   ');
+    // present but blank: <START> only separates, nothing heads the chunks (ST drops the empty header)
+    expect(formatExamples('<START>\na\n<START>\nb', '')).toBe('a\nb');
   });
 });
 

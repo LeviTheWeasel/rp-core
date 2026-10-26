@@ -1,0 +1,13 @@
+{
+  "about": "Macros: unknown ones stay literal, legacy <USER>/<BOT>, comments, trim, variables, and a user message holding macros.",
+  "messages": [
+    {
+      "user": false,
+      "text": "*Mira looks up from the logbook.* You came through that weather? Sit down and dry off."
+    },
+    {
+      "user": true,
+      "text": "I say {{char}} out loud and write {{nonsense}} on the fogged glass."
+    }
+  ]
+}

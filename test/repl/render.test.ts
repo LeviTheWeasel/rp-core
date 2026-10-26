@@ -283,6 +283,9 @@ describe('reports', () => {
     );
     expect(bannerLine({ id: 's_1' }, { conn: 'a', model: 'b' }, null, plain)).toContain('(untitled)');
     expect(bannerLine({ id: 's_1' }, { conn: 'a', model: 'b' }, null, plain)).toContain('ctx ?');
+    // The model's window unknown but a preset (or the session) caps it: the bound is still news.
+    expect(bannerLine({ id: 's_1' }, { conn: 'a', model: 'b' }, null, plain, 4095)).toEndWith('· ctx ≤4095');
+    expect(bannerLine({ id: 's_1' }, { conn: 'a', model: 'b' }, 4095, plain, 4095)).toEndWith('· ctx 4095');
   });
 
   test('renderNumberedPath numbers the path from 1 and marks hidden/edited', () => {

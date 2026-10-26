@@ -9,10 +9,16 @@
 // small state machines (the prose styler and the turn printer); nothing here touches a session.
 
 import type { Event } from '../protocol/events.ts';
-import type { RefusalCode } from '../engine/api.ts';
+import type { PreviewResult, RefusalCode } from '../engine/api.ts';
+import type { ImportWarning } from '../formats/native.ts';
+import type { LoreVerdict } from '../lore/engine.ts';
+import { entryLabel } from '../lore/engine.ts';
+import type { PromptMsg } from '../providers/types.ts';
+import { estimateMessage } from '../prompt/tokens.ts';
 import type { Generation, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { markers, messageText } from './render.ts';
+import type { BookRow } from './refs.ts';
 import type { TailRow, UsageSummary } from './repl-journal.ts';
 
 // ---- styles ----------------------------------------------------------------------------------------
@@ -397,15 +403,21 @@ export function lastWords(text: string, max = 40): string {
 
 // ---- command reports ------------------------------------------------------------------------------------
 
-/** The banner line: "session s_4fa2 · Mira · narrator local:qwen3-14b (tools: off) · ctx 16384". */
+/**
+ * The banner line: "session s_4fa2 · Mira · narrator local:qwen3-14b (tools: off) · ctx 16384".
+ * With the model's window unknown, `cap` (the preset's or the session's own limit) still bounds it:
+ * "ctx ≤4095"; with neither, "ctx ?".
+ */
 export function bannerLine(
   header: Pick<SessionHeader, 'id' | 'title'>,
   narrator: { conn: string; model: string },
   window: number | null,
   style: Style,
+  cap?: number,
 ): string {
   const title = header.title ?? '(untitled)';
-  return style.bold(`session ${header.id} · ${title} · narrator ${narrator.conn}:${narrator.model} (tools: off) · ctx ${window ?? '?'}`);
+  const ctx = window !== null ? String(window) : cap !== undefined && cap > 0 ? `≤${cap}` : '?';
+  return style.bold(`session ${header.id} · ${title} · narrator ${narrator.conn}:${narrator.model} (tools: off) · ctx ${ctx}`);
 }
 
 /** /show: the active path, numbered from 1 (the numbers /e, /hide, /rewind and /fork take). */
@@ -483,8 +495,46 @@ export function renderUsage(u: UsageSummary): string {
   return parts.join(' · ') + (notes.length > 0 ? `\n  (${notes.join('; ')})` : '');
 }
 
-/** /trace: a summary of the newest trace of the last answer. */
-export function renderTrace(id: string, t: { trace: Trace; gen?: Generation; continued: boolean }): string {
+/** `book:id` with the entry's title when it has one: `"Gull Point" harbor:0`. */
+function entryName(book: string, id: string, titles?: ReadonlyMap<string, string>): string {
+  const label = entryLabel(book, id);
+  const title = titles?.get(label);
+  return title ? `"${title}" ${label}` : label;
+}
+
+/** ' · not sent: …' for a fired entry whose text nothing in the request took (Trace.lore.unsent). */
+function unsentNote(lore: Trace['lore'] | undefined, label: string): string {
+  const slot = lore?.unsent && Object.hasOwn(lore.unsent, label) ? lore.unsent[label] : undefined;
+  return slot === undefined ? '' : ` · not sent: the preset has no enabled ${slot}`;
+}
+
+/**
+ * The lore lines of a trace (M2): what fired and why, what the budget cut, the budget. Nothing for a
+ * trace with no lore at all (M1 traces, sessions without books).
+ */
+export function loreTraceLines(tr: Trace, titles?: ReadonlyMap<string, string>): string[] {
+  const lore = tr.lore;
+  if (!lore || (lore.fired.length === 0 && lore.cut.length === 0 && !(lore.budget > 0))) return [];
+  const lines: string[] = [];
+  if (lore.fired.length === 0) lines.push(`  lore: nothing fired · budget ${lore.budget} tok`);
+  else {
+    lines.push(`  lore fired: ${lore.fired.length} · budget ${lore.budget} tok`);
+    for (const f of lore.fired) lines.push(`    ✓ ${entryName(f.book, f.id, titles)} (${f.why})${unsentNote(lore, entryLabel(f.book, f.id))}`);
+  }
+  if (lore.cut.length > 0) lines.push(`  lore cut by the budget: ${lore.cut.map((l) => (titles?.get(l) ? `"${titles.get(l)}" ${l}` : l)).join(', ')}`);
+  return lines;
+}
+
+/**
+ * /trace: a summary of the newest trace of the last answer. `after` goes right after the stored
+ * lore lines: the recomputed misses and the notice that the inputs changed (repl.ts).
+ */
+export function renderTrace(
+  id: string,
+  t: { trace: Trace; gen?: Generation; continued: boolean },
+  titles?: ReadonlyMap<string, string>,
+  after: readonly string[] = [],
+): string {
   const tr = t.trace;
   const tok = `prompt ~${tr.tokens.estimated} tok${tr.tokens.reported !== undefined ? ` (server: ${tr.tokens.reported})` : ''}`;
   const lines = [
@@ -493,7 +543,7 @@ export function renderTrace(id: string, t: { trace: Trace; gen?: Generation; con
     `  trimmed: ${tr.trimmed ? `${tr.trimmed.from} … ${tr.trimmed.to}` : 'nothing'} · prefill: ${tr.prefill ?? 'none'}`,
     `  unknown macros: ${tr.macros.unknown.length > 0 ? tr.macros.unknown.join(', ') : 'none'}`,
   ];
-  if (tr.lore.fired.length > 0) lines.push(`  lore fired: ${tr.lore.fired.length}${tr.lore.cut.length > 0 ? `, cut ${tr.lore.cut.length}` : ''}`);
+  lines.push(...loreTraceLines(tr, titles), ...after);
   if (tr.calls.length > 0) lines.push(`  calls: ${tr.calls.map((c) => `${c.agent} ${c.model} ${(c.ms / 1000).toFixed(1)}s`).join(', ')}`);
   if (tr.partial) lines.push('  (partial: recovered after an interruption)');
   return lines.join('\n');
@@ -528,4 +578,277 @@ export function refusalText(code: RefusalCode, message: string): string {
   const human = REFUSAL_TEXT[code] ?? 'refused';
   const detail = message && message !== code && !human.includes(message) ? ` (${message})` : '';
   return `refused [${code}]: ${human}${detail}`;
+}
+
+// ---- presets and lorebooks (M2) -----------------------------------------------------------------------
+
+/** The cap words of a preset's window limit (openai_max_context), or '' when it does not shrink the model's. */
+export function presetCapText(cap: number | undefined, model: number | null): string {
+  if (cap === undefined || !(cap > 0) || (model !== null && cap >= model)) return '';
+  return `it caps the window at ${cap}${model !== null ? ` of the model's ${model}` : ''} tokens`;
+}
+
+/**
+ * /preset with no argument: the session's preset (and the window it caps, when it does: `cap` is
+ * the preset's own limit and the model's window, null when unknown) and what the library holds.
+ * 'builtin' is always the built-in layout: a library file of that id (saved before the id was
+ * reserved) can never be selected, so it is not listed as one, only named.
+ */
+export function renderPresets(
+  current: string,
+  library: readonly { id: string; name: string }[],
+  cap?: { maxContext?: number; model: number | null },
+): string {
+  const shadowed = library.some((r) => r.id === 'builtin');
+  const rows = [{ id: 'builtin', name: '' }, ...library.filter((r) => r.id !== 'builtin')];
+  const width = Math.max(...rows.map((r) => r.id.length));
+  const caps = cap ? presetCapText(cap.maxContext, cap.model) : '';
+  const lines = [`preset: ${current}${rows.some((r) => r.id === current) ? '' : ' (missing from the library: the next turn is refused)'}${caps ? ` · ${caps}` : ''}`];
+  for (const r of rows) {
+    const what = r.id === 'builtin' ? 'the built-in layout' : r.name !== r.id ? `"${r.name}"` : '';
+    lines.push(`${r.id === current ? '*' : ' '} ${r.id.padEnd(width)}  ${what}`.trimEnd());
+  }
+  if (shadowed) lines.push("(library/presets/builtin.json is not listed: 'builtin' always means the built-in layout; rename the file to use it)");
+  lines.push('(/preset <id> switches; /preset <file> imports a SillyTavern preset first)');
+  return lines.join('\n');
+}
+
+/**
+ * What an import said, briefly: one line, then at most `max` warnings (each names what the file
+ * has that rp-core does not honour) and a count of the rest.
+ */
+export function renderImported(
+  kind: string,
+  imp: { file: string; path: string; warnings: readonly ImportWarning[] },
+  id: string,
+  max = 3,
+): string {
+  const n = imp.warnings.length;
+  const lines = [`imported ${kind} ${id} from ${imp.file}${n > 0 ? ` (${n} warning${n === 1 ? '' : 's'})` : ''}`];
+  for (const w of imp.warnings.slice(0, max)) lines.push(`  ! ${w.message}${w.path ? ` (${w.path})` : ''}`);
+  if (n > max) lines.push(`  … and ${n - max} more (rp-core import <file> lists them all)`);
+  return lines.join('\n');
+}
+
+const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+
+/** /lore: every book a turn scans, in scan order, and the library books not in use. */
+export function renderLoreBooks(rows: readonly BookRow[], library: readonly { id: string; name: string }[]): string {
+  const lines: string[] = [];
+  if (rows.length === 0) lines.push('no lorebooks: /lore add <id|file> adds one (a SillyTavern world info file is imported)');
+  else {
+    lines.push('lorebooks, in the order a turn scans them:');
+    const width = Math.max(...rows.map((r) => r.key.length));
+    for (const r of rows) {
+      const whose = r.owner === 'card' ? "the card's own book " : r.owner === 'persona' ? "your persona's book " : '';
+      const body = r.problem
+        ? `(${r.problem})`
+        : `${whose}"${r.name}" · ${plural(r.entries ?? 0, 'entry', 'entries')}${r.disabled ? ` (${r.disabled} disabled)` : ''}` +
+          (r.shadowedBy ? ` · not read: ${r.shadowedBy} has the same name (a world is read once, as in SillyTavern)` : '');
+      lines.push(`  ${r.key.padEnd(width)}  ${body}`);
+    }
+  }
+  const used = new Set(rows.map((r) => r.key));
+  const spare = library.filter((b) => !used.has(b.id)).map((b) => b.id);
+  if (spare.length > 0) lines.push(`in the library, not in this session: ${spare.join(', ')} (/lore add <id>)`);
+  return lines.join('\n');
+}
+
+/** A verdict's numbers in words: the roll, the timers, the budget (in budget tokens: the counts the budget compares). */
+function verdictDetail(v: LoreVerdict): string[] {
+  const d = v.detail;
+  const out: string[] = [];
+  if (d?.rolled !== undefined && d.needed !== undefined) out.push(`roll ${d.rolled.toFixed(2)} ${v.fired ? '≤' : '>'} ${d.needed.toFixed(2)}`);
+  if (d?.remaining !== undefined) {
+    const what = v.why === 'sticky' ? 'sticky for' : v.why === 'cooldown' ? 'cooldown:' : v.why === 'delay' ? 'delayed:' : 'for';
+    out.push(`${what} ${plural(d.remaining, 'more message')}`);
+  }
+  if (d?.overflowed) out.push(`skipped: an earlier entry had already used up the budget (alone it costs ${d.cost ?? '?'} budget tok)`);
+  else if (d?.cost !== undefined && d.left !== undefined) out.push(`costs ${d.cost} budget tok, ${d.left} left`);
+  if (d?.recursionLimit !== undefined) out.push(`recursion would wake it, but it stops after ${plural(d.recursionLimit, 'loop')}`);
+  if (v.regexErrors && v.regexErrors.length > 0) out.push(`bad regex ${v.regexErrors.join(', ')}`);
+  return out;
+}
+
+/** Reasons that make up the bulk of a large book; only these are folded into a count. */
+const QUIET = new Set(['no-key-match', 'disabled']);
+
+/** A no-key-match that recursion would have woken past the loop limit is news, not bulk. */
+const isQuiet = (v: LoreVerdict): boolean => QUIET.has(v.why) && v.detail?.recursionLimit === undefined;
+
+/**
+ * One verdict as a line (after `indent`): mark, title and label, reason, keys, loop, the numbers,
+ * and for a fire its own token count — raw, as /preview's rows count (v.rawTokens; the budget's
+ * corrected count when the run had no raw counter). A budget cut's numbers are its detail.
+ */
+function verdictLine(v: LoreVerdict, lore: Trace['lore'] | undefined, style: Style, titles: ReadonlyMap<string, string> | undefined, indent: string): string {
+  const name = v.title?.trim() || titles?.get(entryLabel(v.book, v.id));
+  const parts = [`${v.fired ? '✓' : '✗'} ${name ? `"${name}" ` : ''}${entryLabel(v.book, v.id)}`, v.why];
+  if (v.matched.length > 0) parts.push(`keys: ${v.matched.join(', ')}`);
+  // A miss is judged again in every loop; only a fire's loop says something.
+  if (v.fired && v.loop > 0) parts.push(`recursion loop ${v.loop}`);
+  parts.push(...verdictDetail(v));
+  if (v.fired) parts.push(`${v.rawTokens ?? v.tokens} tok`);
+  const text = `${indent}${parts.join(' · ')}${v.fired ? unsentNote(lore, entryLabel(v.book, v.id)) : ''}`;
+  return v.fired ? text : style.dim(text);
+}
+
+/** "no-key-match 12, disabled 3": a count per reason, in first-seen order. */
+function countsByWhy(vs: readonly LoreVerdict[]): string {
+  const by = new Map<string, number>();
+  for (const v of vs) by.set(v.why, (by.get(v.why) ?? 0) + 1);
+  return [...by].map(([why, n]) => `${why} ${n}`).join(', ');
+}
+
+/** The factor as the budget line names it: ×1.15. */
+const factorText = (f: number): string => `×${f.toFixed(2)}`;
+
+/**
+ * The budget part of a verdicts' totals line: "909 of 949 budget tok (counts ×1.15 for this model)".
+ * Budget tokens are the raw counts scaled by the model's EMA correction [D-50]; without the run's
+ * figures (an older engine), the bare budget.
+ */
+function budgetText(lore: Trace['lore'] | undefined, use: { used: number; factor: number } | undefined): string[] {
+  if (!lore) return [];
+  if (!use) return [`budget ${lore.budget} budget tok`];
+  const factor = use.factor !== 1 ? ` (counts ${factorText(use.factor)} for this model)` : '';
+  return [`${use.used} of ${lore.budget} budget tok${factor}`];
+}
+
+/**
+ * /lore test and `preview --verdicts`: one line per entry, fired first (acceptance order kept), then
+ * the others; a large book's no-key-match / disabled tail beyond `max` lines is summed up in one
+ * line. Then the totals: the fired entries' own tokens (raw, as /preview counts them) and the budget
+ * in budget tokens with the model's correction factor (`use`, PreviewResult.loreUse).
+ */
+export function renderVerdicts(
+  verdicts: readonly LoreVerdict[],
+  lore: Trace['lore'] | undefined,
+  style: Style,
+  titles?: ReadonlyMap<string, string>,
+  max = 40,
+  use?: { used: number; factor: number },
+): string {
+  if (verdicts.length === 0) return 'no lore entries to test: /lore add <id|file> adds a book';
+  const line = (v: LoreVerdict): string => verdictLine(v, lore, style, titles, '  ');
+  const fired = verdicts.filter((v) => v.fired);
+  const loud = verdicts.filter((v) => !v.fired && !isQuiet(v));
+  const quiet = verdicts.filter((v) => !v.fired && isQuiet(v));
+  const lines = [...fired.map(line), ...loud.map(line)];
+  const room = Math.max(0, max - lines.length);
+  lines.push(...quiet.slice(0, room).map(line));
+  const rest = quiet.slice(room);
+  if (rest.length > 0) lines.push(style.dim(`  … and ${rest.length} more not fired (${countsByWhy(rest)})`));
+  const cut = verdicts.filter((v) => v.why === 'budget-cut').length;
+  const used = fired.reduce((n, v) => n + (v.rawTokens ?? v.tokens), 0);
+  const totals = [`${fired.length} of ${verdicts.length} fired`, ...(cut > 0 ? [`${cut} cut by the budget`] : []), `${used} tok of lore`, ...budgetText(lore, use)];
+  lines.push(totals.join(' · '));
+  return lines.join('\n');
+}
+
+/**
+ * /trace (M2 final fix, D-45): the misses of a past answer's verdicts, recomputed from its seed and
+ * clock, for the lines after the stored fired / cut / unsent ones. Each miss with a reason of its
+ * own gets a line; the no-key-match and disabled ones (a large book's bulk) are one count line, as
+ * /lore test folds them. Budget cuts the stored line already names are left out. Empty when nothing
+ * was missed. `continued`: the trace shown is a continue's, the verdicts are of the answer's own request.
+ */
+export function renderTraceMisses(
+  verdicts: readonly LoreVerdict[],
+  lore: Trace['lore'] | undefined,
+  style: Style,
+  titles?: ReadonlyMap<string, string>,
+  continued = false,
+): string[] {
+  const stored = new Set(lore?.cut ?? []);
+  const misses = verdicts.filter((v) => !v.fired && !(v.why === 'budget-cut' && stored.has(entryLabel(v.book, v.id))));
+  if (misses.length === 0) return [];
+  const loud = misses.filter((v) => !isQuiet(v));
+  const quiet = misses.filter(isQuiet);
+  const what = continued ? "recomputed for the answer's own request, before its continue" : 'recomputed from its seed';
+  const lines = [`  lore not fired (${what}):`, ...loud.map((v) => verdictLine(v, lore, style, titles, '    '))];
+  if (quiet.length > 0) lines.push(style.dim(`    ✗ ${loud.length > 0 ? `${quiet.length} more` : plural(quiet.length, 'entry', 'entries')}: ${countsByWhy(quiet)}`));
+  return lines;
+}
+
+/** A prompt message's text as sent: text blocks as they are, other blocks as a bracketed line. */
+export function promptText(m: PromptMsg): string {
+  return m.blocks
+    .map((b) => {
+      switch (b.k) {
+        case 'text':
+          return b.text;
+        case 'reasoning':
+          return `[reasoning] ${b.text}`;
+        case 'tool_call':
+          return `[tool call ${b.name} ${b.args}]`;
+        case 'tool_result':
+          return `[tool result ${b.name}${b.error ? ' (error)' : ''}] ${b.text}`;
+        default:
+          return '';
+      }
+    })
+    .join('');
+}
+
+/** What the request is built for, in words. */
+function previewWhat(r: Extract<PreviewResult, { ok: true }>): string {
+  if (r.upTo === 'draft') return 'a reply to your draft';
+  switch (r.kind) {
+    case 'reply':
+      return `a reply to ${r.upTo}`;
+    case 'swipe':
+      return `a swipe (a new answer to ${r.upTo})`;
+    case 'continue':
+      return `a continue of ${r.upTo}`;
+  }
+}
+
+const samplerText = (s: Record<string, unknown>): string => {
+  const entries = Object.entries(s).filter(([, v]) => v !== undefined);
+  return entries.length === 0 ? 'none' : entries.map(([k, v]) => `${k} ${Array.isArray(v) ? JSON.stringify(v) : String(v)}`).join(', ');
+};
+
+/**
+ * /preview and `rp-core preview`: kind and model, then every message numbered with its role, its
+ * source and its token count, followed by its full text; then prefill, max tokens, samplers, tools,
+ * the lore lines and the notices.
+ */
+export function renderPreview(r: Extract<PreviewResult, { ok: true }>, style: Style, titles?: ReadonlyMap<string, string>): string {
+  const tr = r.trace;
+  const counter = tr.tokens.counter ? ` (${tr.tokens.counter})` : '';
+  const lines = [
+    style.bold(`preview of ${previewWhat(r)} · ${r.model.connection}:${r.model.model}`),
+    `  window ${tr.window} · reserve ${tr.reserve} · prompt ~${tr.tokens.estimated} tok${counter} · ${plural(r.messages.length, 'message')} · nothing was sent`,
+  ];
+  // trace.blocks is 1:1 with the messages assemble produced; shaping may merge some, so the counts
+  // are taken from it only when it still lines up.
+  const aligned = tr.blocks.length === r.messages.length;
+  r.messages.forEach((m, i) => {
+    const tok = aligned ? tr.blocks[i]!.tok : estimateMessage(m);
+    lines.push('', style.bold(`#${i + 1} ${m.role} · ${m.src} · ${tok} tok`));
+    const text = promptText(m);
+    lines.push(text === '' ? style.dim('(empty)') : text);
+  });
+  lines.push('');
+  // The samplers as the connection sends them; the ones its caps drop are named apart.
+  const dropped = new Set(r.samplersNotSent ?? []);
+  const sent = Object.fromEntries(Object.entries(r.samplers).filter(([k]) => !dropped.has(k)));
+  lines.push(`prefill: ${r.prefill === null ? 'none' : JSON.stringify(r.prefill)} · max tokens ${r.maxTokens} · samplers: ${samplerText(sent)}`);
+  if (dropped.size > 0) lines.push(`not sent by this connection: ${[...dropped].join(', ')}`);
+  lines.push(`tools: ${r.tools.length === 0 ? 'none' : r.tools.map((t) => t.name).join(', ')}`);
+  lines.push(...loreTraceLines(tr, titles));
+  for (const n of r.notices) lines.push(style.yellow(noticeText(n)));
+  return lines.join('\n');
+}
+
+/** --wire: the HTTP request the connection would send (no headers: they carry the key). */
+export function renderWire(wire: { url: string; body: unknown }): string {
+  return `POST ${wire.url}\n${JSON.stringify(wire.body, null, 2)}`;
+}
+
+/** A preview that could not be built: its code and message. */
+export function previewFailureText(r: Extract<PreviewResult, { ok: false }>): string {
+  const human = (REFUSAL_TEXT as Partial<Record<string, string>>)[r.code];
+  return `preview refused [${r.code}]: ${human ?? r.message}${human && r.message && r.message !== r.code && !human.includes(r.message) ? ` (${r.message})` : ''}`;
 }

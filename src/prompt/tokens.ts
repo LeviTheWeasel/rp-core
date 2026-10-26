@@ -2,7 +2,9 @@
 // Copyright (C) 2026 the rp-core authors
 //
 // Token estimate (ARCHITECTURE.md §11). M1: chars/3, Cyrillic chars/2.5, conservative, no deps.
-// M1b: the per-model EMA correction (emaFactor, D-50); gpt-tokenizer arrives in M2 behind the same functions.
+// M1b: the per-model EMA correction (emaFactor, D-50). M2: gpt-tokenizer o200k behind the same
+// functions (TokenCounter); the counter's id goes to trace.tokens.counter so the EMA only learns
+// from samples counted the same way. o200k loads on the first count and remembers recent counts.
 // CONTRACT FILE: signatures are fixed; the prompt agent implements the bodies.
 
 import type { PromptMsg } from '../providers/types.ts';
@@ -25,11 +27,127 @@ function isCyrillic(c: number): boolean {
   );
 }
 
+// ---- counters (M2) -----------------------------------------------------------------------------
+
+/** A way to count tokens. `id` is recorded in trace.tokens.counter. */
+export interface TokenCounter {
+  readonly id: 'chars' | 'o200k';
+  count(text: string): number;
+}
+
+/** M1's estimate: chars/3, Cyrillic chars/2.5 (charsEstimate). Tests that pin token numbers use it. */
+export const CHARS_COUNTER: TokenCounter = { id: 'chars', count: (text) => charsEstimate(text) };
+
+type CountTokens = (text: string, opts: { disallowedSpecial: Set<string> }) => number;
+
+/** o200k's countTokens, required on first use: loading the BPE ranks takes ~0.3 s. */
+let o200kCount: CountTokens | undefined;
+function o200k(): CountTokens {
+  if (!o200kCount) {
+    // A synchronous require keeps the counter synchronous; Bun resolves the package's cjs build.
+    const mod = require('gpt-tokenizer/encoding/o200k_base') as { countTokens: CountTokens };
+    o200kCount = mod.countTokens;
+  }
+  return o200kCount;
+}
+
+/** True once the o200k tables are loaded (tests check that loading is lazy). */
+export function o200kLoaded(): boolean {
+  return o200kCount !== undefined;
+}
+
+/** Special tokens are plain text: "<|endoftext|>" in a card is counted, never thrown on. */
+const NO_SPECIAL = { disallowedSpecial: new Set<string>() };
+
+/**
+ * Counts of recent texts. A turn measures the same history messages several times (budget, trace,
+ * the engine's check), and the next turn measures them again; BPE is the expensive part, a Map
+ * lookup is not. Deterministic, so it changes no result. Least recently used entries go first when
+ * either cap is reached.
+ */
+const MEMO_MAX = 4096;
+/** The most texts the memo may grow to for one very long chat (ensureMemoCapacity). */
+const MEMO_MAX_GROWN = 65_536;
+/** Characters kept in all (~16 MB of UTF-16): lore budget texts can be long. */
+const MEMO_MAX_CHARS = 8_000_000;
+let memoMax = MEMO_MAX;
+/** BPE runs so far (tests: a turn over a known history must hit the memo). */
+let bpeRuns = 0;
+/** Texts shorter than this are cheaper to count than to remember. */
+const MEMO_MIN_LENGTH = 64;
+const memo = new Map<string, number>();
+let memoChars = 0;
+
+function countO200k(text: string): number {
+  if (!text) return 0;
+  if (text.length < MEMO_MIN_LENGTH || text.length > MEMO_MAX_CHARS) {
+    bpeRuns++;
+    return o200k()(text, NO_SPECIAL);
+  }
+  const hit = memo.get(text);
+  if (hit !== undefined) {
+    // Refresh: a Map iterates in insertion order, so the first key is the least recently used.
+    memo.delete(text);
+    memo.set(text, hit);
+    return hit;
+  }
+  bpeRuns++;
+  const n = o200k()(text, NO_SPECIAL);
+  while (memo.size > 0 && (memo.size >= memoMax || memoChars + text.length > MEMO_MAX_CHARS)) {
+    const oldest = memo.keys().next().value as string;
+    memo.delete(oldest);
+    memoChars -= oldest.length;
+  }
+  memo.set(text, n);
+  memoChars += text.length;
+  return n;
+}
+
+/**
+ * Let the memo hold at least `texts` texts (up to MEMO_MAX_GROWN; the character cap still holds).
+ * A turn walks every sent message several times in order (assemble, the trace, the engine's check);
+ * an LRU smaller than the request misses on every pass of a very long chat. assemble calls this with
+ * the size of the request it builds. It never shrinks: results do not depend on it.
+ */
+export function ensureMemoCapacity(texts: number): void {
+  if (Number.isFinite(texts) && texts > memoMax) memoMax = Math.min(MEMO_MAX_GROWN, Math.ceil(texts));
+}
+
+/** How many texts o200k has tokenized so far (memo misses and short texts). For tests. */
+export function o200kRuns(): number {
+  return bpeRuns;
+}
+
+/**
+ * gpt-tokenizer's o200k_base, loaded lazily on the first count (it takes ~0.3 s), with every
+ * special token counted as plain text (`disallowedSpecial: new Set()`): a card that contains
+ * "<|endoftext|>" must not throw.
+ */
+export const O200K_COUNTER: TokenCounter = {
+  id: 'o200k',
+  count: (text) => countO200k(text),
+};
+
+/** The counter assemble and the engine use when none is given. M2: O200K_COUNTER. */
+export function defaultCounter(): TokenCounter {
+  return O200K_COUNTER;
+}
+
+/** The counter a trace names (Trace.tokens.counter; absent = 'chars', M1). */
+export function counterById(id: 'chars' | 'o200k' | undefined): TokenCounter {
+  return id === 'o200k' ? O200K_COUNTER : CHARS_COUNTER;
+}
+
+/** The token count of `text` by `counter` (default: defaultCounter()). */
+export function estimateTokens(text: string, counter?: TokenCounter): number {
+  return (counter ?? defaultCounter()).count(text);
+}
+
 /**
  * ceil(other / 3 + cyrillic / 2.5), counted per character class. Characters are UTF-16 units, so an
  * astral character (emoji) counts twice: that errs high, which is the safe side for a budget.
  */
-export function estimateTokens(text: string): number {
+export function charsEstimate(text: string): number {
   if (!text) return 0;
   let cyr = 0;
   for (let i = 0; i < text.length; i++) if (isCyrillic(text.charCodeAt(i))) cyr++;
@@ -40,31 +158,32 @@ export function estimateTokens(text: string): number {
 }
 
 /** One block's estimate: everything of it that goes on the wire, ids and tool names included. */
-export function estimateBlock(block: Block): number {
+export function estimateBlock(block: Block, counter?: TokenCounter): number {
+  const c = counter ?? defaultCounter();
   switch (block.k) {
     case 'text':
     case 'reasoning':
-      return estimateTokens(block.text);
+      return c.count(block.text);
     case 'tool_call':
-      return estimateTokens(block.id) + estimateTokens(block.name) + estimateTokens(block.args);
+      return c.count(block.id) + c.count(block.name) + c.count(block.args);
     case 'tool_result':
-      return estimateTokens(block.callId) + estimateTokens(block.name) + estimateTokens(block.text);
+      return c.count(block.callId) + c.count(block.name) + c.count(block.text);
     default:
       return 0; // a block kind from a newer core (image is reserved): nothing countable yet
   }
 }
 
 /** One message: its blocks plus the per-message overhead. */
-export function estimateMessage(message: PromptMsg): number {
+export function estimateMessage(message: PromptMsg, counter?: TokenCounter): number {
   let sum = MESSAGE_OVERHEAD_TOKENS;
-  for (const b of message.blocks) sum += estimateBlock(b);
+  for (const b of message.blocks) sum += estimateBlock(b, counter);
   return sum;
 }
 
 /** Sum over text/reasoning/tool blocks plus 4 tokens of overhead per message. */
-export function estimateMessages(messages: readonly PromptMsg[]): number {
+export function estimateMessages(messages: readonly PromptMsg[], counter?: TokenCounter): number {
   let sum = 0;
-  for (const m of messages) sum += estimateMessage(m);
+  for (const m of messages) sum += estimateMessage(m, counter);
   return sum;
 }
 

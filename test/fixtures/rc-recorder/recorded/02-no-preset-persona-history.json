@@ -1,0 +1,70 @@
+{
+  "fixture": "02-no-preset-persona-history",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "Vera keeps the lighthouse at Gull Point. Vera is wary of Wren."
+    },
+    {
+      "role": "system",
+      "content": "Dry, patient, suspicious of strangers."
+    },
+    {
+      "role": "system",
+      "content": "A storm has stranded Wren at the lighthouse."
+    },
+    {
+      "role": "system",
+      "content": "<persona name=\"Wren\">\n  <identity>\n    <pronouns>she/her</pronouns>\n    <age>31</age>\n  </identity>\n  <appearance>Soaked oilskin coat, a satchel of charts.</appearance>\n  <personality>Curious and stubborn.</personality>\n</persona>"
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, Wren."
+    },
+    {
+      "role": "user",
+      "content": "I only need somewhere dry until morning."
+    },
+    {
+      "role": "assistant",
+      "content": "*She steps aside.* Boots off. Don't touch the lamp."
+    },
+    {
+      "role": "user",
+      "content": "*I set my satchel down.* What's wrong with the lamp?"
+    },
+    {
+      "role": "assistant",
+      "content": "It's older than both of us, and it doesn't like strangers."
+    },
+    {
+      "role": "user",
+      "content": "Then it and I have something in common."
+    }
+  ],
+  "samplerSettings": {
+    "max_tokens": 8192
+  },
+  "presetName": "No Preset (Defaults)",
+  "assistantPrefill": null,
+  "budgetReport": null,
+  "messagesTrimmed": 0,
+  "personaXml": "<persona name=\"Wren\">\n  <identity>\n    <pronouns>she/her</pronouns>\n    <age>31</age>\n  </identity>\n  <appearance>Soaked oilskin coat, a satchel of charts.</appearance>\n  <personality>Curious and stubborn.</personality>\n</persona>",
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "personas",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 10.83,
+    "medianWarmMs": 0.64,
+    "note": "wall clock, database time excluded"
+  }
+}

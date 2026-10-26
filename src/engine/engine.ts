@@ -19,6 +19,7 @@ import type { EngineCtx } from './context.ts';
 import { createScheduler } from './sched.ts';
 import { SessionImpl } from './session.ts';
 import { systemClock, systemRandom, systemTimeZone } from './system.ts';
+import { defaultCounter, type TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
 import { listSessions, sessionsDir } from '../session/log.ts';
 
@@ -28,8 +29,17 @@ import { listSessions, sessionsDir } from '../session/log.ts';
  */
 export type EngineTuning = Pick<EngineOptions, 'timeouts' | 'timers'>;
 
+/**
+ * Seams outside the library contract (EngineOptions), for tests: hosts never set them.
+ * `counter` pins how prompts are counted (default defaultCounter(), o200k from M2); a test that
+ * pins chars/3 numbers passes CHARS_COUNTER.
+ */
+export interface EngineSeams {
+  counter?: TokenCounter;
+}
+
 export class Engine {
-  static async open(opts: EngineOptions): Promise<EngineHandle> {
+  static async open(opts: EngineOptions & EngineSeams): Promise<EngineHandle> {
     if (!opts || typeof opts.home !== 'string' || opts.home === '') throw new Error('Engine.open needs a home directory');
     const home = resolve(opts.home);
     mkdirSync(sessionsDir(home), { recursive: true });
@@ -44,6 +54,7 @@ export class Engine {
       timers: opts.timers ?? realTimers,
       bus: new EventBus<Event>(),
       connections: { ...(opts.connections ?? {}) },
+      counter: opts.counter ?? defaultCounter(),
       ...(opts.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: opts.retryMaxDelayMs } : {}),
       ...(opts.timeouts ? { timeouts: opts.timeouts } : {}),
       ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),

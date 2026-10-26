@@ -130,3 +130,20 @@ export function trimHistory(
   }
   return result(cut, true);
 }
+
+// ---- M2: the lore share (§11 "Доли окна") ---------------------------------------------------------
+
+/** Lore (with the Compendium block from M5) gets 25 %, ST's world_info_budget default. */
+export const LORE_SHARE = 0.25;
+
+/**
+ * The lore budget in (corrected) tokens, as ST computes it (world-info.js checkWorldInfo with
+ * getMaxPromptTokens()): Math.round(LORE_SHARE × (window − reserve)), and 1 when that is 0 (ST's
+ * `|| 1`). The share is of the prompt part of the window, not of the whole window.
+ */
+export function loreBudget(window: number, reserve: number): number {
+  // NaN, negatives and a reserve above the window leave nothing: ST's `|| 1` floor then applies.
+  const prompt = window - (Number.isFinite(reserve) && reserve > 0 ? reserve : 0);
+  const share = Number.isFinite(prompt) && prompt > 0 ? Math.round(LORE_SHARE * prompt) : 0;
+  return share || 1;
+}

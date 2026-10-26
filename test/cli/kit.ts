@@ -18,17 +18,17 @@ export interface RunResult {
   stderr: string;
 }
 
-export function spawnCli(args: readonly string[], opts: { stdin?: string } = {}) {
+export function spawnCli(args: readonly string[], opts: { stdin?: string; env?: Record<string, string> } = {}) {
   return Bun.spawn([process.execPath, MAIN, ...args], {
     cwd: ROOT,
     stdin: opts.stdin !== undefined ? new Blob([opts.stdin]) : 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env },
+    env: { ...process.env, ...opts.env },
   });
 }
 
-export async function run(args: readonly string[], opts: { stdin?: string } = {}): Promise<RunResult> {
+export async function run(args: readonly string[], opts: { stdin?: string; env?: Record<string, string> } = {}): Promise<RunResult> {
   const p = spawnCli(args, opts);
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, stdout, stderr };

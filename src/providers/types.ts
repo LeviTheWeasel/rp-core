@@ -46,7 +46,9 @@ export type ProviderErrorCode =
   | 'forced_tool_unsupported'
   | 'thinking_signature_mismatch'
   | 'tool_protocol_invalid'
-  | 'script_exhausted' // scripted provider only: the script ran out of calls
+  | 'script_exhausted' // scripted and replay providers: the script (or the recording) ran out of calls
+  | 'replay_mismatch' // replay provider only (M2): the request differs from the recorded one
+  | 'replay_aborted' // replay provider only (M2 fix): the recorded call was stopped while recording
   | 'key_unavailable'; // key_env unset or key_cmd failed / timed out [D-73]
 
 /** [D-51] categories. */
@@ -58,6 +60,8 @@ export const PROVIDER_ERROR_CATEGORY: Readonly<Record<ProviderErrorCode, Provide
   model_not_found: 'request',
   bad_request: 'request',
   context_length_exceeded: 'request',
+  replay_mismatch: 'request',
+  replay_aborted: 'request',
   prefill_unsupported: 'request',
   forced_tool_unsupported: 'request',
   tool_protocol_invalid: 'request',
@@ -104,6 +108,8 @@ export const PROVIDER_ERROR_MESSAGE: Readonly<Record<ProviderErrorCode, string>>
   thinking_signature_mismatch: "the provider rejected the replayed reasoning's signature",
   tool_protocol_invalid: 'the tool calls broke the protocol',
   script_exhausted: 'the script ran out of calls',
+  replay_mismatch: 'the request differs from the recorded one',
+  replay_aborted: 'this call was stopped (or timed out) while it was recorded',
   key_unavailable: 'the API key is unavailable',
 };
 
@@ -287,6 +293,11 @@ export interface ProviderEnv {
 
 export interface Provider {
   stream(req: ModelRequest, env: ProviderEnv): AsyncIterable<StreamEv>;
+  /**
+   * M2 (/preview --wire): the HTTP request this provider would send for `req`, without sending it
+   * and without headers (they carry the key). Optional: in-process providers have no wire.
+   */
+  wire?(req: ModelRequest): { url: string; body: unknown };
 }
 
 /** What one streamed call amounts to once aggregated [D-51]. */

@@ -1,0 +1,56 @@
+{
+  "fixture": "05-no-preset-overfull",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "Vera keeps the lighthouse at Gull Point. Vera is wary of User."
+    },
+    {
+      "role": "system",
+      "content": "Dry, patient, suspicious of strangers."
+    },
+    {
+      "role": "system",
+      "content": "A storm has stranded User at the lighthouse."
+    },
+    {
+      "role": "system",
+      "content": "Remember: the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too. the storm is a character too."
+    },
+    {
+      "role": "user",
+      "content": "Then we wait out the storm together, and in the morning I will look at that lamp properly, if you let me near it."
+    }
+  ],
+  "samplerSettings": {
+    "max_tokens": 8192
+  },
+  "presetName": "No Preset (Defaults)",
+  "assistantPrefill": null,
+  "budgetReport": {
+    "totalBudget": 1400,
+    "requiredTokens": 109,
+    "importantTokens": 1128,
+    "flexibleTokens": 283,
+    "availableTokens": 0,
+    "usagePercent": 100
+  },
+  "messagesTrimmed": 13,
+  "personaXml": null,
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 5.52,
+    "medianWarmMs": 1.93,
+    "note": "wall clock, database time excluded"
+  }
+}

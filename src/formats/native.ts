@@ -477,7 +477,8 @@ const vBlock: Check = (v, p, e) => {
 const HISTORY_SLOT = '{{history}}';
 
 /**
- * Also checks the preset has exactly one enabled {{history}} slot (§10.2). Slots are counted the
+ * Also checks the preset has exactly one enabled {{history}} slot (§10.2), in a block placed
+ * 'relative' (assemble refuses any other placement, so the loader does too). Slots are counted the
  * way assemble finds them (the macro lexer: `{{ History }}` is a slot, an escaped `\{{history}}`
  * or one nested in another macro's argument is not), so validation and assembly always agree.
  */
@@ -507,17 +508,26 @@ export function validatePreset(x: unknown): Validation<Preset> {
   if (ok && Array.isArray(x.blocks)) {
     const ids = new Set<string>();
     let historySlots = 0;
+    let holder = -1;
     x.blocks.forEach((b: unknown, i: number) => {
       if (!isObj(b)) return;
       if (typeof b.id === 'string') {
         if (ids.has(b.id)) err(errs, vPath(vPath('blocks', i), 'id'), `duplicate block id '${b.id}'`);
         ids.add(b.id);
       }
-      if (b.enabled === true && typeof b.content === 'string') historySlots += countHistorySlots(b.content);
+      if (b.enabled === true && typeof b.content === 'string') {
+        const n = countHistorySlots(b.content);
+        if (n > 0) holder = i;
+        historySlots += n;
+      }
     });
     // Without exactly one history slot the chat would vanish or repeat: an error, not a silent loss.
     if (historySlots !== 1) {
       err(errs, 'blocks', `must contain exactly one enabled ${HISTORY_SLOT} slot (found ${historySlots})`);
+    } else {
+      // The chat area sits between the relative blocks; a pinned or in-chat history means nothing.
+      const at = (x.blocks[holder] as Record<string, unknown>).at;
+      if (at !== 'relative') err(errs, vPath(vPath('blocks', holder), 'at'), `the ${HISTORY_SLOT} block must be placed 'relative'`);
     }
   }
   return result<Preset>(x, errs);

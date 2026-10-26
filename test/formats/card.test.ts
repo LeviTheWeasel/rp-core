@@ -46,13 +46,19 @@ describe('parseCardObject: V3 (v3-full.json)', () => {
     const book = value.book;
     expect(book?.name).toBe("Alice's World");
     expect(book?.match).toBe('literal');
-    expect(book?.scanDepth).toBe(2);
-    expect(book?.recursive).toBe(true);
+    // Book-level scan settings ride extras unapplied (SillyTavern ignores them); 2 / true are its
+    // globals anyway, so nothing is warned.
+    expect(book?.scanDepth).toBeUndefined();
+    expect(book?.recursive).toBeUndefined();
+    expect(book?.extras).toMatchObject({ scan_depth: 2, recursive_scanning: true });
+    expect(warnings.some((w) => w.path === 'data.character_book.scan_depth')).toBe(false);
     expect(book?.entries).toHaveLength(2);
     const [sword, caves] = book?.entries ?? [];
     expect(sword).toEqual({
       id: '0',
       content: sword?.content ?? '',
+      // its leading @@depth / @@role lines are stripped, as SillyTavern strips them; kept for the round trip
+      extras: { decorators: ['@@depth 4', '@@role system'] },
       enabled: true,
       keys: ['sword', 'Starfall', 'weapon'],
       position: 'after', // no position at all: ST's card-book default
@@ -91,6 +97,17 @@ describe('parseCardObject: V2 with depth_prompt (v2-depth-prompt.json)', () => {
     expect(value.name).toBe('Мира Солнцева');
     expect(warnings).toContainEqual({ code: 'unknown_field', path: 'data.extensions.my_tool', message: expect.any(String) });
     expect(warnings.some((w) => w.path === 'data.extensions.world')).toBe(false);
+  });
+
+  test('a linked world warns unless it is the embedded book (same name, as ST exports it)', () => {
+    const book = { name: 'Eldoria', entries: [{ keys: ['glade'], content: 'x', enabled: true, insertion_order: 100 }] };
+    const card = (world: string, withBook = true) =>
+      parseCardObject({ spec: 'chara_card_v2', data: { name: 'S', description: 'd', ...(withBook ? { character_book: book } : {}), extensions: { world } } });
+    const worldWarned = (r: { warnings: { path: string }[] }) => r.warnings.some((w) => w.path === 'data.extensions.world');
+    expect(worldWarned(card('Eldoria'))).toBe(false);
+    expect(card('Eldoria').value.extras?.extensions).toEqual({ world: 'Eldoria' });
+    expect(worldWarned(card('Other World'))).toBe(true);
+    expect(worldWarned(card('Eldoria', false))).toBe(true);
   });
 
   test('depth_prompt defaults: role system, depth 4; an empty prompt means none', () => {
@@ -181,7 +198,7 @@ describe('embedded books', () => {
       data: { name: 'Same', character_book: book, extensions: { character_book: structuredClone(book) } },
     });
     expect(value.book?.entries).toHaveLength(1);
-    expect(value.book?.name).toBe("Same's book");
+    expect(value.book?.name).toBe("Same's Lorebook"); // SillyTavern's own name for it
     expect(codes(warnings)).not.toContain('books_merged');
   });
 

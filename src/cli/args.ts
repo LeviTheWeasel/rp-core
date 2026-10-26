@@ -6,7 +6,8 @@
 //
 // Rules, chosen so a typo fails loudly instead of being taken as text:
 // - `--name value` and `--name=value`; boolean flags refuse `=value`;
-// - an unknown flag, a repeated flag or a missing value is an error;
+// - an unknown flag, a repeated flag or a missing value is an error, except that a 'list' flag
+//   (`--lore a --lore b`) collects every value in order;
 // - `--` ends the flags (everything after it is positional), a lone `-` is positional;
 // - a value may start with `-` (guidance or a title can), but not with `--` + a known flag name,
 //   which almost always means the value was forgotten.
@@ -22,7 +23,8 @@ export class UsageError extends Error {
   }
 }
 
-export type FlagKind = 'bool' | 'string';
+/** 'list': a string flag that may be given more than once; its values are kept in order. */
+export type FlagKind = 'bool' | 'string' | 'list';
 
 /** Flag name (without dashes) → kind. Short aliases map a single letter to a long name. */
 export interface FlagSpec {
@@ -31,7 +33,8 @@ export interface FlagSpec {
 }
 
 export interface Parsed {
-  flags: Record<string, string | true>;
+  /** bool → true, string → the value, list → every value in order. */
+  flags: Record<string, string | true | string[]>;
   positionals: string[];
 }
 
@@ -42,7 +45,7 @@ const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnPropert
  * the rest is returned untouched in `positionals` (used to find the command after global flags).
  */
 export function parseArgs(argv: readonly string[], spec: FlagSpec, opts: { stopAtPositional?: boolean; command?: string } = {}): Parsed {
-  const flags: Record<string, string | true> = {};
+  const flags: Record<string, string | true | string[]> = {};
   const positionals: string[] = [];
   const fail = (msg: string): never => {
     throw new UsageError(msg, opts.command);
@@ -83,20 +86,24 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec, opts: { stopA
     }
 
     if (name === '' || !hasOwn(spec.flags, name)) fail(`unknown flag --${name}`);
-    if (hasOwn(flags, name)) fail(`--${name} given twice`);
     const kind = spec.flags[name];
+    if (hasOwn(flags, name) && kind !== 'list') fail(`--${name} given twice`);
+    const put = (value: string): void => {
+      if (kind !== 'list') flags[name] = value;
+      else flags[name] = [...((flags[name] as string[] | undefined) ?? []), value];
+    };
     if (kind === 'bool') {
       if (inline !== undefined) fail(`--${name} takes no value`);
       flags[name] = true;
       continue;
     }
     if (inline !== undefined) {
-      flags[name] = inline;
+      put(inline);
       continue;
     }
     const value = argv[i + 1];
     if (value === undefined || looksLikeKnownFlag(value) || value === '--') fail(`--${name} needs a value`);
-    flags[name] = value!;
+    put(value!);
     i++;
   }
   return { flags, positionals };
@@ -106,6 +113,12 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec, opts: { stopA
 export function str(p: Parsed, name: string): string | undefined {
   const v = p.flags[name];
   return typeof v === 'string' ? v : undefined;
+}
+
+/** Every value of a 'list' flag, in order ([] when absent). */
+export function list(p: Parsed, name: string): string[] {
+  const v = p.flags[name];
+  return Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
 }
 
 /** Whether a boolean flag was given. */

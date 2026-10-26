@@ -1,0 +1,49 @@
+{
+  "fixture": "01-no-preset-first-turn",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "Vera keeps the lighthouse at Gull Point. Vera is wary of User."
+    },
+    {
+      "role": "system",
+      "content": "Dry, patient, suspicious of strangers."
+    },
+    {
+      "role": "system",
+      "content": "A storm has stranded User at the lighthouse."
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, User."
+    },
+    {
+      "role": "user",
+      "content": "I only need somewhere dry until morning."
+    }
+  ],
+  "samplerSettings": {
+    "max_tokens": 8192
+  },
+  "presetName": "No Preset (Defaults)",
+  "assistantPrefill": null,
+  "budgetReport": null,
+  "messagesTrimmed": 0,
+  "personaXml": null,
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 141.43,
+    "medianWarmMs": 0.93,
+    "note": "wall clock, database time excluded"
+  }
+}

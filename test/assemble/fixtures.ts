@@ -1,6 +1,7 @@
 // Fixtures for the assemble tests (not a test file itself).
 import type { Character, Persona, Preset } from '../../src/formats/native.ts';
 import { BUILTIN_PRESET } from '../../src/formats/native.ts';
+import { CHARS_COUNTER } from '../../src/prompt/tokens.ts';
 import type { AssembleInput, AssembleResult } from '../../src/prompt/assemble.ts';
 import type { ModelCaps, PromptMsg } from '../../src/providers/types.ts';
 import type { Block } from '../../src/session/entries.ts';
@@ -100,6 +101,8 @@ export function input(over: Partial<AssembleInput> = {}): AssembleInput {
     timeZone: 'UTC',
     tools: [],
     prefillVsTools: 'prefill',
+    // The token numbers these tests pin are M1's chars/3 estimate; o200k (the default) is tested in prompt-m2.
+    counter: CHARS_COUNTER,
     ...over,
   };
 }

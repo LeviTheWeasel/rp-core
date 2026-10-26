@@ -139,6 +139,15 @@ describe('validatePreset', () => {
     expect(paths(validatePreset(preset([block('a', '{{trim::{{history}}}}')])))).toEqual(['blocks']);
   });
 
+  test("the {{history}} block must be placed 'relative', as assemble requires", () => {
+    for (const at of ['top', 'bottom', { depth: 2 }] as const) {
+      const r = validatePreset(preset([block('a', 'x'), { ...block('h', '{{history}}'), at }]));
+      expect(r.ok ? [] : r.errors).toEqual([{ path: 'blocks[1].at', message: "the {{history}} block must be placed 'relative'" }]);
+    }
+    // a disabled history block elsewhere does not matter
+    expect(validatePreset(preset([{ ...block('x', '{{history}}', false), at: 'top' }, block('h', '{{history}}')])).ok).toBe(true);
+  });
+
   test('block, sampler and option errors carry paths', () => {
     const r = validatePreset({
       name: 'p',
@@ -155,6 +164,7 @@ describe('validatePreset', () => {
     expect(paths(r).sort()).toEqual(
       [
         'blocks[0].at.depth',
+        'blocks[0].at', // the history block is not relative
         'blocks[1].role',
         'blocks[1].override',
         'blocks[1].id',
@@ -171,7 +181,7 @@ describe('validatePreset', () => {
 
   test('all optional preset fields accepted', () => {
     const r = validatePreset(
-      preset([{ ...block('h', '{{history}}'), at: { depth: 0, order: 2 }, name: 'History', extras: { uid: 1 } }], {
+      preset([block('h', '{{history}}'), { ...block('d', 'note'), at: { depth: 0, order: 2 }, name: 'Note', extras: { uid: 1 } }], {
         forbidOverrides: true,
         samplers: { temperature: 0.7, stop: ['\n'], max_tokens: 300 },
         context: { maxContext: 8000, maxMessages: 50 },

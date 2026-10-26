@@ -373,6 +373,7 @@ describe('REPL: Ctrl+C, held lines, EOF', () => {
       select: (i) => s.select(i),
       fork: (i) => s.fork(i),
       configure: (p) => s.configure(p),
+      preview: (o) => s.preview(o),
       close: () => s.close(),
     });
     const r = await rig(calls(), { wrap });

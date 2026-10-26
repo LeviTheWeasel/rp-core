@@ -1,0 +1,68 @@
+{
+  "fixture": "10-toggle-macros",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "Macro check: alwaysOn=true alwaysOff=false flipped=true. [FLIPPED-VISIBLE]"
+    },
+    {
+      "role": "system",
+      "content": "TOGGLE-ALWAYS-ON-BODY"
+    },
+    {
+      "role": "system",
+      "content": "TOGGLE-FLIPPED-BODY"
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, User."
+    },
+    {
+      "role": "user",
+      "content": "I only need somewhere dry until morning."
+    },
+    {
+      "role": "assistant",
+      "content": "*She steps aside.* Boots off. Don't touch the lamp."
+    },
+    {
+      "role": "user",
+      "content": "Understood. I'll keep my hands to myself."
+    }
+  ],
+  "samplerSettings": {
+    "temperature": 1,
+    "top_p": 0.97,
+    "top_k": 64,
+    "top_a": 0,
+    "min_p": 0,
+    "max_tokens": 8192,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "repetition_penalty": 1,
+    "prompt_post_processing": "none"
+  },
+  "presetName": "Toggle Macros",
+  "assistantPrefill": null,
+  "budgetReport": null,
+  "messagesTrimmed": 0,
+  "personaXml": null,
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "preset_prompts",
+    "presets",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 5.58,
+    "medianWarmMs": 1.73,
+    "note": "wall clock, database time excluded"
+  }
+}

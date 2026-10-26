@@ -64,8 +64,9 @@ describe('injectAtDepth', () => {
     expect(texts(out)).toEqual([
       'G', 'U1', 'A1',
       'early',
-      // order 100 group: preset (explicit 100 and default, stable input order) < lore < … < guidance
-      'preset', 'at100', 'lore', 'comp', 'card', 'note', 'director', 'guidance',
+      // order 100 group: preset (explicit 100 and default, stable input order) < author's note <
+      // card depth < lore (ST's extension-prompt key order) < compendium < director < guidance
+      'preset', 'at100', 'note', 'card', 'lore', 'comp', 'director', 'guidance',
       'late',
       'U2',
     ]);

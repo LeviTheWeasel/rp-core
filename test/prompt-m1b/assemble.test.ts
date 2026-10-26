@@ -2,7 +2,7 @@
 // correction; the trace keeps the raw estimates.
 import { describe, expect, test } from 'bun:test';
 import { assemble } from '../../src/prompt/assemble.ts';
-import { estimateMessage, estimateMessages } from '../../src/prompt/tokens.ts';
+import { CHARS_COUNTER, estimateMessage, estimateMessages } from '../../src/prompt/tokens.ts';
 import { HISTORY_BLOCK, greet, input, m, ok, path, preset } from '../assemble/fixtures.ts';
 
 // Greeting (10 tokens) + 39 messages of 13 tokens each (27 chars + 4 overhead); no other blocks.
@@ -32,8 +32,8 @@ describe('tokenFactor scales the budget [D-50]', () => {
 
   test('the trace keeps the raw estimates', () => {
     const r = ok(run(400, 1.5));
-    expect(r.trace.tokens.estimated).toBe(estimateMessages(r.messages));
-    expect(r.trace.blocks.map((b) => b.tok)).toEqual(r.messages.map((x) => estimateMessage(x)));
+    expect(r.trace.tokens.estimated).toBe(estimateMessages(r.messages, CHARS_COUNTER));
+    expect(r.trace.blocks.map((b) => b.tok)).toEqual(r.messages.map((x) => estimateMessage(x, CHARS_COUNTER)));
     expect(r.trace.blocks.every((b) => b.tok === 13 || b.tok === 10)).toBe(true);
   });
 
@@ -47,13 +47,18 @@ describe('tokenFactor scales the budget [D-50]', () => {
   });
 
   test('the mandatory part is scaled too: what fits at ×1 can overflow at ×1.5', () => {
-    // protected: greeting + the current message = 23 at ×1, 15 + 20 = 35 at ×1.5; available 30
+    // protected: greeting + the current message = 23 at ×1, 15 + 20 = 35 at ×1.5; available 30:
+    // at ×1.5 only the greeting is left out (the last resort before a refusal).
     expect(run(130, 1).ok).toBe(true);
     const r = run(130, 1.5);
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.code).toBe('context_length_exceeded');
-      expect(r.message).toContain('35 tokens');
+    expect(r.ok && r.notices.map((n) => n.code)).toEqual(['greeting_dropped']);
+    // available 18: the current message alone is 13 at ×1 and 20 at ×1.5
+    expect(run(118, 1).ok).toBe(true);
+    const over = run(118, 1.5);
+    expect(over.ok).toBe(false);
+    if (!over.ok) {
+      expect(over.code).toBe('context_length_exceeded');
+      expect(over.message).toContain('20 tokens');
     }
   });
 

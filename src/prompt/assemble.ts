@@ -5,15 +5,19 @@
 // come in. Bunraku src/core/assembly is the reference (§19.3); written to the core's contract.
 // CONTRACT FILE: signatures are fixed; the prompt agent implements the body.
 //
-// One pass, in this order: validate the preset → one MacroRun → every enabled block expanded once,
-// in preset order (card overrides and formats applied first, structural slots kept out of the macro
-// engine) → card depth note, author's note, guidance → the prefill rule [D-28] → the chat area →
-// the budget [D-49] → depth inserts → the trace. Taken from Bunraku: the step order, the history
-// block split around its marker, one trace row per sent message, loud preset errors. Not taken:
-// RoleCall's several macro passes, stripping of unknown macros, macro expansion of history, the
-// character prompt reserve that is never sent, the 60 % pre-trim (§19.3 "Не переносить").
+// One pass, in this order: validate the preset → one MacroRun → the lore run (M2: entries expanded
+// in it, placed by lore/place.ts) → every enabled block expanded once, in preset order (card
+// overrides and formats applied first, structural slots kept out of the macro engine, lore filling
+// its slots) → card depth note, author's note (with AN-positioned lore), guidance → the prefill
+// rule [D-28] → the chat area → the budget [D-49] → depth inserts → the trace. Taken from Bunraku:
+// the step order, the history block split around its marker, one trace row per sent message, loud
+// preset errors. Not taken: RoleCall's several macro passes, stripping of unknown macros, macro
+// expansion of history, the character prompt reserve that is never sent, the 60 % pre-trim (§19.3
+// "Не переносить").
 
-import type { Character, LoreBook, Persona, Preset, PresetBlock } from '../formats/native.ts';
+import type { Character, Persona, Preset, PresetBlock } from '../formats/native.ts';
+import { entryLabel, type LoreRunResult, type LoreSource, type LoreVerdict } from '../lore/engine.ts';
+import type { LorePlacement } from '../lore/place.ts';
 import { validatePreset } from '../formats/native.ts';
 import type { ModelCaps, PromptMsg, ToolSpec } from '../providers/types.ts';
 import type { SessionConfig, Trace, TurnKind, VarsDiff } from '../session/entries.ts';
@@ -21,26 +25,46 @@ import type { PathView } from '../session/view.ts';
 import type { Notice } from '../protocol/events.ts';
 import type { DepthInsert } from './depth.ts';
 import { injectAtDepth } from './depth.ts';
-import { trimHistory } from './budget.ts';
+import { loreBudget, trimHistory } from './budget.ts';
 import { createMacroRun, type MacroEnv, type MacroRun } from './macros.ts';
-import { estimateMessage, estimateMessages, estimateTokens, MESSAGE_OVERHEAD_TOKENS } from './tokens.ts';
+import {
+  counterById,
+  defaultCounter,
+  ensureMemoCapacity,
+  estimateMessage,
+  estimateMessages,
+  estimateTokens,
+  MESSAGE_OVERHEAD_TOKENS,
+  type TokenCounter,
+} from './tokens.ts';
 import { chatArea, HISTORY_SRC } from './assemble/chat.ts';
+import { CONTINUE_CUE, POST_PROCESSING_PLACEHOLDER } from './shape.ts';
 import { guidanceText } from './assemble/guidance.ts';
 import { presetHash } from './assemble/hash.ts';
+import {
+  DEFAULT_NOTE_DEPTH,
+  DEFAULT_NOTE_ROLE,
+  loreHashes,
+  loreNames,
+  loreSlotValue,
+  loreSources,
+  noteWithLore,
+  regexNotice,
+  runAssembleLore,
+} from './assemble/lore.ts';
 import {
   applyFormat,
   fillSlots,
   formatExamples,
   historySlots,
   protectSlots,
-  renderSlot,
   slotScope,
   soleMacro,
   splitAtHistory,
   type SlotRef,
 } from './assemble/slots.ts';
 
-export { presetHash } from './assemble/hash.ts';
+export { presetHash, loreBookHash } from './assemble/hash.ts';
 export { HISTORY_SRC } from './assemble/chat.ts';
 export { guidanceText, REJECTED_DRAFT_LABEL } from './assemble/guidance.ts';
 
@@ -55,8 +79,16 @@ export interface AssembleInput {
   kind: TurnKind;
   cast: { character: Character; persona?: Persona };
   preset: Preset;
-  /** Ignored before M2 (lore engine). */
-  lorebooks: LoreBook[];
+  /**
+   * M2: the session's books (SessionConfig.lorebooks loaded from the library), keyed by library id,
+   * in config order. The card's book (CARD_BOOK_KEY) and the persona's (PERSONA_BOOK_KEY) come from
+   * `cast`; assemble puts them first (persona, card, these), as ST's "character first" strategy.
+   */
+  lorebooks: LoreSource[];
+  /** M2 [D-45]: also return one lore verdict per entry (preview, /lore test). */
+  explain?: boolean;
+  /** M2: how tokens are counted (default defaultCounter(): o200k). Tests that pin numbers pass CHARS_COUNTER. */
+  counter?: TokenCounter;
   /** Agent inserts (Director, Compendium). [] in M1a. */
   placements: DepthInsert[];
   authorNote?: SessionConfig['authorNote'];
@@ -89,6 +121,19 @@ export type AssembleResult =
       trace: Trace;
       varsDiff: VarsDiff;
       notices: Notice[];
+      /** M2: present when input.explain was set [D-45]. */
+      verdicts?: LoreVerdict[];
+      /**
+       * M2 (final fix), with explain: what the lore run took of its budget, in budget tokens (the
+       * counts scaled by `factor`, the model's EMA correction [D-50]; 1 = none yet).
+       */
+      loreUse?: { used: number; factor: number };
+      /**
+       * M2: the '/regex/' lore keys re2js refused this run (the same list `notices`'
+       * 'lore_regex_invalid' names); present only when non-empty. The engine keys its
+       * once-per-entry notices on it.
+       */
+      loreRegexErrors?: LoreRunResult['regexErrors'];
     }
   | { ok: false; code: 'context_length_exceeded' | 'preset_invalid'; message: string };
 
@@ -179,13 +224,42 @@ function macroEnv(input: AssembleInput): MacroEnv {
   };
 }
 
+/** Which lore slots and outlets something in the request asked for (C5: lore that fired but went nowhere). */
+interface SlotsUsed {
+  lore: Set<string>;
+  outlets: Set<string>;
+}
+
 /**
- * Values of the non-history slots. M1a has none to give: lore arrives in M2, the director slot in M4,
- * {{recap}} in M5. renderSlot already applies wi_format to whatever a later milestone puts here.
+ * Values of the non-history slots: {{lore::x}} and {{outlet::x}} from this request's lore (M2).
+ * The director slot arrives in M4 and {{recap}} in M5; until then they render ''.
  */
-function slotValue(ref: SlotRef, preset: Preset): string {
-  const value = ''; // M2/M4/M5: lore::x, outlet::x, slot::director, recap
-  return ref.kind === 'history' ? '' : renderSlot(ref, value, preset.formats);
+function slotValue(ref: SlotRef, lore: LorePlacement, preset: Preset, used: SlotsUsed): string {
+  if (ref.kind === 'lore') used.lore.add(ref.name.toLowerCase());
+  if (ref.kind === 'outlet') used.outlets.add(ref.name);
+  return ref.kind === 'lore' || ref.kind === 'outlet' ? loreSlotValue(ref, lore, preset.formats) : '';
+}
+
+const SLOT_POSITIONS = new Set(['before', 'after', 'examples_before', 'examples_after']);
+
+/**
+ * Fired entries whose text no part of the request takes (entry label → the slot it needed): a
+ * lore slot the preset does not hold (or holds in a disabled block), an outlet nothing names. As in
+ * ST they fired and counted against the budget; their text went nowhere.
+ */
+function unsentLore(fired: LoreRunResult['fired'], used: SlotsUsed): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const h of fired) {
+    if (h.text === '') continue;
+    const p = h.entry.position;
+    if (typeof p === 'string') {
+      if (SLOT_POSITIONS.has(p) && !used.lore.has(p)) out[entryLabel(h.book, h.id)] = `{{lore::${p}}}`;
+    } else if ('outlet' in p) {
+      const name = p.outlet.trim();
+      if (name !== '' && !used.outlets.has(name)) out[entryLabel(h.book, h.id)] = `{{outlet::${name}}}`;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 // ---- blocks → messages --------------------------------------------------------------------------
@@ -214,7 +288,7 @@ const blockMsg = (block: PresetBlock, text: string): PromptMsg => ({
 });
 
 /** Expand every planned block once, in preset order (later blocks see earlier setvars), and sort it into place. */
-function layoutBlocks(plan: PlannedBlock[], run: MacroRun, preset: Preset): Layout {
+function layoutBlocks(plan: PlannedBlock[], run: MacroRun, preset: Preset, lore: LorePlacement, used: SlotsUsed): Layout {
   const out: Layout = { top: [], before: [], after: [], bottom: [], depth: [] };
   let pastHistory = false;
 
@@ -223,7 +297,7 @@ function layoutBlocks(plan: PlannedBlock[], run: MacroRun, preset: Preset): Layo
     // (and so its {{pick}} seed, D-43) never changes when another block is added or toggled.
     const refs: SlotRef[] = [];
     const scope = slotScope(p.block.id);
-    const fill = (text: string): string => fillSlots(text, refs, (ref) => slotValue(ref, preset), scope);
+    const fill = (text: string): string => fillSlots(text, refs, (ref) => slotValue(ref, lore, preset, used), scope);
     const text = protectSlots(p.text, refs, scope);
     const original = p.original === undefined ? undefined : protectSlots(p.original, refs, scope);
     const expanded = run.block(text, p.block.id, original === undefined ? undefined : { original });
@@ -325,22 +399,34 @@ function scaled(tok: number, factor: number): number {
 
 // ---- the trace of what is sent ------------------------------------------------------------------
 
-/** trace.tokens.estimated and trace.blocks of a message list (§5.7: blocks are 1:1 with it). */
-function sentRows(messages: readonly PromptMsg[]): Pick<Trace, 'tokens' | 'blocks'> {
+/** trace.tokens and trace.blocks of a message list (§5.7: blocks are 1:1 with it), raw counts. */
+function sentRows(messages: readonly PromptMsg[], counter: TokenCounter): Pick<Trace, 'tokens' | 'blocks'> {
+  const blocks = messages.map((m) => ({ src: m.src, role: m.role, tok: estimateMessage(m, counter) }));
   return {
-    tokens: { estimated: estimateMessages(messages) },
-    blocks: messages.map((m) => ({ src: m.src, role: m.role, tok: estimateMessage(m) })),
+    tokens: { estimated: blocks.reduce((sum, b) => sum + b.tok, 0), counter: counter.id },
+    blocks,
   };
 }
 
 /**
- * The trace of the messages actually sent. shape() may drop a message (a continue target sent as
- * the prefill) or add one (the continue cue), so the engine re-derives the rows from its output.
- * A reported token count already on the trace is kept.
+ * The trace of the request actually sent. shape() may drop a message (a continue target sent as
+ * the prefill) or add one (the continue cue), so the engine re-derives the rows from its output,
+ * counted with the counter the trace names (so the EMA compares like with like). The prefill the
+ * request carries (a preset's, or on a continue the whole answer so far) is prompt the server
+ * counts too: it is added to tokens.estimated like one more message, while `blocks` stays 1:1 with
+ * the messages. A reported token count already on the trace is kept.
  */
-export function traceForSent(trace: Trace, messages: readonly PromptMsg[]): Trace {
-  const rows = sentRows(messages);
-  return { ...trace, blocks: rows.blocks, tokens: { ...trace.tokens, estimated: rows.tokens.estimated } };
+export function traceForSent(trace: Trace, messages: readonly PromptMsg[], prefill?: string): Trace {
+  const counter = counterById(trace.tokens.counter);
+  const rows = sentRows(messages, counter);
+  if (prefill !== undefined && prefill !== '') rows.tokens.estimated += estimateTokens(prefill, counter) + MESSAGE_OVERHEAD_TOKENS;
+  return { ...trace, blocks: rows.blocks, tokens: { ...trace.tokens, ...rows.tokens } };
+}
+
+/** One system message holding lore texts joined with '\n', or none when they are blank. */
+function loreMsg(texts: readonly string[], src: string): PromptMsg[] {
+  const text = texts.join('\n');
+  return text.trim() === '' ? [] : [{ role: 'system', blocks: [{ k: 'text', text }], src, placement: 'inline' }];
 }
 
 // ---- the assembler ------------------------------------------------------------------------------
@@ -355,9 +441,62 @@ export function assemble(input: AssembleInput): AssembleResult {
   const plan = planPreset(preset, character);
   if (typeof plan === 'string') return { ok: false, code: 'preset_invalid', message: plan };
 
+  const counter = input.counter ?? defaultCounter();
+  // Every chat message is counted several times per turn, in order: the memo must hold them all.
+  ensureMemoCapacity(2 * input.view.path.length + 256);
+  // Every estimate the budgets see is scaled by the model's EMA correction [D-50]; the trace keeps
+  // the raw estimates, which are what the next correction is learned from.
+  const factor = budgetFactor(input.tokenFactor);
+  const measure = (m: PromptMsg): number => estimateMessage(m, counter);
+  const measureAll = (ms: readonly PromptMsg[]): number => estimateMessages(ms, counter);
+
   // One run for the whole request: variables set by one block are visible to the blocks after it.
-  const run = createMacroRun(macroEnv(input));
-  const layout = layoutBlocks(plan, run, preset);
+  // {{outlet::x}} outside the preset's own slots resolves as ST's outlet macro: to the outlet's
+  // entries once the lore run placed them, '' inside lore content (expanded before they exist).
+  const used: SlotsUsed = { lore: new Set(), outlets: new Set() };
+  let outlets: LorePlacement['outlets'] | null = null;
+  const env: MacroEnv = {
+    ...macroEnv(input),
+    outlet: (name) => {
+      if (outlets === null) return '';
+      used.outlets.add(name);
+      const texts = Object.hasOwn(outlets, name) ? outlets[name] : undefined;
+      return texts ? texts.join('\n') : '';
+    },
+  };
+  const run = createMacroRun(env);
+
+  // Lore (§10.3), once per request, before the blocks whose slots it fills. Entry content is a
+  // template (D-42), expanded in this run under 'lore:<book>:<id>'; keys get identity macros only;
+  // history stays inert. The budget is in corrected tokens, like everything else the budgets compare.
+  const sources = loreSources(input.cast, input.lorebooks);
+  const budgetForLore = loreBudget(input.window, input.reserve);
+  const lore = runAssembleLore({
+    sources,
+    view: input.view,
+    upTo: input.upTo,
+    names: { char: env.char, user: env.user },
+    seed: input.seed,
+    budget: budgetForLore,
+    count: (text) => scaled(counter.count(text), factor),
+    rawCount: (text) => counter.count(text),
+    expand: (content, source) => run.block(content, source),
+    expandKey: (key) => run.userText(key),
+    explain: input.explain === true,
+    ownBooks: {
+      ...(character.book ? { card: character.book.name } : {}),
+      ...(input.cast.persona?.book ? { persona: input.cast.persona.book.name } : {}),
+    },
+  });
+  const place = lore.place;
+  outlets = place.outlets;
+  const layout = layoutBlocks(plan, run, preset, place, used);
+  // Lore with no slot of its own: top and bottom of the prompt, and the recap texts right before
+  // the chat area (M5 moves them to {{recap}}). A lore slot the preset does not hold is not sent,
+  // as in ST; its entries still fired and still counted against the lore budget.
+  const loreTop = loreMsg(place.top, 'lore:top');
+  const loreBottom = loreMsg(place.bottom, 'lore:bottom');
+  const loreRecap = loreMsg(place.recap, 'lore:recap');
 
   // ST's new_chat_prompt opens the chat area; it is not a chat message, so depths do not count it.
   const newChatText = preset.formats?.newChat ? run.block(preset.formats.newChat, 'new_chat') : '';
@@ -365,14 +504,17 @@ export function assemble(input: AssembleInput): AssembleResult {
     newChatText.trim() === '' ? [] : [{ role: 'system', blocks: [{ k: 'text', text: newChatText }], src: 'new_chat', placement: 'inline' }];
 
   // Inserts in source order; injectAtDepth sorts them by depth, order and source rank (§10.1).
-  const inserts: DepthInsert[] = [...layout.depth];
+  const inserts: DepthInsert[] = [...layout.depth, ...place.depth];
   const dp = character.depthPrompt;
   if (dp && dp.text.trim() !== '') {
     inserts.push({ depth: dp.depth, role: dp.role, src: 'card_depth', text: run.block(dp.text, 'card_depth') });
   }
+  // The author's note, wrapped in AN-top / AN-bottom lore as ST does. Without a note that lore still
+  // goes to the note's place: ST's default, in-chat depth 4 as system.
   const note = input.authorNote;
-  if (note && note.text.trim() !== '') {
-    inserts.push({ depth: note.depth, role: note.role, src: 'author_note', text: run.block(note.text, 'author_note') });
+  const noteText = noteWithLore(note && note.text.trim() !== '' ? run.block(note.text, 'author_note') : '', place);
+  if (noteText !== '') {
+    inserts.push({ depth: note?.depth ?? DEFAULT_NOTE_DEPTH, role: note?.role ?? DEFAULT_NOTE_ROLE, src: 'author_note', text: noteText });
   }
   inserts.push(...input.placements);
   const g = input.guidance;
@@ -386,41 +528,67 @@ export function assemble(input: AssembleInput): AssembleResult {
 
   // Budget (§11, D-49): everything but the older history is mandatory. The protected tail is the
   // message the turn is about (U; on continue the answer A and the U it replies to); the protected
-  // head is the greeting. preset.context.maxMessages is applied by the same cut: same grid, same
-  // protections, recorded in trace.trimmed.
-  // Every estimate the budget sees is scaled by the model's EMA correction [D-50]; the trace keeps
-  // the raw estimates, which are what the next correction is learned from.
-  const factor = budgetFactor(input.tokenFactor);
+  // head is the greeting, dropped only as the last resort before a refusal (below).
+  // preset.context.maxMessages is applied by the same cut: same grid, same protections, recorded in
+  // trace.trimmed.
   const available = input.window - input.reserve;
-  const fixed = scaled(
-    estimateMessages(layout.top) +
-      estimateMessages(layout.before) +
-      estimateMessages(newChat) +
-      estimateMessages(injectAtDepth([], inserts)) + // every non-blank insert, measured as it will be sent
-      estimateMessages(layout.after) +
-      estimateMessages(layout.bottom) +
-      (prefill.prefill === null ? 0 : estimateTokens(prefill.prefill) + MESSAGE_OVERHEAD_TOKENS),
-    factor,
-  );
-  const sized = chat.msgs.map((m, i) => ({ id: chat.ids[i]!, tok: scaled(estimateMessage(m), factor) }));
+  const blocksTok = measureAll(layout.top) + measureAll(layout.before) + measureAll(newChat) + measureAll(layout.after) + measureAll(layout.bottom);
+  const loreOwnTok = measureAll(loreTop) + measureAll(loreRecap) + measureAll(loreBottom);
+  const insertsTok = measureAll(injectAtDepth([], inserts)); // every non-blank insert, measured as it will be sent
+  const prefillTok = prefill.prefill === null ? 0 : estimateTokens(prefill.prefill, counter) + MESSAGE_OVERHEAD_TOKENS;
+  // What shape() adds after this budget: the continue cue for a model without prefill (§6.4), and
+  // the 'strict' post-processing placeholder (one short user message at most).
+  const cueTok = input.kind === 'continue' && input.caps.prefill === 'none' ? estimateTokens(CONTINUE_CUE, counter) + MESSAGE_OVERHEAD_TOKENS : 0;
+  const placeholderTok = preset.postProcessing === 'strict' ? estimateTokens(POST_PROCESSING_PLACEHOLDER, counter) + MESSAGE_OVERHEAD_TOKENS : 0;
+  const fixed = scaled(blocksTok + loreOwnTok + insertsTok + prefillTok + cueTok + placeholderTok, factor);
+  // Measured on demand: trimHistory stops at the first overflow, so older messages are never
+  // tokenized (D-49's early stop holds with a real tokenizer too).
+  const sized = chat.msgs.map((m, i) => {
+    let tok: number | undefined;
+    return {
+      id: chat.ids[i]!,
+      get tok(): number {
+        return (tok ??= scaled(measure(m), factor));
+      },
+    };
+  });
   const head = chat.greeting ? 1 : 0;
   const tail = Math.min(protectedTail(input, chat.ids), Math.max(0, sized.length - head));
   const maxKept = preset.context?.maxMessages;
-  const cut = trimHistory(sized, available - fixed, { protectedHead: head, protectedTail: tail, ...(maxKept !== undefined ? { maxKept } : {}) });
+  const trimOpts = { protectedTail: tail, ...(maxKept !== undefined ? { maxKept } : {}) };
+  let cut = trimHistory(sized, available - fixed, { protectedHead: head, ...trimOpts });
+  // The last resort before a refusal: the greeting goes the way of old history. SillyTavern fills
+  // the history newest first and leaves out whatever does not fit, the greeting included
+  // (openai.js populateChatHistory); refusing a turn ST would send is worse than a missing greeting.
+  let greetingDropped = false;
+  if (!cut.fits && head > 0) {
+    const without = trimHistory(sized, available - fixed, { protectedHead: 0, ...trimOpts });
+    if (without.fits) {
+      cut = without;
+      greetingDropped = true;
+    }
+  }
   if (!cut.fits) {
-    const greetingTok = sized.slice(0, head).reduce((a, s) => a + s.tok, 0);
     const tailTok = sized.slice(sized.length - tail).reduce((a, s) => a + s.tok, 0);
-    const need = fixed + greetingTok + tailTok;
+    const need = fixed + tailTok;
+    const s = (n: number): number => scaled(n, factor);
+    const parts = [
+      `the preset's blocks ${s(blocksTok + loreOwnTok)} (lore included: ${lore.run.used} of its budget ${budgetForLore})`,
+      ...(insertsTok > 0 ? [`in-chat inserts ${s(insertsTok)} (author's note, depth prompts, depth lore)`] : []),
+      ...(prefillTok + cueTok + placeholderTok > 0 ? [`prefill and cues ${s(prefillTok + cueTok + placeholderTok)}`] : []),
+      `your current message${tail > 1 ? ' and the answer it continues' : ''} ${tailTok}`,
+    ];
+    const greeting = head > 0 ? `; the greeting (${sized[0]!.tok} tokens) is already left out` : '';
     return {
       ok: false,
       code: 'context_length_exceeded',
-      message: `the required part of the prompt needs about ${need} tokens, but only ${Math.max(0, available)} are available (window ${input.window} - reply reserve ${input.reserve})`,
+      message: `the required part of the prompt needs about ${need} tokens, but only ${Math.max(0, available)} are available (window ${input.window} - reply reserve ${input.reserve}): ${parts.join(', ')}${greeting}`,
     };
   }
-  const kept = [...chat.msgs.slice(0, head), ...chat.msgs.slice(cut.keepFrom)];
+  const kept = greetingDropped ? chat.msgs.slice(cut.keepFrom) : [...chat.msgs.slice(0, head), ...chat.msgs.slice(cut.keepFrom)];
 
   // The leading system run of the preset is the head the adapters send as the system prompt.
-  const lead = [...layout.top, ...layout.before];
+  const lead = [...loreTop, ...layout.top, ...layout.before];
   for (const m of lead) {
     if (m.role !== 'system') break;
     m.placement = 'head';
@@ -431,15 +599,22 @@ export function assemble(input: AssembleInput): AssembleResult {
   // In cue mode A is a real message and counts like any other.
   const displaced = input.kind === 'continue' && input.caps.prefill !== 'none' ? kept.pop() : undefined;
   const chatPart = [...injectAtDepth(kept, inserts), ...(displaced ? [displaced] : [])];
-  const messages: PromptMsg[] = [...lead, ...newChat, ...chatPart, ...layout.after, ...layout.bottom];
+  const messages: PromptMsg[] = [...lead, ...newChat, ...loreRecap, ...chatPart, ...layout.after, ...layout.bottom, ...loreBottom];
 
+  const unsent = unsentLore(lore.run.fired, used);
   const trace: Trace = {
     seed: input.seed,
     now: input.now,
     window: input.window,
     reserve: input.reserve,
-    ...sentRows(messages),
-    lore: { fired: [], cut: [], budget: 0 },
+    ...sentRows(messages, counter),
+    // Only accepted entries are fires: timers start from them (a cut entry never reached the prompt).
+    lore: {
+      fired: lore.run.fired.map((h) => ({ book: h.book, id: h.id, why: h.why })),
+      cut: lore.run.cut.map((h) => entryLabel(h.book, h.id)),
+      budget: budgetForLore,
+      ...(unsent ? { unsent } : {}),
+    },
     recap: { ids: [], arcs: [], boundary: null },
     prefill: prefill.trace,
     macros: { unknown: run.unknown() },
@@ -447,9 +622,28 @@ export function assemble(input: AssembleInput): AssembleResult {
     calls: [],
     agents: {},
     presetHash: presetHash(preset),
-    loreHashes: {},
+    loreHashes: loreHashes(sources),
+    ...(sources.length > 0 ? { loreNames: loreNames(sources) } : {}),
   };
 
+  const regex = regexNotice(lore.run.regexErrors);
+  const notices = [...prefill.notices, ...(regex ? [regex] : [])];
+  if (greetingDropped) {
+    notices.push({
+      level: 'warn',
+      code: 'greeting_dropped',
+      message: `The greeting did not fit in the context window (${input.window} tokens) next to the preset, the lore and your message, so this request leaves it out, as SillyTavern does.`,
+    });
+  }
+  if (unsent) {
+    const slots = [...new Set(Object.values(unsent))];
+    const n = Object.keys(unsent).length;
+    notices.push({
+      level: 'warn',
+      code: 'lore_unsent',
+      message: `${n} lore entr${n === 1 ? 'y' : 'ies'} fired but ${n === 1 ? 'was' : 'were'} not sent: the preset has no enabled ${slots.join(', ')} (as in SillyTavern; /trace marks ${n === 1 ? 'it' : 'them'}).`,
+    });
+  }
   return {
     ok: true,
     messages,
@@ -457,6 +651,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     prefill: prefill.prefill,
     trace,
     varsDiff: run.varsDiff(),
-    notices: prefill.notices,
+    notices,
+    ...(input.explain ? { verdicts: lore.run.verdicts ?? [], loreUse: { used: lore.run.used, factor } } : {}),
+    ...(lore.run.regexErrors.length > 0 ? { loreRegexErrors: lore.run.regexErrors } : {}),
   };
 }

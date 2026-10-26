@@ -1,0 +1,292 @@
+{
+  "fixture": "04-no-preset-pre-trim",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "Vera keeps the lighthouse at Gull Point. Vera is wary of User."
+    },
+    {
+      "role": "system",
+      "content": "Dry, patient, suspicious of strangers."
+    },
+    {
+      "role": "system",
+      "content": "A storm has stranded User at the lighthouse."
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, User."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 22. Gulls are sheltering under the gallery rail. Turn 22. Gulls are sheltering under the gallery rail. Turn 22. Gulls are sheltering under the gallery rail. Turn 22. Gulls are sheltering under the gallery rail. Turn 22. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 23. The logbook says the last keeper left in March. Turn 23. The logbook says the last keeper left in March. Turn 23. The logbook says the last keeper left in March. Turn 23. The logbook says the last keeper left in March. Turn 23. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 24. Salt has crusted the lower windows white. Turn 24. Salt has crusted the lower windows white. Turn 24. Salt has crusted the lower windows white. Turn 24. Salt has crusted the lower windows white. Turn 24. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 25. The lamp needs oil again before midnight. Turn 25. The lamp needs oil again before midnight. Turn 25. The lamp needs oil again before midnight. Turn 25. The lamp needs oil again before midnight. Turn 25. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 26. Gulls are sheltering under the gallery rail. Turn 26. Gulls are sheltering under the gallery rail. Turn 26. Gulls are sheltering under the gallery rail. Turn 26. Gulls are sheltering under the gallery rail. Turn 26. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 27. The logbook says the last keeper left in March. Turn 27. The logbook says the last keeper left in March. Turn 27. The logbook says the last keeper left in March. Turn 27. The logbook says the last keeper left in March. Turn 27. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 28. Salt has crusted the lower windows white. Turn 28. Salt has crusted the lower windows white. Turn 28. Salt has crusted the lower windows white. Turn 28. Salt has crusted the lower windows white. Turn 28. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 29. The lamp needs oil again before midnight. Turn 29. The lamp needs oil again before midnight. Turn 29. The lamp needs oil again before midnight. Turn 29. The lamp needs oil again before midnight. Turn 29. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 30. Gulls are sheltering under the gallery rail. Turn 30. Gulls are sheltering under the gallery rail. Turn 30. Gulls are sheltering under the gallery rail. Turn 30. Gulls are sheltering under the gallery rail. Turn 30. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 31. The logbook says the last keeper left in March. Turn 31. The logbook says the last keeper left in March. Turn 31. The logbook says the last keeper left in March. Turn 31. The logbook says the last keeper left in March. Turn 31. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 32. Salt has crusted the lower windows white. Turn 32. Salt has crusted the lower windows white. Turn 32. Salt has crusted the lower windows white. Turn 32. Salt has crusted the lower windows white. Turn 32. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 33. The lamp needs oil again before midnight. Turn 33. The lamp needs oil again before midnight. Turn 33. The lamp needs oil again before midnight. Turn 33. The lamp needs oil again before midnight. Turn 33. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 34. Gulls are sheltering under the gallery rail. Turn 34. Gulls are sheltering under the gallery rail. Turn 34. Gulls are sheltering under the gallery rail. Turn 34. Gulls are sheltering under the gallery rail. Turn 34. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 35. The logbook says the last keeper left in March. Turn 35. The logbook says the last keeper left in March. Turn 35. The logbook says the last keeper left in March. Turn 35. The logbook says the last keeper left in March. Turn 35. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 36. Salt has crusted the lower windows white. Turn 36. Salt has crusted the lower windows white. Turn 36. Salt has crusted the lower windows white. Turn 36. Salt has crusted the lower windows white. Turn 36. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 37. The lamp needs oil again before midnight. Turn 37. The lamp needs oil again before midnight. Turn 37. The lamp needs oil again before midnight. Turn 37. The lamp needs oil again before midnight. Turn 37. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 38. Gulls are sheltering under the gallery rail. Turn 38. Gulls are sheltering under the gallery rail. Turn 38. Gulls are sheltering under the gallery rail. Turn 38. Gulls are sheltering under the gallery rail. Turn 38. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 39. The logbook says the last keeper left in March. Turn 39. The logbook says the last keeper left in March. Turn 39. The logbook says the last keeper left in March. Turn 39. The logbook says the last keeper left in March. Turn 39. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 40. Salt has crusted the lower windows white. Turn 40. Salt has crusted the lower windows white. Turn 40. Salt has crusted the lower windows white. Turn 40. Salt has crusted the lower windows white. Turn 40. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 41. The lamp needs oil again before midnight. Turn 41. The lamp needs oil again before midnight. Turn 41. The lamp needs oil again before midnight. Turn 41. The lamp needs oil again before midnight. Turn 41. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 42. Gulls are sheltering under the gallery rail. Turn 42. Gulls are sheltering under the gallery rail. Turn 42. Gulls are sheltering under the gallery rail. Turn 42. Gulls are sheltering under the gallery rail. Turn 42. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 43. The logbook says the last keeper left in March. Turn 43. The logbook says the last keeper left in March. Turn 43. The logbook says the last keeper left in March. Turn 43. The logbook says the last keeper left in March. Turn 43. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 44. Salt has crusted the lower windows white. Turn 44. Salt has crusted the lower windows white. Turn 44. Salt has crusted the lower windows white. Turn 44. Salt has crusted the lower windows white. Turn 44. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 45. The lamp needs oil again before midnight. Turn 45. The lamp needs oil again before midnight. Turn 45. The lamp needs oil again before midnight. Turn 45. The lamp needs oil again before midnight. Turn 45. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 46. Gulls are sheltering under the gallery rail. Turn 46. Gulls are sheltering under the gallery rail. Turn 46. Gulls are sheltering under the gallery rail. Turn 46. Gulls are sheltering under the gallery rail. Turn 46. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 47. The logbook says the last keeper left in March. Turn 47. The logbook says the last keeper left in March. Turn 47. The logbook says the last keeper left in March. Turn 47. The logbook says the last keeper left in March. Turn 47. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 48. Salt has crusted the lower windows white. Turn 48. Salt has crusted the lower windows white. Turn 48. Salt has crusted the lower windows white. Turn 48. Salt has crusted the lower windows white. Turn 48. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 49. The lamp needs oil again before midnight. Turn 49. The lamp needs oil again before midnight. Turn 49. The lamp needs oil again before midnight. Turn 49. The lamp needs oil again before midnight. Turn 49. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 50. Gulls are sheltering under the gallery rail. Turn 50. Gulls are sheltering under the gallery rail. Turn 50. Gulls are sheltering under the gallery rail. Turn 50. Gulls are sheltering under the gallery rail. Turn 50. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 51. The logbook says the last keeper left in March. Turn 51. The logbook says the last keeper left in March. Turn 51. The logbook says the last keeper left in March. Turn 51. The logbook says the last keeper left in March. Turn 51. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 52. Salt has crusted the lower windows white. Turn 52. Salt has crusted the lower windows white. Turn 52. Salt has crusted the lower windows white. Turn 52. Salt has crusted the lower windows white. Turn 52. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 53. The lamp needs oil again before midnight. Turn 53. The lamp needs oil again before midnight. Turn 53. The lamp needs oil again before midnight. Turn 53. The lamp needs oil again before midnight. Turn 53. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 54. Gulls are sheltering under the gallery rail. Turn 54. Gulls are sheltering under the gallery rail. Turn 54. Gulls are sheltering under the gallery rail. Turn 54. Gulls are sheltering under the gallery rail. Turn 54. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 55. The logbook says the last keeper left in March. Turn 55. The logbook says the last keeper left in March. Turn 55. The logbook says the last keeper left in March. Turn 55. The logbook says the last keeper left in March. Turn 55. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 56. Salt has crusted the lower windows white. Turn 56. Salt has crusted the lower windows white. Turn 56. Salt has crusted the lower windows white. Turn 56. Salt has crusted the lower windows white. Turn 56. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 57. The lamp needs oil again before midnight. Turn 57. The lamp needs oil again before midnight. Turn 57. The lamp needs oil again before midnight. Turn 57. The lamp needs oil again before midnight. Turn 57. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 58. Gulls are sheltering under the gallery rail. Turn 58. Gulls are sheltering under the gallery rail. Turn 58. Gulls are sheltering under the gallery rail. Turn 58. Gulls are sheltering under the gallery rail. Turn 58. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 59. The logbook says the last keeper left in March. Turn 59. The logbook says the last keeper left in March. Turn 59. The logbook says the last keeper left in March. Turn 59. The logbook says the last keeper left in March. Turn 59. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 60. Salt has crusted the lower windows white. Turn 60. Salt has crusted the lower windows white. Turn 60. Salt has crusted the lower windows white. Turn 60. Salt has crusted the lower windows white. Turn 60. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 61. The lamp needs oil again before midnight. Turn 61. The lamp needs oil again before midnight. Turn 61. The lamp needs oil again before midnight. Turn 61. The lamp needs oil again before midnight. Turn 61. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 62. Gulls are sheltering under the gallery rail. Turn 62. Gulls are sheltering under the gallery rail. Turn 62. Gulls are sheltering under the gallery rail. Turn 62. Gulls are sheltering under the gallery rail. Turn 62. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 63. The logbook says the last keeper left in March. Turn 63. The logbook says the last keeper left in March. Turn 63. The logbook says the last keeper left in March. Turn 63. The logbook says the last keeper left in March. Turn 63. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 64. Salt has crusted the lower windows white. Turn 64. Salt has crusted the lower windows white. Turn 64. Salt has crusted the lower windows white. Turn 64. Salt has crusted the lower windows white. Turn 64. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 65. The lamp needs oil again before midnight. Turn 65. The lamp needs oil again before midnight. Turn 65. The lamp needs oil again before midnight. Turn 65. The lamp needs oil again before midnight. Turn 65. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 66. Gulls are sheltering under the gallery rail. Turn 66. Gulls are sheltering under the gallery rail. Turn 66. Gulls are sheltering under the gallery rail. Turn 66. Gulls are sheltering under the gallery rail. Turn 66. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 67. The logbook says the last keeper left in March. Turn 67. The logbook says the last keeper left in March. Turn 67. The logbook says the last keeper left in March. Turn 67. The logbook says the last keeper left in March. Turn 67. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 68. Salt has crusted the lower windows white. Turn 68. Salt has crusted the lower windows white. Turn 68. Salt has crusted the lower windows white. Turn 68. Salt has crusted the lower windows white. Turn 68. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 69. The lamp needs oil again before midnight. Turn 69. The lamp needs oil again before midnight. Turn 69. The lamp needs oil again before midnight. Turn 69. The lamp needs oil again before midnight. Turn 69. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 70. Gulls are sheltering under the gallery rail. Turn 70. Gulls are sheltering under the gallery rail. Turn 70. Gulls are sheltering under the gallery rail. Turn 70. Gulls are sheltering under the gallery rail. Turn 70. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 71. The logbook says the last keeper left in March. Turn 71. The logbook says the last keeper left in March. Turn 71. The logbook says the last keeper left in March. Turn 71. The logbook says the last keeper left in March. Turn 71. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 72. Salt has crusted the lower windows white. Turn 72. Salt has crusted the lower windows white. Turn 72. Salt has crusted the lower windows white. Turn 72. Salt has crusted the lower windows white. Turn 72. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 73. The lamp needs oil again before midnight. Turn 73. The lamp needs oil again before midnight. Turn 73. The lamp needs oil again before midnight. Turn 73. The lamp needs oil again before midnight. Turn 73. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 74. Gulls are sheltering under the gallery rail. Turn 74. Gulls are sheltering under the gallery rail. Turn 74. Gulls are sheltering under the gallery rail. Turn 74. Gulls are sheltering under the gallery rail. Turn 74. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 75. The logbook says the last keeper left in March. Turn 75. The logbook says the last keeper left in March. Turn 75. The logbook says the last keeper left in March. Turn 75. The logbook says the last keeper left in March. Turn 75. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 76. Salt has crusted the lower windows white. Turn 76. Salt has crusted the lower windows white. Turn 76. Salt has crusted the lower windows white. Turn 76. Salt has crusted the lower windows white. Turn 76. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Turn 77. The lamp needs oil again before midnight. Turn 77. The lamp needs oil again before midnight. Turn 77. The lamp needs oil again before midnight. Turn 77. The lamp needs oil again before midnight. Turn 77. The lamp needs oil again before midnight."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 78. Gulls are sheltering under the gallery rail. Turn 78. Gulls are sheltering under the gallery rail. Turn 78. Gulls are sheltering under the gallery rail. Turn 78. Gulls are sheltering under the gallery rail. Turn 78. Gulls are sheltering under the gallery rail."
+    },
+    {
+      "role": "user",
+      "content": "Turn 79. The logbook says the last keeper left in March. Turn 79. The logbook says the last keeper left in March. Turn 79. The logbook says the last keeper left in March. Turn 79. The logbook says the last keeper left in March. Turn 79. The logbook says the last keeper left in March."
+    },
+    {
+      "role": "assistant",
+      "content": "Turn 80. Salt has crusted the lower windows white. Turn 80. Salt has crusted the lower windows white. Turn 80. Salt has crusted the lower windows white. Turn 80. Salt has crusted the lower windows white. Turn 80. Salt has crusted the lower windows white."
+    },
+    {
+      "role": "user",
+      "content": "Then we wait out the storm together."
+    }
+  ],
+  "samplerSettings": {
+    "max_tokens": 8192
+  },
+  "presetName": "No Preset (Defaults)",
+  "assistantPrefill": null,
+  "budgetReport": {
+    "totalBudget": 6000,
+    "requiredTokens": 89,
+    "importantTokens": 0,
+    "flexibleTokens": 4177,
+    "availableTokens": 1634,
+    "usagePercent": 72.30508474576271
+  },
+  "messagesTrimmed": 0,
+  "personaXml": null,
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 9.59,
+    "medianWarmMs": 5.12,
+    "note": "wall clock, database time excluded"
+  }
+}

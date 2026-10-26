@@ -136,7 +136,9 @@ describe('unknown macros', () => {
   test('ST block forms are not supported: their tags stay literal, the content between is evaluated', () => {
     const r = run();
     expect(r.block('{{#if x}}{{char}}{{/if}}', 'main')).toBe('{{#if x}}Alice{{/if}}');
-    expect(r.unknown()).toEqual(['/if']);
+    expect(r.block('{{#if .player-instructions}}x{{/if}}', 'main')).toBe('{{#if .player-instructions}}x{{/if}}');
+    expect(r.block('{{.player-instructions =\n\n}} {{$n += 2}}', 'main')).toBe('{{.player-instructions =\n\n}} {{$n += 2}}');
+    expect(r.unknown()).toEqual(['#if', '/if', '.player-instructions', '$n']);
   });
 
   test('prototype names are unknown, not Object members', () => {

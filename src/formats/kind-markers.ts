@@ -21,8 +21,9 @@ export function isExportEnvelope(o: unknown): o is Rec & { type: string; data: R
 }
 
 /**
- * A SillyTavern settings-family export: chat-completion preset, text-completion preset, instruct
- * or context template. Never a character or a book, whatever it bundles.
+ * A SillyTavern settings-family export: chat-completion preset, text-completion preset (NovelAI,
+ * KoboldAI, text generation), instruct or context template, system prompt or reasoning template.
+ * Never a character or a book, whatever it bundles.
  */
 export function looksLikeSettingsExport(o: unknown): boolean {
   if (!isRecord(o)) return false;
@@ -32,8 +33,129 @@ export function looksLikeSettingsExport(o: unknown): boolean {
     'chat_completion_source' in o ||
     'temperature' in o ||
     'input_sequence' in o || // instruct template
-    'story_string' in o // context template
+    'story_string' in o || // context template
+    // KoboldAI and text-generation presets write `temp`, not `temperature`; two of their sampler
+    // fields, so one stray key in some other JSON is not enough.
+    textCompletionKeys(o).length >= 2 ||
+    formattingTemplateKind(o) !== null
   );
+}
+
+/**
+ * An ST instruct or context template: a settings export for text completion, which carries none of
+ * the chat-completion preset's fields. Null for anything else (including every chat-completion preset).
+ */
+export function textCompletionTemplateKind(o: unknown): 'instruct template' | 'context template' | null {
+  if (!isRecord(o)) return null;
+  if (Array.isArray(o.prompts) || 'prompt_order' in o || 'chat_completion_source' in o || 'temperature' in o) return null;
+  if ('input_sequence' in o) return 'instruct template';
+  if ('story_string' in o) return 'context template';
+  return null;
+}
+
+/**
+ * SillyTavern's other Advanced Formatting files (default/content/presets/sysprompt, reasoning): a
+ * system prompt `{name, content, post_history}` or a reasoning template `{name, prefix, suffix,
+ * separator}`. Null for anything else.
+ */
+export function formattingTemplateKind(o: unknown): 'system prompt' | 'reasoning template' | null {
+  if (!isRecord(o) || Array.isArray(o.prompts) || 'prompt_order' in o || 'entries' in o) return null;
+  if (typeof o.content === 'string' && typeof o.post_history === 'string') return 'system prompt';
+  if (typeof o.prefix === 'string' && typeof o.suffix === 'string' && typeof o.separator === 'string') return 'reasoning template';
+  return null;
+}
+
+/**
+ * Fields only a SillyTavern chat-completion preset carries (D-72): its prompt manager (`prompts`,
+ * `prompt_order`), its connection and context settings, or the pre-prompt-manager prompt fields.
+ * A sampler such as `temperature` alone says nothing: NovelAI, KoboldAI and text-generation presets
+ * have it too, and so does an API request body.
+ */
+const CHAT_COMPLETION_MARKERS = [
+  'prompt_order',
+  'chat_completion_source',
+  'openai_max_context',
+  'openai_max_tokens',
+  'main_prompt',
+  'nsfw_prompt',
+  'jailbreak_prompt',
+];
+
+/** A SillyTavern chat-completion preset (or a RoleCall export, which is one). */
+export function isChatCompletionPreset(o: unknown): boolean {
+  return isRecord(o) && (Array.isArray(o.prompts) || CHAT_COMPLETION_MARKERS.some((k) => k in o));
+}
+
+/**
+ * Sampler fields of SillyTavern's text-completion presets (default/content/presets/novel, kobold,
+ * textgen) that no chat-completion preset writes. `top_a`, `min_p`, `top_k` are left out: an ST
+ * chat-completion preset has them too.
+ */
+const TEXT_COMPLETION_KEYS = [
+  'max_length',
+  'min_length',
+  'tail_free_sampling',
+  'phrase_rep_pen',
+  'repetition_penalty_range',
+  'order',
+  'temp',
+  'rep_pen',
+  'sampler_order',
+  'sampler_priority',
+  'rep_pen_range',
+  'rep_pen_slope',
+  'tfs',
+  'typical',
+  'mirostat',
+  'mirostat_mode',
+  'mirostat_tau',
+  'typical_p',
+  'temperature_last',
+  'dry_multiplier',
+  'ban_eos_token',
+];
+
+/** The text-completion sampler fields `o` has, in TEXT_COMPLETION_KEYS order. */
+function textCompletionKeys(o: Rec): string[] {
+  return TEXT_COMPLETION_KEYS.filter((k) => k in o);
+}
+
+/**
+ * Which text-completion backend a preset's fields belong to, as SillyTavern files them: NovelAI
+ * (`order`, `max_length`, `phrase_rep_pen`), text generation WebUI and friends (`sampler_priority`,
+ * DRY, `temperature_last`), KoboldAI (`temp` with `sampler_order` and none of those). Null when
+ * the fields do not say.
+ */
+function textCompletionBackend(o: Rec): 'NovelAI' | 'KoboldAI' | 'text-generation' | null {
+  if ('order' in o && ('max_length' in o || 'phrase_rep_pen' in o || 'tail_free_sampling' in o)) return 'NovelAI';
+  if ('sampler_priority' in o || 'samplers' in o || 'dry_multiplier' in o || 'temperature_last' in o || 'ban_eos_token' in o) return 'text-generation';
+  if ('temp' in o && 'sampler_order' in o) return 'KoboldAI';
+  return null;
+}
+
+/**
+ * Why a settings-family export is not a chat-completion preset, or null when it is one: an instruct
+ * or context template, a system prompt or reasoning template, an API request body, a
+ * text-completion preset, or bare samplers.
+ */
+export function notChatCompletionReason(o: unknown): string | null {
+  if (!isRecord(o) || isChatCompletionPreset(o)) return null;
+  const template = textCompletionTemplateKind(o);
+  if (template) return `this is a SillyTavern ${template} (text completion), not a chat-completion preset; it is not imported`;
+  const formatting = formattingTemplateKind(o);
+  if (formatting === 'system prompt') {
+    return "this is a SillyTavern system prompt (Advanced Formatting), not a chat-completion preset; it is not imported (its text belongs in a preset's main prompt)";
+  }
+  if (formatting === 'reasoning template') {
+    return 'this is a SillyTavern reasoning template (Advanced Formatting: prefix, suffix, separator), not a chat-completion preset; it is not imported';
+  }
+  if (Array.isArray(o.messages)) return 'this is an API request body (it has a messages list), not a preset; it is not imported';
+  const tc = textCompletionKeys(o);
+  if (tc.length > 0) {
+    const backend = textCompletionBackend(o) ?? 'NovelAI, KoboldAI or text-generation';
+    return `this is a SillyTavern text-completion preset (${backend} samplers: ${tc.slice(0, 3).join(', ')}), not a chat-completion preset; it is not imported`;
+  }
+  return 'this has samplers but no prompts, prompt_order or chat-completion settings, so it is not a SillyTavern chat-completion preset; it is not imported';
 }
 
 /** ST world info file: `entries` is a keyed OBJECT of ST-shaped entries (an array would be a character_book). */

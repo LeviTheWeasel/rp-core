@@ -1,0 +1,81 @@
+{
+  "name": "10-toggle-macros",
+  "about": "A preset exercising RoleCall's toggle-introspection macros (apps/rc/src/lib/macros/handlers/preset-introspection.ts at the pin): {{enabled::id}} and {{when_enabled::id::content}}. Three custom prompts carry the states: toggleAlwaysOn (DB enabled: true, untouched by the request), toggleAlwaysOff (DB enabled: false, untouched), and toggleFlipped (DB enabled: false, but input.promptEnabledStates flips it to true for this request). 'main' reports all three via {{enabled::x}} and gates two {{when_enabled::x::content}} bodies, so the recorded output proves the runtime override in promptEnabledStates -- not just the DB row's own `enabled` column -- is what the macro context and the assembled prompt both see: toggleFlipped reads true and its TOGGLE-FLIPPED-BODY prompt is included, exactly as if it had shipped enabled, while toggleAlwaysOff stays false and excluded. A chatHistory marker (empty content, marker: true) supplies the message-history slot explicitly instead of relying on preset-loader's auto-inject.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 10,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-10", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-10", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }],
+      "presets": [{
+        "id": "preset-10", "name": "Toggle Macros", "creator_id": "u-owner",
+        "status": "private", "deleted_at": null, "is_soft_hidden": false, "listing_preset_id": null,
+        "temperature": 1, "top_p": 0.97, "top_k": 64, "top_a": 0, "min_p": 0,
+        "max_context": 2000000, "max_tokens": 8192,
+        "frequency_penalty": 0, "presence_penalty": 0, "repetition_penalty": 1,
+        "prompt_post_processing": "none",
+        "system_prompts": {
+          "impersonation_prompt": "", "new_chat_prompt": "", "new_group_chat_prompt": "",
+          "new_example_chat_prompt": "[Example Chat]", "continue_nudge_prompt": "",
+          "group_nudge_prompt": "", "assistant_prefill": "", "assistant_impersonation": ""
+        },
+        "settings": null, "raw_settings": {}
+      }],
+      "preset_prompts": [
+        { "id": "pp-10-0", "preset_id": "preset-10", "identifier": "main", "name": "Main Prompt", "content": "Macro check: alwaysOn={{enabled::toggleAlwaysOn}} alwaysOff={{enabled::toggleAlwaysOff}} flipped={{enabled::toggleFlipped}}. {{when_enabled::toggleFlipped::[FLIPPED-VISIBLE]}}{{when_enabled::toggleAlwaysOff::[SHOULD-NOT-APPEAR]}}", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 0 },
+        { "id": "pp-10-1", "preset_id": "preset-10", "identifier": "toggleAlwaysOn", "name": "Toggle Always On", "content": "TOGGLE-ALWAYS-ON-BODY", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 1 },
+        { "id": "pp-10-2", "preset_id": "preset-10", "identifier": "toggleAlwaysOff", "name": "Toggle Always Off", "content": "TOGGLE-ALWAYS-OFF-BODY", "role": "system", "enabled": false, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 2 },
+        { "id": "pp-10-3", "preset_id": "preset-10", "identifier": "toggleFlipped", "name": "Toggle Flipped", "content": "TOGGLE-FLIPPED-BODY", "role": "system", "enabled": false, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": false, "sort_order": 3 },
+        { "id": "pp-10-4", "preset_id": "preset-10", "identifier": "chatHistory", "name": "Chat History", "content": "", "role": "system", "enabled": true, "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 4 }
+      ]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "stPreset": {
+    "name": "Toggle Macros",
+    "prompts": [
+      { "identifier": "main", "name": "Main Prompt", "content": "Macro check: alwaysOn={{enabled::toggleAlwaysOn}} alwaysOff={{enabled::toggleAlwaysOff}} flipped={{enabled::toggleFlipped}}. {{when_enabled::toggleFlipped::[FLIPPED-VISIBLE]}}{{when_enabled::toggleAlwaysOff::[SHOULD-NOT-APPEAR]}}", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "toggleAlwaysOn", "name": "Toggle Always On", "content": "TOGGLE-ALWAYS-ON-BODY", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "toggleAlwaysOff", "name": "Toggle Always Off", "content": "TOGGLE-ALWAYS-OFF-BODY", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "toggleFlipped", "name": "Toggle Flipped", "content": "TOGGLE-FLIPPED-BODY", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 },
+      { "identifier": "chatHistory", "name": "Chat History", "content": "", "role": "system", "system_prompt": true, "marker": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 }
+    ],
+    "prompt_order": [{
+      "character_id": 100001,
+      "order": [
+        { "identifier": "main", "enabled": true },
+        { "identifier": "toggleAlwaysOn", "enabled": true },
+        { "identifier": "toggleAlwaysOff", "enabled": false },
+        { "identifier": "toggleFlipped", "enabled": false },
+        { "identifier": "chatHistory", "enabled": true }
+      ]
+    }]
+  },
+  "input": {
+    "characterId": "ch-10",
+    "chatId": "c-10",
+    "presetId": "preset-10",
+    "promptEnabledStates": { "toggleFlipped": true },
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." },
+      { "role": "user", "content": "I only need somewhere dry until morning." },
+      { "role": "assistant", "content": "*She steps aside.* Boots off. Don't touch the lamp." }
+    ],
+    "currentMessage": "Understood. I'll keep my hands to myself."
+  }
+}

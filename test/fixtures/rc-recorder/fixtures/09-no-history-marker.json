@@ -1,0 +1,74 @@
+{
+  "name": "09-no-history-marker",
+  "about": "A preset with a single 'main' prompt: no chatHistory marker, no {{message_history}} anywhere, no personaDescription, no worldInfo markers. Every one of preset-loader's synthetic auto-injects is added: {{lore}} (no worldInfoBefore/After, no chatHistory, so it is unshifted at the very start), {{persona}} (no personaDescription, so it is inserted right after 'main'), {{summary}} (no summary marker, so it is inserted before the synthetic message-history slot), and {{message_history}} itself (no chatHistory, so it is synthesized as an in-chat prompt at depth 0). Only {{persona}} and {{message_history}} are observable in the output: there is no lorebook and no chat summary in this fixture, so the lore and summary macros expand to empty strings and their messages are dropped before conversationHistory is built. A persona is attached so the synthetic {{persona}} has real content to expand.",
+  "now": "2026-09-27T12:00:00.000Z",
+  "seed": 9,
+  "db": {
+    "userId": "u-owner",
+    "tables": {
+      "user_chats": [{ "id": "c-09", "user_id": "u-owner", "config": {} }],
+      "chat_variables": [],
+      "global_variables": [],
+      "chat_lorebook_side_effect_fires": [],
+      "characters": [{
+        "id": "ch-09", "name": "Vera", "creator_id": "u-owner", "status": "private",
+        "description": "Vera keeps the lighthouse at Gull Point. {{char}} is wary of {{user}}.",
+        "personality": "Dry, patient, suspicious of strangers.",
+        "scenario": "A storm has stranded {{user}} at the lighthouse.",
+        "first_mes": "*Vera opens the door a crack.* You picked a bad night, {{user}}.",
+        "alternate_greetings": [],
+        "mes_example": "",
+        "system_prompt": "", "post_history_instructions": "", "creator_notes": "",
+        "character_version": "1.0", "creator_profiles": null, "character_tags": [],
+        "details": null, "accent_color": null, "extensions": null
+      }],
+      "personas": [{
+        "id": "p-09", "name": "Wren", "creator_id": "u-owner", "status": "private",
+        "details": { "pronouns": "she/her", "age": "31", "appearance": "Soaked oilskin coat, a satchel of charts.", "personality": "Curious and stubborn." },
+        "section_order": null
+      }],
+      "presets": [{
+        "id": "preset-09", "name": "No History Marker", "creator_id": "u-owner",
+        "status": "private", "deleted_at": null, "is_soft_hidden": false, "listing_preset_id": null,
+        "temperature": 1, "top_p": 0.97, "top_k": 64, "top_a": 0, "min_p": 0,
+        "max_context": 2000000, "max_tokens": 8192,
+        "frequency_penalty": 0, "presence_penalty": 0, "repetition_penalty": 1,
+        "prompt_post_processing": "none",
+        "system_prompts": {
+          "impersonation_prompt": "", "new_chat_prompt": "", "new_group_chat_prompt": "",
+          "new_example_chat_prompt": "[Example Chat]", "continue_nudge_prompt": "",
+          "group_nudge_prompt": "", "assistant_prefill": "", "assistant_impersonation": ""
+        },
+        "settings": null, "raw_settings": {}
+      }],
+      "preset_prompts": [
+        { "id": "pp-09-0", "preset_id": "preset-09", "identifier": "main", "name": "Main Prompt", "content": "You are {{char}}, speaking with {{user}} in a quiet observatory at night.", "role": "system", "enabled": true, "system_prompt": true, "marker": false, "injection_position": 0, "injection_depth": 4, "injection_order": 100, "forbid_overrides": false, "is_default": true, "sort_order": 0 }
+      ]
+    },
+    "rpc": { "resolve_chat_summary_checkpoint": null }
+  },
+  "stPreset": {
+    "name": "No History Marker",
+    "prompts": [
+      { "identifier": "main", "name": "Main Prompt", "content": "You are {{char}}, speaking with {{user}} in a quiet observatory at night.", "role": "system", "system_prompt": true, "injection_position": 0, "injection_depth": 4, "injection_order": 100 }
+    ],
+    "prompt_order": [{
+      "character_id": 100001,
+      "order": [
+        { "identifier": "main", "enabled": true }
+      ]
+    }]
+  },
+  "input": {
+    "characterId": "ch-09",
+    "chatId": "c-09",
+    "presetId": "preset-09",
+    "personaId": "p-09",
+    "messages": [
+      { "role": "assistant", "content": "*Vera opens the door a crack.* You picked a bad night, {{user}}." },
+      { "role": "user", "content": "I saw your light from the water." },
+      { "role": "assistant", "content": "*She studies the horizon behind you.* Come in before the door does the deciding." }
+    ],
+    "currentMessage": "There's nothing out there now, is there?"
+  }
+}

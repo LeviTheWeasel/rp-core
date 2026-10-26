@@ -12,7 +12,7 @@
 
 import { createHash } from 'node:crypto';
 import { abortableDelay } from '../engine/abort.ts';
-import { PROVIDER_ERROR_CATEGORY, ProviderError } from './types.ts';
+import { PROVIDER_ERROR_CATEGORY, PROVIDER_ERROR_MESSAGE, ProviderError } from './types.ts';
 import type { ProviderErrorCategory, ProviderEnv, StreamEv } from './types.ts';
 import type { FinishReason, ModelCaps, ModelRequest, Provider, ProviderErrorCode, Usage } from './types.ts';
 
@@ -219,8 +219,8 @@ export function parseScript(text: string): ScriptCall[] {
 
 // ---- request hash -------------------------------------------------------------------------------
 
-/** JSON with object keys sorted at every level; undefined members dropped as JSON.stringify does. */
-function canonicalJson(v: unknown): string {
+/** JSON with object keys sorted at every level; undefined members dropped as JSON.stringify does. Shared with record.ts. */
+export function canonicalJson(v: unknown): string {
   if (typeof v === 'object' && v !== null && typeof (v as { toJSON?: unknown }).toJSON === 'function') {
     v = (v as { toJSON(): unknown }).toJSON();
   }
@@ -334,7 +334,7 @@ export function createScriptedProvider(
     if (!call) {
       yield failure(
         'script_exhausted',
-        `script exhausted: request ${index + 1} has no call left (the script has ${script.length})`,
+        `${PROVIDER_ERROR_MESSAGE.script_exhausted}: request ${index + 1} has no call left (the script has ${script.length})`,
         false,
       );
       return;

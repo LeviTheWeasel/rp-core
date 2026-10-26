@@ -1,0 +1,65 @@
+{
+  "fixture": "09-no-history-marker",
+  "rolecall": "68afe385987811c4c1b8594013b27e75bebbe8f2",
+  "conversationHistory": [
+    {
+      "role": "system",
+      "content": "You are Vera, speaking with Wren in a quiet observatory at night."
+    },
+    {
+      "role": "system",
+      "content": "<persona name=\"Wren\">\n  <identity>\n    <pronouns>she/her</pronouns>\n    <age>31</age>\n  </identity>\n  <appearance>Soaked oilskin coat, a satchel of charts.</appearance>\n  <personality>Curious and stubborn.</personality>\n</persona>"
+    },
+    {
+      "role": "assistant",
+      "content": "*Vera opens the door a crack.* You picked a bad night, Wren."
+    },
+    {
+      "role": "user",
+      "content": "I saw your light from the water."
+    },
+    {
+      "role": "assistant",
+      "content": "*She studies the horizon behind you.* Come in before the door does the deciding."
+    },
+    {
+      "role": "user",
+      "content": "There's nothing out there now, is there?"
+    }
+  ],
+  "samplerSettings": {
+    "temperature": 1,
+    "top_p": 0.97,
+    "top_k": 64,
+    "top_a": 0,
+    "min_p": 0,
+    "max_tokens": 8192,
+    "frequency_penalty": 0,
+    "presence_penalty": 0,
+    "repetition_penalty": 1,
+    "prompt_post_processing": "none"
+  },
+  "presetName": "No History Marker",
+  "assistantPrefill": null,
+  "budgetReport": null,
+  "messagesTrimmed": 0,
+  "personaXml": "<persona name=\"Wren\">\n  <identity>\n    <pronouns>she/her</pronouns>\n    <age>31</age>\n  </identity>\n  <appearance>Soaked oilskin coat, a satchel of charts.</appearance>\n  <personality>Curious and stubborn.</personality>\n</persona>",
+  "writes": [],
+  "reads": [
+    "characters",
+    "chat_lorebook_side_effect_fires",
+    "chat_variables",
+    "global_variables",
+    "personas",
+    "preset_prompts",
+    "presets",
+    "rpc:resolve_chat_summary_checkpoint",
+    "user_chats"
+  ],
+  "timing": {
+    "runs": 15,
+    "firstMs": 5.05,
+    "medianWarmMs": 1.59,
+    "note": "wall clock, database time excluded"
+  }
+}

@@ -34,8 +34,15 @@ export interface PathView {
   tails: string[];
   /** Variables folded along the path: vars0, then every committed diff on path messages (null deletes). */
   vars: Record<string, string | number>;
-  /** Lore fires from traces on the path (M2 timers); empty in M1a sessions. */
-  fires: { msgId: string; fired: Trace['lore']['fired'] }[];
+  /**
+   * Lore fires from traces on the path (M2 timers); empty in M1a sessions. `continued`: the fires of a
+   * continue edit of the message (that scan ran one message later, at the message's index + 1).
+   * `names`: the trace's book names by source key (Trace.loreNames), so timers follow a world that is
+   * read under another key later (§10.3 "a book is read once by name").
+   */
+  fires: { msgId: string; fired: Trace['lore']['fired']; continued?: true; names?: Record<string, string> }[];
+  /** Path messages that have at least one continue edit (each continue was a lore scan, M2 timers). */
+  continued?: ReadonlySet<string>;
   /** Names and aliases of the card and persona. */
   castNames: string[];
 }

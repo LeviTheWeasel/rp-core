@@ -89,8 +89,9 @@ describe('PathView', () => {
     expect(view.path[2]!.swipe).toEqual({ index: 0, count: 2 });
     expect(view.fires).toEqual([
       { msgId: 'a0000001', fired },
-      { msgId: 'a0000001', fired: [{ book: 'world', id: 'e2', why: 'key:moat' }] },
+      { msgId: 'a0000001', fired: [{ book: 'world', id: 'e2', why: 'key:moat' }], continued: true },
     ]);
+    expect([...(view.continued ?? [])]).toEqual(['a0000001']);
     expect([...view.pathSet]).toEqual(['g0000001', 'u0000001', 'a0000001']);
   });
 

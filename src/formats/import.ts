@@ -7,22 +7,53 @@
 // `rp-core import` and `new --card` (ARCHITECTURE.md D-72). Fixed detection order: PNG card, JSON
 // card, ST preset, ST world info with an entries object, bare character_book, else refuse with a
 // reason. Reading tries the file as-is, then as double-encoded JSON, then as an export envelope.
-// M1a imports cards only; presets and world info arrive in M2.
+// M1a imported cards only; M2 adds ST chat-completion presets (st-preset.ts), ST world info files
+// and bare character_book files (st-worldinfo.ts), saved to library/presets and library/lorebooks.
 // CONTRACT FILE: signatures are fixed; the formats agent implements the bodies.
 //
 // Bunraku's registry of 29 scoring adapters is deliberately not ported: one fixed order is enough.
 
 import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, extname } from 'node:path';
 import { CardFormatError, isCardObject, isPng, pngCardChunkKeywords, readCard } from './card.ts';
-import { foreignKindReason, looksLikeCharacterBook, looksLikeSettingsExport, looksLikeWorldInfo, readingsOf } from './kind-markers.ts';
-import { saveToLibrary } from './library.ts';
-import { validateCharacter, type Character, type ImportWarning } from './native.ts';
+import {
+  foreignKindReason,
+  looksLikeCharacterBook,
+  looksLikeSettingsExport,
+  looksLikeWorldInfo,
+  readingsOf,
+  notChatCompletionReason,
+} from './kind-markers.ts';
+import { saveToLibrary, type LibraryKind } from './library.ts';
+import {
+  validateCharacter,
+  validateLoreBook,
+  validatePreset,
+  type Character,
+  type ImportWarning,
+  type LoreBook,
+  type Preset,
+  type Validation,
+} from './native.ts';
+import { stPresetToPreset } from './st-preset.ts';
+import { characterBookToLoreBook, worldInfoToLoreBook } from './st-worldinfo.ts';
 
 export type DetectedKind = 'png_card' | 'json_card' | 'st_preset' | 'st_worldinfo' | 'character_book' | 'unknown';
 
+/** What an import produces, and the library folder it lands in (characters, presets, lorebooks). */
+export type ImportedKind = 'character' | 'preset' | 'lorebook';
+
+export type ImportResult =
+  | { kind: 'character'; id: string; path: string; value: Character; warnings: ImportWarning[] }
+  | { kind: 'preset'; id: string; path: string; value: Preset; warnings: ImportWarning[] }
+  | { kind: 'lorebook'; id: string; path: string; value: LoreBook; warnings: ImportWarning[] };
+
 export class ImportError extends Error {
-  readonly code: 'unreadable' | 'unknown_format' | 'unsupported_until_m2';
+  /**
+   * wrong_kind: the file is fine but not the kind the caller asked for (opts.expect), e.g. a card
+   * given to /preset. unsupported_until_m2 is M1a's and goes away with M2.
+   */
+  readonly code: 'unreadable' | 'unknown_format' | 'unsupported_until_m2' | 'wrong_kind';
   constructor(code: ImportError['code'], message: string) {
     super(message);
     this.name = 'ImportError';
@@ -30,8 +61,15 @@ export class ImportError extends Error {
   }
 }
 
-/** Detection result with the reason a file was refused, for the error message. */
-export function detect(bytes: Uint8Array): { kind: DetectedKind; reason?: string } {
+/** A detection plus the JSON reading that matched (JSON kinds only) and whether it took a repair. */
+interface Detection {
+  kind: DetectedKind;
+  reason?: string;
+  reading?: unknown;
+  repaired?: boolean;
+}
+
+function detectFull(bytes: Uint8Array): Detection {
   if (isPng(bytes)) {
     // A PNG is a card or nothing: no other kind travels in PNG text chunks here. A card chunk that
     // cannot be decoded still makes it a card file, so the import reports the decode error.
@@ -46,18 +84,32 @@ export function detect(bytes: Uint8Array): { kind: DetectedKind; reason?: string
     return { kind: 'unknown', reason: 'neither a PNG nor JSON' };
   }
   // The honest reading wins; repairs are tried only when it is not recognised as anything.
-  for (const reading of readingsOf(parsed)) {
-    if (isCardObject(reading)) return { kind: 'json_card' };
-    if (looksLikeSettingsExport(reading)) return { kind: 'st_preset' };
-    if (looksLikeWorldInfo(reading)) return { kind: 'st_worldinfo' };
-    if (looksLikeCharacterBook(reading)) return { kind: 'character_book' };
+  const readings = readingsOf(parsed);
+  for (const [i, reading] of readings.entries()) {
+    const found = (kind: DetectedKind): Detection => ({ kind, reading, repaired: i > 0 });
+    if (isCardObject(reading)) return found('json_card');
+    if (looksLikeSettingsExport(reading)) {
+      // Instruct and context templates, text-completion presets (NovelAI and friends carry
+      // `temperature` too) and request bodies are settings-shaped, but not a chat-completion preset.
+      const refused = notChatCompletionReason(reading);
+      if (refused) return { kind: 'unknown', reason: refused };
+      return found('st_preset');
+    }
+    if (looksLikeWorldInfo(reading)) return found('st_worldinfo');
+    if (looksLikeCharacterBook(reading)) return found('character_book');
   }
   // Another app's record that looks card-like at the edges: say what it is (D-72).
-  for (const reading of readingsOf(parsed)) {
+  for (const reading of readings) {
     const foreign = foreignKindReason(reading);
     if (foreign) return { kind: 'unknown', reason: foreign };
   }
   return { kind: 'unknown', reason: 'JSON that is not a character card, SillyTavern preset, world info or character_book' };
+}
+
+/** Detection result with the reason a file was refused, for the error message. */
+export function detect(bytes: Uint8Array): { kind: DetectedKind; reason?: string } {
+  const d = detectFull(bytes);
+  return d.reason !== undefined ? { kind: d.kind, reason: d.reason } : { kind: d.kind };
 }
 
 export function detectKind(bytes: Uint8Array, filename: string): DetectedKind {
@@ -65,43 +117,124 @@ export function detectKind(bytes: Uint8Array, filename: string): DetectedKind {
   return detect(bytes).kind;
 }
 
-const M2_KIND: Partial<Record<DetectedKind, string>> = {
-  st_preset: 'SillyTavern preset',
-  st_worldinfo: 'SillyTavern world info',
-  character_book: 'character_book lorebook',
+/** What each detected kind imports as. */
+const PRODUCES: Record<Exclude<DetectedKind, 'unknown'>, ImportedKind> = {
+  png_card: 'character',
+  json_card: 'character',
+  st_preset: 'preset',
+  st_worldinfo: 'lorebook',
+  character_book: 'lorebook',
 };
 
-/** Read a card file and save it to the library. `as` overrides the library name. */
-export function importFile(
+const KIND_LABEL: Record<Exclude<DetectedKind, 'unknown'>, string> = {
+  png_card: 'a PNG character card',
+  json_card: 'a character card',
+  st_preset: 'a SillyTavern preset',
+  st_worldinfo: 'a SillyTavern world info file',
+  character_book: 'a character_book lorebook',
+};
+
+const EXPECT_LABEL: Record<ImportedKind, string> = {
+  character: 'a character card',
+  preset: 'a preset',
+  lorebook: 'a lorebook',
+};
+
+const REPAIRED: ImportWarning = {
+  code: 'repaired_json',
+  path: '$',
+  message: 'the file was double-encoded or wrapped in an export envelope; unwrapped',
+};
+
+/** Self-check: an importer must never store something the loader would later reject. */
+function selfCheck<T>(file: string, what: string, v: Validation<T>): void {
+  if (v.ok) return;
+  const first = v.errors[0];
+  throw new ImportError('unreadable', `${basename(file)}: ${what} (${first?.path}: ${first?.message})`);
+}
+
+function readCardFile(bytes: Uint8Array, file: string): ReturnType<typeof readCard> {
+  try {
+    return readCard(bytes, basename(file));
+  } catch (e) {
+    if (e instanceof CardFormatError) throw new ImportError('unreadable', `${basename(file)}: ${e.message}`);
+    throw e;
+  }
+}
+
+function save<K extends ImportedKind>(
   home: string,
-  file: string,
-  opts?: { as?: string },
-): { kind: 'character'; id: string; path: string; value: Character; warnings: ImportWarning[] } {
+  kind: K,
+  name: string,
+  value: Extract<ImportResult, { kind: K }>['value'],
+  warnings: ImportWarning[],
+): Extract<ImportResult, { kind: K }> {
+  const folder: LibraryKind = kind === 'character' ? 'characters' : kind === 'preset' ? 'presets' : 'lorebooks';
+  const { id, path } = saveToLibrary(home, folder, name, value);
+  return { kind, id, path, value, warnings } as Extract<ImportResult, { kind: K }>;
+}
+
+/** Card warnings that concern its embedded book (or how the file was read), for a book-only import. */
+const isBookWarning = (w: ImportWarning): boolean =>
+  /character_books?/.test(w.path) || w.code === 'books_merged' || w.code === 'repaired_json' || w.code === 'chunk_unreadable';
+
+/**
+ * Read a file, convert it and save it to the library. `as` overrides the library name. With
+ * `expect`, a file of another kind is refused with 'wrong_kind' before anything is written — except
+ * that `expect: 'lorebook'` on a card with an embedded character_book imports that book (named
+ * after the card unless `as` is given).
+ */
+export function importFile(home: string, file: string, opts?: { as?: string; expect?: ImportedKind }): ImportResult {
   let bytes: Uint8Array;
   try {
     bytes = readFileSync(file);
   } catch (e) {
     throw new ImportError('unreadable', `cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const { kind, reason } = detect(bytes);
-  if (kind === 'unknown') throw new ImportError('unknown_format', `${basename(file)}: ${reason ?? 'unrecognised file'}`);
-  const later = M2_KIND[kind];
-  if (later) throw new ImportError('unsupported_until_m2', `${basename(file)}: ${later} import arrives in M2`);
+  const base = basename(file);
+  const d = detectFull(bytes);
+  if (d.kind === 'unknown') throw new ImportError('unknown_format', `${base}: ${d.reason ?? 'unrecognised file'}`);
+  const produced = PRODUCES[d.kind];
+  const expect = opts?.expect;
+  const bookFromCard = expect === 'lorebook' && produced === 'character';
+  if (expect !== undefined && expect !== produced && !bookFromCard) {
+    throw new ImportError('wrong_kind', `${base}: expected ${EXPECT_LABEL[expect]}, but this is ${KIND_LABEL[d.kind]}`);
+  }
+  const as = opts?.as?.trim() || undefined;
+  // Formats without a name field (ST presets, world info) are named after the file, as ST does.
+  const stem = basename(file, extname(file)).trim() || base;
+  const pre = d.repaired ? [REPAIRED] : [];
 
-  let card: ReturnType<typeof readCard>;
-  try {
-    card = readCard(bytes, basename(file));
-  } catch (e) {
-    if (e instanceof CardFormatError) throw new ImportError('unreadable', `${basename(file)}: ${e.message}`);
-    throw e;
+  switch (d.kind) {
+    case 'png_card':
+    case 'json_card': {
+      const card = readCardFile(bytes, file);
+      if (bookFromCard) {
+        const book = card.value.book;
+        if (!book) throw new ImportError('wrong_kind', `${base}: expected a lorebook, but this character card has no embedded lorebook`);
+        selfCheck(file, 'the embedded book maps to an invalid lorebook', validateLoreBook(book));
+        return save(home, 'lorebook', as ?? card.value.name, book, card.warnings.filter(isBookWarning));
+      }
+      selfCheck(file, 'card maps to an invalid character', validateCharacter(card.value));
+      return save(home, 'character', as ?? card.value.name, card.value, card.warnings);
+    }
+    case 'st_preset': {
+      const r = stPresetToPreset(d.reading, stem);
+      selfCheck(file, 'preset maps to an invalid preset', validatePreset(r.value));
+      return save(home, 'preset', as ?? r.value.name, r.value, [...pre, ...r.warnings]);
+    }
+    case 'st_worldinfo':
+    case 'character_book': {
+      const r = d.kind === 'st_worldinfo' ? worldInfoToLoreBook(d.reading, stem) : characterBookToLoreBook(d.reading, stem);
+      selfCheck(file, 'book maps to an invalid lorebook', validateLoreBook(r.value));
+      return save(home, 'lorebook', as ?? r.value.name, r.value, [...pre, ...r.warnings]);
+    }
   }
-  // Self-check: an importer must never store something the loader would later reject.
-  const check = validateCharacter(card.value);
-  if (!check.ok) {
-    const first = check.errors[0];
-    throw new ImportError('unreadable', `${basename(file)}: card maps to an invalid character (${first?.path}: ${first?.message})`);
-  }
-  const name = opts?.as?.trim() || card.value.name;
-  const { id, path } = saveToLibrary(home, 'characters', name, card.value);
-  return { kind: 'character', id, path, value: card.value, warnings: card.warnings };
+}
+
+/** importFile for a character card: the only kind `new --card` accepts. */
+export function importCard(home: string, file: string, opts?: { as?: string }): Extract<ImportResult, { kind: 'character' }> {
+  const r = importFile(home, file, { ...(opts?.as !== undefined ? { as: opts.as } : {}), expect: 'character' });
+  if (r.kind !== 'character') throw new ImportError('wrong_kind', `${basename(file)}: not a character card (it is a ${r.kind})`);
+  return r;
 }

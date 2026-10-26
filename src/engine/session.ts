@@ -4,16 +4,24 @@
 // One open session (ARCHITECTURE.md §5.3, §6.1, §12.1): the locked journal, the cached tree and
 // PathView, the verbs, and at most one running turn. Every write goes through append() here, which
 // keeps version(session) current without re-reading the log. Admission (admit.ts) and the turn's
-// first line happen synchronously in runTurn; the rest of the turn runs in turn.ts.
+// first line happen synchronously in runTurn; the rest of the turn runs in turn.ts. preview (M2)
+// runs the same admission and request.ts buildRequest, and writes nothing.
 
 import { Refusal } from './api.ts';
-import type { CreateSessionInput, RunTurnOptions, SessionHandle, TurnHandle } from './api.ts';
+import type { CreateSessionInput, PreviewOptions, PreviewResult, RunTurnOptions, SessionHandle, TurnHandle } from './api.ts';
 import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.ts';
+import { effectiveText } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
+import { modelRequest } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
+import { buildRequest, maxTokensFor } from './request.ts';
 import { TurnRun, type EventBody, type TurnHost } from './turn.ts';
+import { traceForSent } from '../prompt/assemble.ts';
+import { isInsertSrc } from '../prompt/depth.ts';
+import { CONTINUE_CUE_SRC, POST_PROCESSING_PLACEHOLDER_SRC } from '../prompt/shape.ts';
+import { counterOf } from './ema.ts';
 import { createMacroRun } from '../prompt/macros.ts';
-import type { Event } from '../protocol/events.ts';
+import type { Event, Notice } from '../protocol/events.ts';
 import {
   checkHeader,
   DEFAULT_SESSION_CONFIG,
@@ -24,8 +32,10 @@ import {
   type EntryKind,
   type SessionConfig,
   type SessionHeader,
+  type Trace,
+  type TurnKind,
 } from '../session/entries.ts';
-import { currentConfig, foldView, mergePatch } from '../session/fold.ts';
+import { currentConfig, foldView, foldViewAt, mergePatch } from '../session/fold.ts';
 import { forkSession } from '../session/fork.ts';
 import { newMessageId, newSeed, newSessionId, newTurnId } from '../session/ids.ts';
 import {
@@ -36,10 +46,126 @@ import {
   type SessionLog,
 } from '../session/log.ts';
 import { buildTree, effectiveMessage, newestDescendant, type TreeIndex } from '../session/tree.ts';
-import type { PathView } from '../session/view.ts';
+import type { MessageView, PathView } from '../session/view.ts';
 
 /** How many fresh ids to draw before giving up on a collision (8 hex: practically never > 1). */
 const ID_ATTEMPTS = 16;
+
+/** PreviewOptions.draft becomes a user message with this id (message ids are 8 hex: never taken). */
+export const DRAFT_ID = 'draft';
+
+/** The view with an unsent user message appended as the head (PreviewOptions.draft). */
+function withDraft(view: PathView, text: string): PathView {
+  const draft: MessageView = {
+    id: DRAFT_ID,
+    parent: view.head,
+    role: 'user',
+    blocks: [{ k: 'text', text }],
+    hidden: false,
+    edited: false,
+    swipe: { index: 0, count: 1 },
+  };
+  return { ...view, head: DRAFT_ID, path: [...view.path, draft], pathSet: new Set([...view.pathSet, DRAFT_ID]) };
+}
+
+/** What changed since a past answer's trace: its preset, and the books by key. Empty when nothing did. */
+function inputsChanged(past: Trace, now: Trace): string[] {
+  const out: string[] = [];
+  if (past.presetHash !== now.presetHash) out.push('the preset');
+  const was = past.loreHashes ?? {};
+  const is = now.loreHashes ?? {};
+  const keys = [...new Set([...Object.keys(was), ...Object.keys(is)])].sort();
+  for (const k of keys) {
+    if (was[k] === is[k]) continue;
+    out.push(was[k] === undefined ? `lorebook ${k} (added)` : is[k] === undefined ? `lorebook ${k} (gone)` : `lorebook ${k}`);
+  }
+  return out;
+}
+
+/** Message sources only shaping adds (the post-processing placeholder, the continue cue). */
+const SHAPING_SRCS: ReadonlySet<string> = new Set([POST_PROCESSING_PLACEHOLDER_SRC, CONTINUE_CUE_SRC]);
+
+/** A chat message's source ('history' or 'history:…'), as assemble names it. */
+const isHistorySrc = (src: string): boolean => src === 'history' || src.startsWith('history:');
+
+/** What the past answer's request was built from, beyond its trace: decided by the caller from the journal. */
+interface PastInputs {
+  /** The path messages it was built from (ids, hidden state, text) differ from today's. */
+  history: boolean;
+  /** The preset or a lorebook changed (inputsChanged named it): it explains other blocks' text. */
+  presetOrBooks: boolean;
+  presetChanged: boolean;
+  /** 'conn:model' of the answer, when its gen recorded the connection; today's. */
+  model: { past?: string; now: string };
+}
+
+/**
+ * What else changed since a past answer was sent (§6.1 preview --turn), read off the request rebuilt
+ * today against the one its trace recorded (one row per message sent: src, role, tokens) and off the
+ * journal: the history (an edit or a hidden message, compared by message id and text, never by the
+ * rows: shaping merges history rows with other blocks), the cut of old messages (trace.trimmed), the
+ * author's note and other in-chat inserts, the text of the system blocks when neither the preset nor
+ * a book explains it, the shaping (rows merged or re-roled with the same parts in the same order:
+ * the model's connection or the preset's post-processing), the window and the model. A row is split
+ * on '+' into the parts shape() joined. Token counts are compared only when both were counted the
+ * same way (an M1 trace counted chars) and the rows line up one to one. Empty when the rebuild matches.
+ */
+function sentChanged(past: Trace, now: Trace, inputs: PastInputs): string[] {
+  const out: string[] = [];
+  const sameCounter = counterOf(past) === counterOf(now);
+  const pastRows = past.blocks ?? [];
+  const nowRows = now.blocks ?? [];
+  const parts = (src: string): string[] => src.split('+');
+  const atoms = (rows: readonly { src: string }[], keep: (src: string) => boolean): string =>
+    rows
+      .flatMap((r) => parts(r.src))
+      .filter(keep)
+      .join('\u0001');
+  const isInsert = (a: string): boolean => !isHistorySrc(a) && isInsertSrc(a);
+  const isBlock = (a: string): boolean => !isHistorySrc(a) && !isInsertSrc(a) && !SHAPING_SRCS.has(a);
+  const shape = (rows: readonly { src: string; role: string }[]): string => rows.map((r) => `${r.src}\u0000${r.role}`).join('\u0001');
+  const sameShape = shape(pastRows) === shape(nowRows);
+
+  let inserts = atoms(pastRows, isInsert) !== atoms(nowRows, isInsert);
+  let blocks = atoms(pastRows, isBlock) !== atoms(nowRows, isBlock);
+  if (sameShape && sameCounter) {
+    // The rows line up: a row whose count moved changed its text (history rows: the journal decides).
+    pastRows.forEach((r, i) => {
+      if (r.tok === nowRows[i]!.tok) return;
+      const p = parts(r.src);
+      if (p.some(isInsert)) inserts = true;
+      else if (p.some(isBlock)) blocks = true;
+    });
+  }
+  // Same parts in the same order, grouped or roled otherwise (or a placeholder came or went): shaping.
+  const noShaping = (a: string): boolean => !SHAPING_SRCS.has(a);
+  const shaping =
+    (!sameShape && atoms(pastRows, noShaping) === atoms(nowRows, noShaping)) || atoms(pastRows, (a) => SHAPING_SRCS.has(a)) !== atoms(nowRows, (a) => SHAPING_SRCS.has(a));
+  const modelChanged = inputs.model.past !== undefined && inputs.model.past !== inputs.model.now;
+
+  if (inputs.history) out.push('the history (an edit or a hidden message)');
+  if (JSON.stringify(past.trimmed ?? null) !== JSON.stringify(now.trimmed ?? null)) out.push('which old messages the budget leaves out');
+  if (inserts) out.push("the author's note or other in-chat inserts");
+  if (blocks && !inputs.presetOrBooks) out.push('the text of the system blocks (the card, the persona or the lore that fired)');
+  if (past.window !== now.window || past.reserve !== now.reserve) out.push(`the window (${past.window}/${past.reserve} then, ${now.window}/${now.reserve} now)`);
+  if (modelChanged) out.push(`the model (${inputs.model.past} then)`);
+  if (shaping) {
+    const cause = modelChanged ? "the model's connection" : inputs.presetChanged ? "the preset's post-processing" : "the connection's capabilities";
+    out.push(`how the messages are shaped (merged or re-roled: ${cause})`);
+  }
+  return out;
+}
+
+/**
+ * The path messages a request up to `leaf` was built from, as of journal seq `seq` and as of now,
+ * compared by message id, hidden state and content (an edit, a hide or an unhide since then).
+ */
+function historyChangedSince(entries: readonly Entry[], tree: TreeIndex, header: SessionHeader, leaf: string, seq: number): boolean {
+  const key = (v: PathView): string => v.path.map((m) => `${m.id}\u0000${m.hidden ? 1 : 0}\u0000${JSON.stringify(m.blocks)}`).join('\u0001');
+  const then = buildTree(entries.filter((e) => e.seq <= seq));
+  if (!then.msgs.has(leaf)) return true;
+  return key(foldViewAt(header, then, leaf)) !== key(foldViewAt(header, tree, leaf));
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -97,6 +223,11 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   private readonly held = new Set<string>();
   private readonly turnIds = new Set<string>();
   private readonly noticed = new Set<string>();
+  /**
+   * The next turn's seed, drawn early by a preview of it and kept until a turn takes it, so what is
+   * seeded ({{random}}, {{pick}}, lore chance and groups) comes out in the turn as the preview showed.
+   */
+  private nextSeed: number | null = null;
   private readonly opened: Event[] = [];
   private closing: Promise<void> | null = null;
 
@@ -302,10 +433,12 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       parent: plan.parent,
       ...(plan.target !== undefined ? { target: plan.target } : {}),
       msgId,
-      seed: newSeed(this.ctx.random),
+      // The seed a preview already drew for this turn, else a fresh one (§6.2 step 2).
+      seed: this.nextSeed ?? newSeed(this.ctx.random),
       now,
       base: this.ver,
     });
+    this.nextSeed = null;
     const run = new TurnRun(this, this.ctx, plan, entry);
     this.running = run;
     run.emit({ type: 'start', turnId, kind: plan.kind, messageId: msgId, parentId: plan.parent });
@@ -391,6 +524,192 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     throw new Error('could not find a free session id for the fork');
   }
 
+  /**
+   * M2 (§6.1, §12.4 /preview): the request a turn would send, built by the turn's own buildRequest.
+   * Refusals come back as ok:false; nothing is written, the version and the head stay, the
+   * session's once-per-session notices stay untold (a preview shows every notice). Works while a
+   * turn runs: it reads the current view.
+   */
+  preview(opts?: PreviewOptions): PreviewResult {
+    this.assertOpen();
+    try {
+      return this.buildPreview(opts ?? {});
+    } catch (e) {
+      if (e instanceof Refusal) return { ok: false, code: e.code, message: e.message };
+      throw e;
+    }
+  }
+
+  private buildPreview(opts: PreviewOptions): PreviewResult {
+    if (!isObject(opts)) throw new Refusal('invalid_params', 'preview options must be an object');
+    if (opts.draft !== undefined && typeof opts.draft !== 'string') throw new Refusal('invalid_params', 'draft must be a string');
+    if (opts.turn !== undefined && typeof opts.turn !== 'string') throw new Refusal('invalid_params', 'turn must be a message id');
+    if (opts.explain !== undefined && typeof opts.explain !== 'boolean') throw new Refusal('invalid_params', 'explain must be a boolean');
+    if (opts.draft !== undefined && opts.turn !== undefined) throw new Refusal('invalid_params', 'draft and turn exclude each other');
+
+    const header = this.log.header;
+    const tree = this.tree();
+    const current = this.view();
+    let view = current;
+    // The kind admission checks, and the kind the request is built as (a past swipe is admitted as
+    // the reply to its U: same prompt).
+    let admitKind: TurnKind;
+    let kind: TurnKind | undefined;
+    // A past answer's own seed; else the next turn's, drawn once admission passed.
+    let seed: number | undefined;
+    let now: string;
+    let past: Trace | undefined;
+    let guided: { guidance: string; rejected?: string } | undefined;
+
+    if (opts.turn !== undefined) {
+      // A past answer: the path up to the user message it answers, that turn's seed and clock.
+      const id = opts.turn;
+      const entry = tree.msgs.get(id);
+      if (!entry) throw new Refusal('not_found', `no message ${id}`);
+      const m = current.path.find((x) => x.id === id);
+      if (!m) throw new Refusal('invalid_params', `message ${id} is not on the active path`);
+      if (m.role !== 'assistant' || m.parent === null || entry.gen?.kind !== 'model' || !entry.trace) {
+        throw new Refusal('invalid_params', `message ${id} is not a model answer with a trace`);
+      }
+      past = entry.trace;
+      seed = past.seed;
+      now = past.now;
+      view = foldViewAt(header, tree, m.parent);
+      admitKind = 'reply';
+      kind = m.swipe.index > 0 ? 'swipe' : 'reply';
+      // A guided re-roll is rebuilt with its direction (gen.guidance) and, when today's config shows
+      // it, the text of the answer it replaced (the turn's target) as that answer reads now.
+      const guidance = entry.gen.guidance;
+      if (guidance) {
+        guided = { guidance };
+        const turn = entry.turn === undefined ? undefined : this.log.entries().find((e) => e.t === 'turn' && e.turn === entry.turn);
+        const target = turn?.t === 'turn' ? turn.target : undefined;
+        if (this.config.swipe.showRejected && target !== undefined && tree.msgs.has(target)) guided.rejected = effectiveText(tree, target);
+      }
+    } else if (opts.draft !== undefined) {
+      view = withDraft(current, opts.draft);
+      admitKind = 'reply';
+      now = this.now();
+    } else {
+      // What the next turn would be: a reply to a user head, else a swipe of the head answer (/r).
+      admitKind = current.path.at(-1)?.role === 'user' ? 'reply' : 'swipe';
+      now = this.now();
+    }
+
+    // The turn's admission (§6.2 step 1), minus what is about writing: a preview never waits for a
+    // running turn or a held answer, and has no version to be stale against.
+    const admitted = admitTurn(this.ctx, { busy: false, heldOpen: false, version: this.ver, view, config: this.config }, { kind: admitKind, expectedVersion: this.ver });
+    const plan = kind === undefined ? admitted : { ...admitted, kind, ...guided };
+    seed ??= this.seedOfNextTurn();
+    const explain = opts.explain === true;
+
+    const built = buildRequest({
+      home: this.ctx.home,
+      sessionId: this.id,
+      header,
+      tree,
+      view,
+      plan,
+      seed,
+      now,
+      timeZone: this.ctx.timeZone,
+      counter: this.ctx.counter,
+      // M4: the Director's stub directive goes here; the Director is never called by a preview.
+      placements: [],
+      ...(explain ? { explain: true } : {}),
+    });
+    if (!built.ok) {
+      // A shape failure is the request failing to build, as assemble's own.
+      return { ok: false, code: built.code === 'shape_failed' ? 'assemble_failed' : built.code, message: built.message };
+    }
+
+    // Every notice once (by its key), none of them marked as told: the next turn still tells them.
+    const notices: Notice[] = [];
+    const keys = new Set<string>();
+    for (const n of built.notices) {
+      if (keys.has(n.key)) continue;
+      keys.add(n.key);
+      notices.push(n.notice);
+    }
+    const sent = traceForSent(built.asm.trace, built.shaped.messages, built.shaped.prefill);
+    if (past && opts.turn !== undefined) {
+      const answer = tree.msgs.get(opts.turn)!;
+      const was = answer.gen;
+      const named = inputsChanged(past, built.asm.trace);
+      const changed = [
+        ...named,
+        ...sentChanged(past, sent, {
+          history: historyChangedSince(this.log.entries(), tree, header, answer.parent!, answer.seq),
+          presetOrBooks: named.length > 0,
+          presetChanged: past.presetHash !== built.asm.trace.presetHash,
+          model: {
+            ...(was?.connection !== undefined ? { past: `${was.connection}:${was.model ?? '?'}` } : {}),
+            now: `${plan.primary.conn.id}:${plan.primary.model}`,
+          },
+        }),
+      ];
+      if (changed.length > 0) {
+        notices.push({
+          level: 'info',
+          code: 'preview_inputs_changed',
+          message: `Since this answer was written, ${changed.join(', ')} changed: the preview is built with today's.`,
+        });
+      }
+    }
+
+    const { primary } = plan;
+    const { asm, shaped } = built;
+    const maxTokens = maxTokensFor(primary, built.reserve);
+    const samplers = built.limits.samplers;
+    const prefill = shaped.prefill !== undefined && shaped.prefill !== '' ? shaped.prefill : null;
+    const out: Extract<PreviewResult, { ok: true }> = {
+      ok: true,
+      kind: plan.kind,
+      upTo: plan.upTo,
+      model: { connection: primary.conn.id, model: primary.model },
+      messages: shaped.messages,
+      prefill,
+      tools: asm.tools,
+      maxTokens,
+      samplers,
+      trace: sent,
+      notices,
+    };
+    if (explain) {
+      out.verdicts = asm.verdicts ?? [];
+      if (asm.loreUse) out.loreUse = asm.loreUse;
+    }
+    // What the connection drops from the request (openai-chat samplerFields / stopField read the same caps).
+    const spec = primary.caps.samplers;
+    const notSent = Object.keys(samplers).filter((k) => (samplers as Record<string, unknown>)[k] !== undefined && (spec.fixed === true || !spec.accepted.includes(k)));
+    if (notSent.length > 0) out.samplersNotSent = notSent;
+
+    // The HTTP body the primary connection would send (no headers: they carry the key).
+    const provider = primary.conn.provider;
+    if (provider.wire) {
+      const req = modelRequest(
+        {
+          conn: primary.conn,
+          model: primary.model,
+          caps: primary.caps,
+          messages: shaped.messages,
+          ...(shaped.prefill !== undefined ? { prefill: shaped.prefill } : {}),
+          maxTokens,
+          samplers,
+          ...(plan.binding.reasoning ? { reasoning: plan.binding.reasoning } : {}),
+          callKey: 'preview:narrator:0',
+        },
+        new AbortController().signal,
+      );
+      try {
+        out.wire = provider.wire(req);
+      } catch (e) {
+        notices.push({ level: 'warn', code: 'wire_unavailable', message: `The wire request cannot be built: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    }
+    return out;
+  }
+
   configure(patch: DeepPartial<SessionConfig>): void {
     this.assertOpen();
     if (this.running) throw new Refusal('session_busy', 'a turn is running');
@@ -417,6 +736,12 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   }
 
   // ---- helpers -----------------------------------------------------------------------------------
+
+  /** The next turn's seed, drawn once and kept for it (only a turn's `turn` line consumes it). */
+  private seedOfNextTurn(): number {
+    this.nextSeed ??= newSeed(this.ctx.random);
+    return this.nextSeed;
+  }
 
   private assertOpen(): void {
     if (this.closing) throw new Error(`session ${this.id} is closed`);

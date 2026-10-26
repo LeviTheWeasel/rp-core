@@ -201,6 +201,10 @@ describe('global flags and usage', () => {
       expect(hs.stdout).toContain('Usage: rp-core send <session>');
       expect(hs.stdout).toContain('Exit codes: 0 done, 2 stopped, 3 failed, 4 conflict, 5 refused');
       expect((await run(['help', 'show'])).stdout).toContain('Usage: rp-core show');
+      // CCv1 cards import too; the persona file may carry its own lorebook.
+      const hn = (await run(['help', 'new'])).stdout;
+      expect(hn).toContain('PNG or JSON, CCv1/V2/V3');
+      expect(hn).toContain('{name, description, aliases?, book?}');
       const v = await run(['--version']);
       expect(v.code).toBe(0);
       expect(v.stdout).toMatch(/^rp-core \d+\.\d+\.\d+\n$/);
@@ -218,7 +222,10 @@ describe('global flags and usage', () => {
     [['send', 's_1', 'hi', '--kind', 'sideways'], '--kind must be'],
     [['send', 's_1', 'hi', '--kind', 'swipe'], 'takes no text'],
     [['send', 's_1', 'hi', '--guidance', 'be brief'], '--guidance only applies to --kind swipe'],
-    [['send', 's_1', 'hi', '--provider', 'record:x.jsonl'], 'M2'],
+    [['send', 's_1', 'hi', '--provider', 'record:'], '--provider record: needs a file'],
+    [['preview'], 'which session?'],
+    [['preview', 's_1', '--draft', 'x', '--turn', 'ab'], 'cannot be combined'],
+    [['preview', 's_1', '--turn', 'xyz'], '--turn takes a message id'],
     [['send', 's_1', 'hi', '--provider', 'nonsense'], '--provider must be script:<file>'],
     [['sessions', '--home'], '--home needs a value'],
     [['sessions', '--sandbox', '--home', '/tmp'], 'cannot be combined'],

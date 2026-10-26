@@ -113,15 +113,22 @@ function publishExclusive(dir: string, path: string, text: string): boolean {
 }
 
 /**
+ * Ids a library folder never saves under: 'builtin' names the built-in preset wherever a preset is
+ * chosen (/preset, --preset, config.preset), so a library preset of that id could never be selected.
+ */
+export const RESERVED_IDS: Readonly<Partial<Record<LibraryKind, readonly string[]>>> = { presets: ['builtin'] };
+
+/**
  * Atomic write (temp file + fsync + rename + dir fsync) of `value` under canonicalId(name); if the
- * id exists with different content, use id-2, id-3, ... Returns the id and absolute path.
+ * id exists with different content, use id-2, id-3, ... A reserved id (RESERVED_IDS: a preset named
+ * "Builtin", or imported --as builtin) starts at id-2. Returns the id and absolute path.
  */
 export function saveToLibrary(home: string, kind: LibraryKind, name: string, value: unknown): { id: string; path: string } {
   const dir = libraryDir(home, kind);
   mkdirSync(dir, { recursive: true });
   const text = `${JSON.stringify(value, null, 2)}\n`;
   const base = canonicalId(name);
-  for (let n = 1; n <= 10_000; ) {
+  for (let n = RESERVED_IDS[kind]?.includes(base) ? 2 : 1; n <= 10_000; ) {
     const id = n === 1 ? base : `${base}-${n}`;
     const path = join(dir, `${id}.json`);
     const existing = readIfExists(path);

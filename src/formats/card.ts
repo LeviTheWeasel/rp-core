@@ -318,7 +318,9 @@ function readBooks(
     if (!found.some((f) => deepEq(f.raw, raw))) found.push({ path, raw });
   }
   if (found.length === 0) return undefined;
-  const fallback = `${charName.trim() || 'Untitled'}'s book`;
+  // SillyTavern's name for an embedded book it extracts into a world (world-info.js
+  // checkEmbeddedWorld / importEmbeddedWorldInfo): the same name, so a world is still read once.
+  const fallback = `${charName.trim() || 'Untitled'}'s Lorebook`;
   const books = found.map((f) => {
     const r = characterBookAt(f.raw, fallback, f.path);
     sink.addAll(r.warnings);
@@ -399,7 +401,9 @@ function mapCard(det: Detected): Imported<Character> {
     if (usedExt.has(k)) continue;
     extLeft[k] = v;
     const rule = EXT_NOT_HONOURED[k];
-    const msg = rule ? rule(v) : null;
+    // ST embeds the linked world as character_book on export: same name = it is the card's own book.
+    const embedded = k === 'world' && book !== undefined && typeof v === 'string' && v.trim() !== '' && v.trim() === book.name.trim();
+    const msg = rule && !embedded ? rule(v) : null;
     const path = joinPath(p('extensions'), k);
     if (msg) sink.add('not_honoured', path, msg);
     else if (!rule && !EXT_SILENT.has(k)) sink.add('unknown_field', path, `unknown extension "${k}" kept in extras`);

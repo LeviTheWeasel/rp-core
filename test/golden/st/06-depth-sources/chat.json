@@ -1,0 +1,25 @@
+{
+  "about": "In-chat inserts from every source at the same depths: preset prompts (injection_position 1, orders, roles), card depth prompt, author's note and world entries.",
+  "messages": [
+    {
+      "user": false,
+      "text": "*Mira looks up from the logbook.* You came through that weather? Sit down and dry off."
+    },
+    {
+      "user": true,
+      "text": "I shake the rain off and set my satchel down. The ferry nearly turned back."
+    },
+    {
+      "user": false,
+      "text": "*She pours tea without asking.* It should have. Nobody crosses on a night like this."
+    },
+    {
+      "user": true,
+      "text": "I lift the lantern and look toward the harbor."
+    }
+  ],
+  "note": {
+    "text": "NOTE at depth 1.",
+    "depth": 1
+  }
+}

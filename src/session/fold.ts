@@ -8,7 +8,7 @@
 // → Compendium (M5). One linear pass over the tree index; the 10k-message benchmark lives in
 // test/session/fold.test.ts.
 
-import type { DeepPartial, Entry, SessionConfig, SessionHeader, VarsDiff } from './entries.ts';
+import type { DeepPartial, Entry, SessionConfig, SessionHeader, Trace, VarsDiff } from './entries.ts';
 import type { TreeIndex } from './tree.ts';
 import { buildTree, effectiveMessage, pathTo, swipeSiblings, tails } from './tree.ts';
 import type { MessageView, PathView } from './view.ts';
@@ -44,17 +44,32 @@ export function foldVars(header: SessionHeader, idx: TreeIndex, pathIds: readonl
   return vars;
 }
 
-/** Lore fires from the traces of path messages: the msg itself, then its continue edits by seq. */
-function foldFires(idx: TreeIndex, pathIds: readonly string[]): PathView['fires'] {
+/**
+ * Lore fires from the traces of path messages: the msg itself, then its continue edits by seq
+ * (marked `continued`: that scan ran at the message's index + 1). Each carries the trace's book
+ * names when it has them. Also returns the path messages that have a continue edit at all.
+ */
+function foldFires(idx: TreeIndex, pathIds: readonly string[]): { fires: PathView['fires']; continued: Set<string> } {
   const out: PathView['fires'] = [];
-  const push = (msgId: string, fired: unknown): void => {
-    if (Array.isArray(fired) && fired.length > 0) out.push({ msgId, fired: fired as PathView['fires'][number]['fired'] });
+  const continued = new Set<string>();
+  const push = (msgId: string, trace: Trace | undefined, cont: boolean): void => {
+    const fired: unknown = trace?.lore?.fired;
+    if (!Array.isArray(fired) || fired.length === 0) return;
+    const item: PathView['fires'][number] = { msgId, fired: fired as PathView['fires'][number]['fired'] };
+    if (cont) item.continued = true;
+    const names: unknown = trace?.loreNames;
+    if (typeof names === 'object' && names !== null && !Array.isArray(names)) item.names = names as Record<string, string>;
+    out.push(item);
   };
   for (const id of pathIds) {
-    push(id, idx.msgs.get(id)?.trace?.lore?.fired);
-    for (const e of idx.edits.get(id) ?? []) if (e.reason === 'continue') push(id, e.trace?.lore?.fired);
+    push(id, idx.msgs.get(id)?.trace, false);
+    for (const e of idx.edits.get(id) ?? []) {
+      if (e.reason !== 'continue') continue;
+      continued.add(id);
+      push(id, e.trace, true);
+    }
   }
-  return out;
+  return { fires: out, continued };
 }
 
 /** Character name, persona name and persona aliases; deduplicated, empty names dropped. */
@@ -89,6 +104,7 @@ export function foldView(header: SessionHeader, entries: readonly Entry[], idx?:
   const tree = idx ?? buildTree(entries);
   const pathIds = pathTo(tree, tree.head);
   const pathSet = new Set(pathIds);
+  const { fires, continued } = foldFires(tree, pathIds);
   return {
     session: header.id,
     head: tree.head,
@@ -97,7 +113,8 @@ export function foldView(header: SessionHeader, entries: readonly Entry[], idx?:
     pathSet,
     tails: tails(tree, pathSet),
     vars: foldVars(header, tree, pathIds),
-    fires: foldFires(tree, pathIds),
+    fires,
+    ...(continued.size > 0 ? { continued } : {}),
     castNames: castNamesOf(header),
   };
 }
