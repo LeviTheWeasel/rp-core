@@ -4,11 +4,13 @@
 // Human notes as a lore book (ARCHITECTURE.md §5.8 "Заметки", M3): the fold's live notes become one
 // book the lore engine reads like any other, matched by word stems, placed at depth 4 with the
 // source 'compendium' (§10.1 rank) and the wrapper '[Memory: title]'. Notes count against the lore
-// budget. Typed Compendium entries never become lore (§7.4.1, D-76).
+// budget. Typed Compendium entries never become lore (§7.4.1, D-76). M5a: a note's handle is its place
+// in the view's one numbering (refs.ts, D-150), the same in /memory, the tools and the block.
 // CONTRACT FILE (M3): signatures are fixed; the memory agent implements the bodies.
 
 import type { LoreBook, LoreEntry } from '../../formats/native.ts';
-import { normalizeName } from './apply.ts';
+import { handleNumber, normalizeName } from './apply.ts';
+import { entryRefs } from './refs.ts';
 import type { CEntry, CompendiumView } from './types.ts';
 
 /** The lore source key of the notes book. The engine gathers it after the card's book, before the session books. */
@@ -20,9 +22,9 @@ export const NOTES_SCAN_DEPTH = 4;
 /** Every note entry's `order` (they are equal: creation order breaks ties). */
 export const NOTES_ORDER = 100;
 
-/** A human note: no type, made in the session, its text in `content` (M5a adds typed entries beside them). */
+/** A human note: no type, made in the session, not an arc overview (D-145), its text in `content`. */
 export function isNote(e: CEntry): boolean {
-  return e.type === null && e.origin.kind === 'session' && typeof e.content === 'string';
+  return e.type === null && e.origin.kind === 'session' && e.arc === undefined && typeof e.content === 'string';
 }
 
 /** The text a fired note sends: '[Memory: <title>]' on its own line, then the note. */
@@ -60,29 +62,25 @@ export function notesBook(view: CompendiumView): LoreBook | null {
   return { name: NOTES_BOOK_NAME, scanDepth: NOTES_SCAN_DEPTH, match: 'stem', wholeWords: false, recursive: false, entries };
 }
 
-/** The notes of a view in creation order (live and retired), each with its REPL handle 'C<n>' (1-based). */
+/** The notes of a view in creation order (live and retired), each with its handle C<n> (entryRefs numbering, D-150). */
 export function noteRefs(view: CompendiumView): { ref: string; entry: CEntry }[] {
-  const out: { ref: string; entry: CEntry }[] = [];
-  // Map order is creation order: the fold inserts each entry when its `note` op applies.
-  for (const e of view.entries.values()) if (isNote(e)) out.push({ ref: `C${out.length + 1}`, entry: e });
-  return out;
+  return entryRefs(view).filter((r) => isNote(r.entry));
 }
 
-const HANDLE = /^[Cc](\d+)$/;
-
 /**
- * Resolve what a user typed: 'C<n>' / 'c<n>' (noteRefs numbering), an exact key ('note:…'), or a
- * title (normalizeName equal to exactly one note's name). undefined when nothing or several match.
- * A title is looked up among the notes in the `prefer`red state first (live by default; restore asks
- * for retired ones), then among the others, so a retired 'Брат' never makes the live 'Брат'
- * ambiguous. A handle wins over a note titled like one ('C2').
+ * Resolve what a user typed, among the notes only: 'C<n>' / 'c<n>' (entryRefs numbering; a handle of
+ * another kind of entry → undefined), an exact key ('note:…'), or a title (normalizeName equal to
+ * exactly one note's name). undefined when nothing or several match. A title is looked up among the
+ * notes in the `prefer`red state first (live by default; restore asks for retired ones), then among
+ * the others, so a retired 'Брат' never makes the live 'Брат' ambiguous. A handle wins over a note
+ * titled like one ('C2').
  */
 export function resolveNoteRef(view: CompendiumView, ref: string, prefer: 'live' | 'retired' = 'live'): CEntry | undefined {
   const typed = ref.trim();
-  const handle = HANDLE.exec(typed);
-  if (handle) {
-    const n = Number(handle[1]);
-    return n >= 1 ? noteRefs(view)[n - 1]?.entry : undefined;
+  const n = handleNumber(typed);
+  if (n !== null) {
+    const hit = n >= 1 ? entryRefs(view)[n - 1]?.entry : undefined;
+    return hit !== undefined && isNote(hit) ? hit : undefined;
   }
   const byKey = view.entries.get(typed);
   if (byKey && isNote(byKey)) return byKey;

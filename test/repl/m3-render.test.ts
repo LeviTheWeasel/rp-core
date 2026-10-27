@@ -2,7 +2,7 @@
 // side lines (and the round separator after them), /trace rounds and tool rows, the /preview tools
 // line, /memory listings and cards, /search hits, and send's text-mode tool lines.
 import { describe, expect, test } from 'bun:test';
-import type { PreviewResult } from '../../src/engine/api.ts';
+import type { MemoryRow, PreviewResult } from '../../src/engine/api.ts';
 import type { CEntry } from '../../src/agents/compendium/types.ts';
 import type { Event, EventBody } from '../../src/protocol/events.ts';
 import type { Trace } from '../../src/session/entries.ts';
@@ -13,8 +13,8 @@ import {
   bannerLine,
   makeStyle,
   previewToolsText,
+  renderMemoryList,
   renderNoteCard,
-  renderNoteList,
   renderPreview,
   renderSearch,
   renderTrace,
@@ -250,18 +250,40 @@ describe('/preview: the core block and the tools line', () => {
 });
 
 describe('/memory and /search output', () => {
-  test('the list: handle, title — text, keys; a retired note dimmed with its reason', () => {
-    const rows = [
-      { ref: 'C1', entry: note() },
-      { ref: 'C2', entry: note({ key: 'note:lighthouse', name: 'Lighthouse', keys: [], content: 'The old lighthouse burnt down years ago, the keeper with it, and nobody rebuilt it.', retired: { reason: 'rebuilt' } }) },
+  test('the list (M5a: the Compendium list): handle, title — text, keys, size; a retired note dimmed with its reason', () => {
+    const entries = [
+      note(),
+      note({ key: 'note:lighthouse', name: 'Lighthouse', keys: [], content: 'The old lighthouse burnt down years ago, the keeper with it, and nobody rebuilt it.', retired: { reason: 'rebuilt' } }),
     ];
-    expect(renderNoteList(rows, plain).split('\n')).toEqual([
-      'notes on this path: 1 live, 1 retired (/memory show <ref> prints one)',
-      "  C1  Brother — Mira's brother Yan sails the north road. · keys: Yan, brother",
-      '  C2  Lighthouse — The old lighthouse burnt down years ago, the keeper with it… · keys: Lighthouse · retired (rebuilt)',
+    const rows: MemoryRow[] = entries.map((e, i) => ({
+      ref: `C${i + 1}`,
+      key: e.key,
+      type: 'note',
+      name: e.name,
+      aliases: [],
+      tagline: '',
+      origin: 'session',
+      ...(e.retired ? { retired: e.retired } : {}),
+      size: e.content!.length,
+    }));
+    const byKey = (k: string): CEntry | undefined => entries.find((e) => e.key === k);
+    expect(renderMemoryList(rows, { retired: true }, plain, byKey).split('\n')).toEqual([
+      'The Compendium of this path: 1 live, 1 retired · /memory show <ref> prints one',
+      'Notes (2)',
+      "  C1 Brother — Mira's brother Yan sails the north road. · keys: Yan, brother [40]",
+      '  C2 Lighthouse — The old lighthouse burnt down years ago, the keeper with it… · keys: Lighthouse [retired: rebuilt] [83]',
     ]);
-    expect(renderNoteList(rows, ansi).split('\n')[2]!.startsWith('\x1b[2m')).toBe(true);
-    expect(renderNoteList([], plain)).toBe('no notes on this path yet: /memory add <title> | <keys> | <text> writes one');
+    expect(renderMemoryList(rows, { retired: true }, ansi, byKey).split('\n')[3]!.startsWith('\x1b[2m')).toBe(true);
+    // Without --retired the retired note is only counted.
+    expect(renderMemoryList(rows, {}, plain, byKey).split('\n')).toEqual([
+      'The Compendium of this path: 1 live, 1 retired (/memory list --retired shows them) · /memory show <ref> prints one',
+      'Notes (1)',
+      "  C1 Brother — Mira's brother Yan sails the north road. · keys: Yan, brother [40]",
+    ]);
+    expect(renderMemoryList([], {}, plain)).toBe(
+      'nothing in the Compendium on this path yet: /memory new <type> [name] files an entry, /memory add <title> | <keys> | <text> writes a note',
+    );
+    expect(renderMemoryList([], { type: 'note' }, plain)).toBe('no notes on this path');
   });
 
   test('the card: key, keys, provenance, and the text as a turn sends it', () => {

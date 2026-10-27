@@ -35,6 +35,12 @@ export interface TreeIndex {
   mems: MemEntry[];
   /** M3: seq of the last mem row; 0 when there is none. Views are cached on (version, lastMemSeq). */
   lastMemSeq: number;
+  /**
+   * M5a (D-143): per message, the seq of its newest `edit` entry (any reason, continue included) or
+   * `hide` entry with hidden:true. An agent mem row whose range holds a message touched after the row
+   * is stale. An un-hide touches nothing.
+   */
+  touched: Map<string, number>;
 }
 
 /** Entries are expected in seq order (the log guarantees it); anything else is sorted first. */
@@ -54,6 +60,10 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
   let version = 0;
   const mems: MemEntry[] = [];
   let lastMemSeq = 0;
+  const touched = new Map<string, number>();
+  const touch = (id: string, seq: number): void => {
+    if ((touched.get(id) ?? 0) < seq) touched.set(id, seq);
+  };
 
   for (const e of inSeqOrder(entries)) {
     switch (e.t) {
@@ -75,11 +85,14 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
         const list = edits.get(e.target);
         if (list) list.push(e);
         else edits.set(e.target, [e]);
+        touch(e.target, e.seq);
         break;
       }
       case 'hide':
         version = e.seq;
-        if (msgs.has(e.target)) hidden.set(e.target, e.hidden);
+        if (!msgs.has(e.target)) break;
+        hidden.set(e.target, e.hidden);
+        if (e.hidden === true) touch(e.target, e.seq);
         break;
       case 'head':
         version = e.seq;
@@ -96,7 +109,7 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
   }
   // An unknown leaf in a head entry, or an orphan msg, still counts for version: version is a
   // property of the log (the commit guard), not of what the tree could use.
-  return { msgs, children, edits, hidden, head, version, mems, lastMemSeq };
+  return { msgs, children, edits, hidden, head, version, mems, lastMemSeq, touched };
 }
 
 /** Ids from the root down to `leaf` (inclusive). [] for null. */

@@ -195,7 +195,7 @@ describe('effective settings: entry → book → SillyBunny defaults', () => {
     expect(whys(runBook([entry('e', { keys: ['караван'] })], ['Levi: наш караван'], {}, { match: 'stem' }))).toEqual({ e: '+key' });
   });
 
-  test('entries with meta.type are ordinary entries in M2', () => {
+  test('entries with meta.type are ordinary entries for a plain engine call (and for an off book, D-142)', () => {
     const res = runBook([entry('npc', { keys: ['Mira'], meta: { type: 'character', aliases: ['M'] } })], ['Mira: hello']);
     expect(whys(res)).toEqual({ npc: '+key' });
   });

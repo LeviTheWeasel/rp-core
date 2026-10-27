@@ -121,6 +121,8 @@ export interface AgentCallEnv {
   emit(ev: AgentCallEvent): void;
   /** The host's debug tap for raw provider failures (§13); never an event. */
   onProviderError?(info: { callKey: string; model: string; error: ProviderError }): void;
+  /** M5a (D-164, --keep-requests): handed each request right before the provider gets it. */
+  keepRequest?(req: ModelRequest): void;
 }
 
 export interface StructuredInput<T> {
@@ -541,6 +543,7 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
       clock: env.clock,
       agent: input.agent,
       ...(transport === 'structured' ? { responseSchema: input.schema } : {}),
+      ...(env.keepRequest ? { keepRequest: env.keepRequest } : {}),
       onSlot,
       onText: () => undefined,
       onReasoning: () => undefined,

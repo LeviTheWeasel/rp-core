@@ -57,7 +57,7 @@ describe('PathView.compendium', () => {
 
   test('a session without mem rows has an empty Compendium', () => {
     const view = foldView(makeHeader(), seqd(journal().filter((e) => e.t !== 'mem')));
-    expect(view.compendium).toEqual({ entries: new Map(), rev: '', lastSeq: 0, issues: [] });
+    expect(view.compendium).toEqual({ entries: new Map(), rev: '', lastSeq: 0, issues: [], tasks: new Map(), effects: [] });
   });
 });
 

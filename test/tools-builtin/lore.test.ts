@@ -4,7 +4,8 @@
 //
 // search_lore and read_lore (src/tools/builtin/lore.ts; §9.2, D-59): lexScore ranking over the
 // turn's enabled book entries and live notes, handles L<n> / C<n> from the turn's HandleTable,
-// read_lore by handles in order, unknown handles, the 8 000-character cap. Adapted from Bunraku
+// read_lore by handles in order (a note reads as its noteText, D-156), unknown handles, the
+// 8 000-character cap. The typed Compendium entries are in test/tools-m5a. Adapted from Bunraku
 // src/studio/dramaturg-tools.test.ts ("the lore and the preset", Levi).
 import { describe, expect, test } from 'bun:test';
 import { foldCompendium } from '../../src/agents/compendium/apply.ts';
@@ -79,8 +80,8 @@ describe('search_lore', () => {
 
   test('disabled entries and retired notes never appear; the notes book is not searched twice', async () => {
     const ctx = loreCtx();
-    expect((await searchLore('bell', ctx)).text).toMatch(/^No lore entry or note matches\./);
-    expect((await searchLore('debt', ctx)).text).toMatch(/^No lore entry or note matches\./);
+    expect((await searchLore('bell', ctx)).text).toMatch(/^No lore or Compendium entry matches\./);
+    expect((await searchLore('debt', ctx)).text).toMatch(/^No lore or Compendium entry matches\./);
     // The note is listed once, as C3, its /memory handle (the retired Old Debt keeps C2); its
     // notes-book entry would have been an L handle.
     const brat = await searchLore('Тихон', ctx);
@@ -155,15 +156,17 @@ describe('search_lore', () => {
     expect(empty.error).toBe(true);
     expect(empty.text).toMatch(/no words/);
     const none = await searchLore('lamp', ctxFor(chatView(['Hello.'])));
-    expect(none.text).toBe('This chat has no lore entries or notes to search.');
+    expect(none.text).toBe('This chat has no lore or Compendium entries to search.');
     const miss = await searchLore('dragon', loreCtx());
-    expect(miss.text).toMatch(/^No lore entry or note matches\. Try/);
+    expect(miss.text).toMatch(/^No lore or Compendium entry matches\. Try/);
     expect(miss.summary).toBe('no hits');
   });
 
-  test('the description asks to search before saying the lore is silent', () => {
+  test('the description asks to search before saying the lore is silent, and names the Compendium entries (D-156)', () => {
     expect(searchLoreTool.description).toMatch(/search before you say the lore does not cover something/);
     expect(searchLoreTool.description).toMatch(/L3.*C2/);
+    expect(searchLoreTool.description).toMatch(/the Compendium entries \(characters, places, items, events, plots/);
+    expect(readLoreTool.description).toMatch(/Compendium entries whole/);
   });
 });
 
@@ -173,7 +176,7 @@ describe('read_lore', () => {
     await searchLore('ledger', ctx); // C1 Ledger, L1 Mira
     const out = await readLore(['L1', 'C1'], ctx);
     expect(out.error).toBeUndefined();
-    expect(out.text).toBe('L1 Mira (Harbor):\nKeeps the second ledger. Her sister drowned.\n\nC1 Ledger (note):\nMira keeps the second ledger in the cellar.');
+    expect(out.text).toBe('L1 Mira (Harbor):\nKeeps the second ledger. Her sister drowned.\n\nC1 Ledger (note):\n[Memory: Ledger]\nMira keeps the second ledger in the cellar.');
     expect(out.summary).toBe('2 read');
   });
 
@@ -197,18 +200,18 @@ describe('read_lore', () => {
     // The next turn: a fresh table, no search yet; a Cyrillic С reads as C.
     for (const h of ['C2', 'c2', 'С2']) {
       const next = loreCtx({ handles: new HandleTable() }, compendium);
-      expect((await readLore([h], next)).text).toBe('C2 Мельник (note):\nМельник должен Марфе три серебряка.');
+      expect((await readLore([h], next)).text).toBe('C2 Мельник (note):\n[Memory: Мельник]\nМельник должен Марфе три серебряка.');
     }
     const next = loreCtx({ handles: new HandleTable() }, compendium);
     expect((await readLore(['C1', 'C3'], next)).text).toBe(
-      'C1 Брат Марфы (note):\nМладшего брата Марфы зовут Тихон.\n\n"C3": no such handle. Use the handles search_lore gave, like L3 or C2.',
+      'C1 Брат Марфы (note):\n[Memory: Брат Марфы]\nМладшего брата Марфы зовут Тихон.\n\n"C3": no such handle. Use the handles search_lore gave, like L3 or C2.',
     );
   });
 
   test('handles sent as one string are split at commas and spaces, also through the argument chain', async () => {
     const ctx = loreCtx();
     await searchLore('ledger', ctx); // C1 Ledger, L1 Mira
-    const both = 'L1 Mira (Harbor):\nKeeps the second ledger. Her sister drowned.\n\nC1 Ledger (note):\nMira keeps the second ledger in the cellar.';
+    const both = 'L1 Mira (Harbor):\nKeeps the second ledger. Her sister drowned.\n\nC1 Ledger (note):\n[Memory: Ledger]\nMira keeps the second ledger in the cellar.';
     for (const ids of ['L1, C1', 'L1 C1', ['L1, C1'], ['L1;C1'], '[L1, C1]', 'L1，C1']) expect([ids, (await readLore(ids, ctx)).text]).toEqual([ids, both]);
     const tools = new Map([[readLoreTool.name, readLoreTool]]);
     for (const args of ['{"ids":"L1, C1"}', '{"ids":"L1 C1"}', '{"ids":["L1, C1"]}']) {
@@ -221,7 +224,7 @@ describe('read_lore', () => {
     const ctx = loreCtx();
     await searchLore('ledger', ctx); // C1 Ledger, L1 Mira
     const one = 'L1 Mira (Harbor):\nKeeps the second ledger. Her sister drowned.';
-    const both = `${one}\n\nC1 Ledger (note):\nMira keeps the second ledger in the cellar.`;
+    const both = `${one}\n\nC1 Ledger (note):\n[Memory: Ledger]\nMira keeps the second ledger in the cellar.`;
     for (const ids of [['« L1 »'], ['[ L1 ]'], ['" L1 "'], ['L1 (Mira)'], ['L1 Mira']]) {
       const out = await readLore(ids, ctx);
       expect([ids, out.text, out.summary]).toEqual([ids, one, '1 read']);

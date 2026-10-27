@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ProviderError, type ModelCaps, type Provider } from '../providers/types.ts';
 import type { DeepPartial, SessionConfig, Binding } from '../session/entries.ts';
+import { ENTRY_TYPES } from '../agents/compendium/types.ts';
 import type { Connection } from '../engine/api.ts';
 import { isHeaderSafeValue, type SecretResolver } from './secrets.ts';
 import { isLocalOrigin, originOf } from '../providers/http.ts';
@@ -912,12 +913,152 @@ function parseDirector(t: Table): NonNullable<DeepPartial<SessionConfig>['direct
   return out;
 }
 
-/** §7.4.9 is M5: the table is kept as written (snake_case); only `enabled` is checked now. */
-function parseCompendium(t: Table): NonNullable<DeepPartial<SessionConfig>['compendium']> {
-  if (t.enabled !== undefined && typeof t.enabled !== 'boolean') {
-    throw new ConfigError('compendium.enabled', 'must be true or false');
+type CompendiumDefaults = NonNullable<DeepPartial<SessionConfig>['compendium']>;
+
+/** §13's "0 = by profile / origin": 0, or a whole number from min to max. */
+function zeroOr(f: Fields, k: string, min: number, max: number): number | undefined {
+  const v = f.raw(k);
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v) || (v !== 0 && (v < min || v > max))) {
+    throw new ConfigError(f.at(k), `must be 0 (by profile) or a whole number from ${min} to ${max}`);
   }
-  return structuredClone(t) as NonNullable<DeepPartial<SessionConfig>['compendium']>;
+  return v;
+}
+
+/** Sets out[k] when v is defined. */
+function put<T extends object, K extends keyof T>(out: T, k: K, v: T[K] | undefined): void {
+  if (v !== undefined) out[k] = v;
+}
+
+/**
+ * §7.4.9 / §13 (M5a, D-158): the [compendium] table and its [compendium.recall|filing|historian|books]
+ * tables, snake_case → the camelCase CompendiumConfig, every field range-checked (ConfigError names the
+ * dotted path). TOML's 0 for a "by profile / by origin" number is kept: resolveCompendium reads it as
+ * absent. [compendium.books] maps a library id to "read" or "off".
+ */
+function parseCompendium(t: Table): CompendiumDefaults {
+  const f = new Fields(t, ['compendium']);
+  const out: CompendiumDefaults = {};
+  put(out, 'enabled', f.bool('enabled'));
+  put(out, 'profile', f.oneOf('profile', ['auto', 'full', 'lite'] as const));
+  put(out, 'language', f.str('language', { max: 80 }));
+  put(out, 'guidance', f.str('guidance', { max: 4000 }));
+  put(out, 'minShare', f.num('min_share', 0, 1));
+  put(out, 'maxAttempts', f.int('max_attempts', 1, 10));
+  put(out, 'idleDelaySec', f.num('idle_delay_sec', 0, 60));
+
+  const recallT = f.table('recall');
+  if (recallT) {
+    const r = new Fields(recallT, ['compendium', 'recall']);
+    const recall: NonNullable<CompendiumDefaults['recall']> = {};
+    put(recall, 'mode', r.oneOf('mode', ['auto', 'sync', 'prefetch', 'lexical', 'off'] as const));
+    put(recall, 'onMiss', r.oneOf('on_miss', ['auto', 'lexical', 'sync'] as const));
+    put(recall, 'maxEntries', zeroOr(r, 'max_entries', 1, 30));
+    put(recall, 'minEntries', r.int('min_entries', 0, 20));
+    put(recall, 'contextMessages', zeroOr(r, 'context_messages', 5, 100));
+    put(recall, 'graceSec', r.num('grace_sec', 0, 60));
+    put(recall, 'timeoutSec', zeroOr(r, 'timeout_sec', 1, 3600));
+    put(recall, 'onSwipe', r.oneOf('on_swipe', ['reuse', 'rerun'] as const));
+    put(recall, 'guidance', r.str('guidance', { max: 8000 }));
+    r.done(['mode', 'on_miss', 'max_entries', 'min_entries', 'context_messages', 'grace_sec', 'timeout_sec', 'on_swipe', 'guidance']);
+    out.recall = recall;
+  }
+
+  const filingT = f.table('filing');
+  if (filingT) {
+    const r = new Fields(filingT, ['compendium', 'filing']);
+    const filing: NonNullable<CompendiumDefaults['filing']> = {};
+    put(filing, 'enabled', r.bool('enabled'));
+    put(filing, 'wait', r.int('wait', 0, 5));
+    put(filing, 'everyN', r.int('every_n', 1, 10));
+    put(filing, 'allow', r.strArray('allow', { oneOf: ENTRY_TYPES }));
+    put(filing, 'timeoutSec', zeroOr(r, 'timeout_sec', 1, 3600));
+    r.done(['enabled', 'wait', 'every_n', 'allow', 'timeout_sec']);
+    out.filing = filing;
+  }
+
+  const historianT = f.table('historian');
+  if (historianT) {
+    const r = new Fields(historianT, ['compendium', 'historian']);
+    const historian: NonNullable<CompendiumDefaults['historian']> = {};
+    put(historian, 'interval', r.int('interval', 0, 100));
+    put(historian, 'recapAfter', r.int('recap_after', 1, 1000));
+    put(historian, 'overlap', zeroOr(r, 'overlap', 1, 100));
+    r.done(['interval', 'recap_after', 'overlap']);
+    out.historian = historian;
+  }
+
+  const booksT = f.table('books');
+  if (booksT) {
+    const books: Record<string, 'read' | 'off'> = {};
+    for (const [id, v] of Object.entries(booksT)) {
+      if (v !== 'read' && v !== 'off') throw new ConfigError(fmt(['compendium', 'books', id]), 'must be "read" or "off"');
+      books[id] = v;
+    }
+    out.books = books;
+  }
+
+  f.done(['enabled', 'profile', 'language', 'guidance', 'min_share', 'max_attempts', 'idle_delay_sec', 'recall', 'filing', 'historian', 'books']);
+  return out;
+}
+
+/** The session config's camelCase [compendium] names → config.toml's (D-158); the other names are the same. */
+const COMPENDIUM_SNAKE: Readonly<Record<string, string>> = {
+  minShare: 'min_share',
+  maxAttempts: 'max_attempts',
+  idleDelaySec: 'idle_delay_sec',
+  onMiss: 'on_miss',
+  maxEntries: 'max_entries',
+  minEntries: 'min_entries',
+  contextMessages: 'context_messages',
+  graceSec: 'grace_sec',
+  timeoutSec: 'timeout_sec',
+  onSwipe: 'on_swipe',
+  everyN: 'every_n',
+  recapAfter: 'recap_after',
+};
+const COMPENDIUM_CAMEL: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(COMPENDIUM_SNAKE).map(([c, s]) => [s, c]));
+const COMPENDIUM_TABLES: ReadonlySet<string> = new Set(['recall', 'filing', 'historian']);
+
+/**
+ * D-158 for a session's configure(): the `compendium` part of a config patch (camelCase, as a session
+ * stores it), checked with exactly the ranges of config.toml's [compendium] (parseCompendium over the
+ * same fields in snake_case). A null removes a field and is not checked here (the header guard then
+ * decides: `enabled` cannot go); a snake_case name is refused (a session's config is camelCase). The
+ * session header itself is read leniently (an old header keeps what it stored, resolveCompendium
+ * defaults it), so this is where what a session writes is checked. Returns the first problem as
+ * '<dotted path in camelCase>: <why>', or null.
+ */
+export function compendiumPatchProblem(patch: unknown): string | null {
+  if (patch === undefined || patch === null) return null;
+  if (!isTable(patch)) return 'compendium: must be an object';
+  const toToml = (t: Table, path: string[]): Table | string => {
+    const out: Table = {};
+    for (const [k, v] of Object.entries(t)) {
+      if (v === null || v === undefined) continue;
+      if (k.includes('_')) return `${[...path, k].join('.')}: unknown field (a session's config names it in camelCase)`;
+      if (path.length === 1 && COMPENDIUM_TABLES.has(k) && isTable(v)) {
+        const inner = toToml(v, [...path, k]);
+        if (typeof inner === 'string') return inner;
+        out[k] = inner;
+      } else if (path.length === 1 && k === 'books' && isTable(v)) {
+        out[k] = Object.fromEntries(Object.entries(v).filter(([, x]) => x !== null && x !== undefined));
+      } else out[COMPENDIUM_SNAKE[k] ?? k] = v;
+    }
+    return out;
+  };
+  const table = toToml(patch, ['compendium']);
+  if (typeof table === 'string') return table;
+  try {
+    parseCompendium(table);
+    return null;
+  } catch (e) {
+    if (!(e instanceof ConfigError)) throw e;
+    const why = e.message.slice(e.path.length + 2);
+    const segs = e.path.split('.');
+    const camel = segs.map((s, i) => (segs[i - 1] === 'books' ? s : (COMPENDIUM_CAMEL[s] ?? s)));
+    return `${camel.join('.')}: ${why}`;
+  }
 }
 
 // ---- [caps."conn:model"] ---------------------------------------------------------------------------

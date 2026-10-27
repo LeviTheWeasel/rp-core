@@ -71,7 +71,8 @@ export interface Trace {
     unsent?: Record<string, string>;
   };
   recap: { ids: string[]; arcs: { key: string; rev: number }[]; boundary: string | null };
-  compendium?: Record<string, unknown>; // M5
+  /** M5a (D-155): present when the request had Compendium input (enabled, ≥ 1 live typed entry). */
+  compendium?: CompendiumTrace;
   prefill: 'sent' | 'tools_off' | 'skipped_for_tools' | 'unsupported' | null;
   macros: { unknown: string[] };
   /** Oldest and newest message ids cut by the budget, if any. */
@@ -152,10 +153,59 @@ export interface Roles {
   recall?: Binding | 'narrator' | 'recorder';
 }
 
-/** §7.4.9. Only `enabled` matters before M5; the rest is reserved. */
+/**
+ * §7.4.9 (M5a, D-158). Stored as written; agents/compendium/profile.ts resolveCompendium fills the
+ * defaults. M5a reads enabled, profile, minShare and books; recall/filing/historian are parsed and
+ * validated for M5b/M5c. Older headers hold only `enabled` (and maybe raw snake_case keys): extra
+ * keys are kept, never read.
+ */
 export interface CompendiumConfig {
   enabled: boolean;
+  /** 'auto': lite when the agent's window is below 24 576 tokens [D-79]. */
+  profile?: 'auto' | 'full' | 'lite';
+  /** ≤ 80 chars. */
+  language?: string;
+  /** ≤ 4 000 chars (filing and historian; narrows only). */
+  guidance?: string;
+  /** Share of the lore budget kept for the Compendium block when it has candidates (0.4) [D-77]. */
+  minShare?: number;
+  maxAttempts?: number;
+  /** 0–60. */
+  idleDelaySec?: number;
+  /** Library id → access; absent = 'read' [D-76]. */
+  books?: Record<string, 'read' | 'off'>;
+  recall?: {
+    mode?: 'auto' | 'sync' | 'prefetch' | 'lexical' | 'off';
+    onMiss?: 'auto' | 'lexical' | 'sync';
+    maxEntries?: number;
+    minEntries?: number;
+    contextMessages?: number;
+    graceSec?: number;
+    timeoutSec?: number;
+    onSwipe?: 'reuse' | 'rerun';
+    guidance?: string;
+  };
+  filing?: { enabled?: boolean; wait?: number; everyN?: number; allow?: string[]; timeoutSec?: number };
+  historian?: { interval?: number; recapAfter?: number; overlap?: number };
   [k: string]: unknown;
+}
+
+/** D-155: what the Compendium block did in one request. No entry texts, ever. */
+export interface CompendiumTrace {
+  /** CompendiumView.rev the request read. */
+  rev: string;
+  /** M5a: always 'lexical' (the model-free selector); M5c adds recall sources. */
+  source: 'sync' | 'prefetch' | 'lexical' | 'reused' | 'off';
+  profile: 'full' | 'lite';
+  picks: { ref: string; key: string; via: 'mention' | 'model' | 'window' | 'constant' }[];
+  injected: { ref: string; tok: number; mode: 'full' | 'brief' }[];
+  cut: { ref: string; tok: number }[];
+  /** Keys skipped because they were already in the prompt. */
+  repeated: string[];
+  /** Entries hidden plus array elements dropped by freshness [D-80]. */
+  hidden: number;
+  /** Tokens: the lore share, what the lore engine used, what the block used. */
+  budget: { share: number; lore: number; block: number };
 }
 
 export interface SessionConfig {
@@ -194,7 +244,8 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
     style: 'the-balanced',
     creativity: 'moderate',
   },
-  compendium: { enabled: false },
+  // D-158: new sessions read their books' Compendium entries; a stored header keeps what it holds.
+  compendium: { enabled: true },
   reasoningShown: false,
   swipe: { showRejected: true },
 };
@@ -363,7 +414,11 @@ type MemRec = Record<string, unknown>;
  * its lore keys.
  */
 export type MemOp =
-  | { op: 'file'; type: string; data: MemRec }
+  /**
+   * target (M5a, D-168): a human row's file op names the key its dry run produced, so the row keeps
+   * addressing that entry whatever books are attached later. Agent rows (M5b) are matched by name.
+   */
+  | { op: 'file'; type: string; data: MemRec; target?: string }
   | { op: 'arc'; plot: string; overview: string }
   | { op: 'note'; title: string; keys: string[]; content: string }
   | { op: 'edit'; ref: string; set?: MemRec; unset?: string[]; keys?: string[]; featured?: boolean }
@@ -592,6 +647,10 @@ const sessionConfig = obj(
       },
       { timeoutSec: num },
     ),
+    // D-158 (the lead's ruling after the review): only `enabled` is checked. M4 stored the [compendium]
+    // table as config.toml had it (snake_case, values it never read), and such a header must still open;
+    // resolveCompendium defaults what it cannot read, and configure() checks what a session writes
+    // (config.ts compendiumPatchProblem).
     compendium: obj({ enabled: bool }),
     reasoningShown: bool,
     swipe: obj({ showRejected: bool }),

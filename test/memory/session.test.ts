@@ -38,10 +38,10 @@ describe('note verbs', () => {
     const version = s.version();
     expect(s.notes()).toEqual([]);
 
-    expect(s.memoryAdd({ title: ' Брат ', content: ' Старший брат Миры. ', keys: [' брат ', 'Тим', '', 'брат'] })).toEqual({ key: 'note:брат' });
-    expect(s.memoryAdd({ title: 'Лампа', content: 'Мигает.' })).toEqual({ key: 'note:лампа' });
+    expect(s.memoryAdd({ title: ' Брат ', content: ' Старший брат Миры. ', keys: [' брат ', 'Тим', '', 'брат'] })).toEqual({ key: 'note:брат', changed: true });
+    expect(s.memoryAdd({ title: 'Лампа', content: 'Мигает.' })).toEqual({ key: 'note:лампа', changed: true });
     // The same title again is a second note (the key is taken).
-    expect(s.memoryAdd({ title: 'брат!', content: 'Другой брат.', keys: [] })).toEqual({ key: 'note:брат#2' });
+    expect(s.memoryAdd({ title: 'брат!', content: 'Другой брат.', keys: [] })).toEqual({ key: 'note:брат#2', changed: true });
     expect(summary(s)).toEqual([
       { key: 'note:брат', name: 'Брат', keys: ['брат', 'Тим'], content: 'Старший брат Миры.', retired: undefined },
       { key: 'note:лампа', name: 'Лампа', keys: ['Лампа'], content: 'Мигает.', retired: undefined },
@@ -49,19 +49,19 @@ describe('note verbs', () => {
     ]);
 
     // Edit by handle: a rename keeps the key; keys and text by key; an emptied key list falls back to the title.
-    expect(s.memoryEdit({ ref: 'C1', title: 'Брат Миры' })).toEqual({ key: 'note:брат' });
-    expect(s.memoryEdit({ ref: 'note:лампа', content: 'Погасла.', keys: ['фонарь', ' лампа '] })).toEqual({ key: 'note:лампа' });
-    expect(s.memoryEdit({ ref: 'Лампа', keys: [' '] })).toEqual({ key: 'note:лампа' });
+    expect(s.memoryEdit({ ref: 'C1', title: 'Брат Миры' })).toEqual({ key: 'note:брат', changed: true });
+    expect(s.memoryEdit({ ref: 'note:лампа', content: 'Погасла.', keys: ['фонарь', ' лампа '] })).toEqual({ key: 'note:лампа', changed: true });
+    expect(s.memoryEdit({ ref: 'Лампа', keys: [' '] })).toEqual({ key: 'note:лампа', changed: true });
     expect(s.notes()[0]).toMatchObject({ key: 'note:брат', name: 'Брат Миры', keys: ['брат', 'Тим'] });
     expect(s.notes()[1]).toMatchObject({ key: 'note:лампа', name: 'Лампа', content: 'Погасла.', keys: ['Лампа'] });
 
     // Retire by title, restore by handle.
-    expect(s.memoryRetire({ ref: 'лампа', reason: ' погасла ' })).toEqual({ key: 'note:лампа' });
+    expect(s.memoryRetire({ ref: 'лампа', reason: ' погасла ' })).toEqual({ key: 'note:лампа', changed: true });
     expect(s.notes()[1]!.retired).toEqual({ reason: 'погасла' });
     expect(refusal(() => s.memoryRetire({ ref: 'C2' }))).toBe('invalid_params'); // already retired
-    expect(s.memoryRestore({ ref: 'Лампа' })).toEqual({ key: 'note:лампа' });
+    expect(s.memoryRestore({ ref: 'Лампа' })).toEqual({ key: 'note:лампа', changed: true });
     expect(s.notes()[1]!.retired).toBeUndefined();
-    expect(refusal(() => s.memoryRestore({ ref: 'C2' }))).toBe('invalid_params'); // not retired
+    expect(s.memoryRestore({ ref: 'C2' })).toEqual({ key: 'note:лампа', changed: false }); // live: nothing to restore, nothing written
 
     // Each verb wrote exactly one human row with one op; none of them moved the version.
     const rows = memRows(home, s.id);
@@ -111,7 +111,7 @@ describe('note verbs', () => {
     expect(entriesOf(home, s.id).length).toBeGreaterThan(before); // the turn's own lines only
     expect(memRows(home, s.id)).toHaveLength(1);
     // After the turn the verbs work again.
-    expect(s.memoryRetire({ ref: 'C1' })).toEqual({ key: 'note:лампа' });
+    expect(s.memoryRetire({ ref: 'C1' })).toEqual({ key: 'note:лампа', changed: true });
     await engine.close();
   });
 
@@ -234,6 +234,19 @@ describe('note verbs', () => {
     s.select({ messageId: userId, expectedVersion: s.version(), exact: true });
     expect(s.view().head).toBe(userId);
     expect(s.notes().map((n) => n.key)).toEqual(['note:лампа']);
+    await engine.close();
+  });
+
+  test('notes are untyped: the one-name-per-live-entry rule (ruling I) leaves their titles free, on a rename and a restore', async () => {
+    const { engine, home } = await rig([]);
+    const s = engine.createSession({ character: MIRA, persona: LEVI });
+    s.memoryAdd({ title: 'Брат', content: 'Старший брат.' });
+    s.memoryAdd({ title: 'Лампа', content: 'Мигает.' });
+    s.memoryRetire({ ref: 'Брат' });
+    s.memoryAdd({ title: 'брат', content: 'Другой брат.' });
+    expect(s.memoryRestore({ ref: 'note:брат' })).toEqual({ key: 'note:брат', changed: true });
+    expect(s.memoryEdit({ ref: 'Лампа', title: 'Брат' })).toEqual({ key: 'note:лампа', changed: true });
+    expect(memRows(home, s.id)).toHaveLength(6);
     await engine.close();
   });
 });

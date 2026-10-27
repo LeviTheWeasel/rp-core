@@ -5,8 +5,9 @@
 // Bunraku (M9) are thin clients of exactly this. CONTRACT FILE (types only): the engine agent
 // implements it in engine.ts; the CLI agent codes against it.
 
-import type { Character, Persona, Samplers } from '../formats/native.ts';
-import type { CEntry } from '../agents/compendium/types.ts';
+import type { Character, ImportWarning, Persona, Samplers } from '../formats/native.ts';
+import type { CEntry, CompendiumView, EntryType, Rec } from '../agents/compendium/types.ts';
+import type { TreeNode } from '../agents/compendium/tree.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg, Provider, ProviderError, ToolSpec } from '../providers/types.ts';
@@ -78,6 +79,20 @@ export interface EngineOptions {
    * engine never stores that text or puts it in an event, whose message is the fixed one of the code.
    */
   onProviderError?(info: { sessionId: string; turnId: string; callKey: string; model: string; error: ProviderError }): void;
+  /**
+   * M5a (D-164, CLI --keep-requests): every provider request of a turn (narrator rounds, the
+   * Director, any agent; never a preview) is written as pretty JSON to
+   * <home>/sessions/<sessionId>.requests/<callKey>.json, each character of the callKey outside
+   * [A-Za-z0-9._-] replaced by '_'. What is written is the engine's provider-level request, the
+   * ModelRequest a provider receives (model {connection, model}, caps, messages as PromptMsg with
+   * src and blocks, tools, toolChoice, prefill, maxTokens, samplers, stop, reasoning, responseSchema,
+   * callKey, agent) — not the HTTP body the provider then builds from it (/preview --wire shows that
+   * one). Never in it: headers, keys, the abort signal, and the messages' `replay` payloads (provider
+   * data a tool loop sends back, kept in memory only). A call key that comes again (a retry, a
+   * fallback's round 0) never overwrites: the 2nd request goes to <callKey>-2.json, the 3rd to
+   * <callKey>-3.json, and so on. Off by default.
+   */
+  keepRequests?: boolean;
 }
 
 export type RefusalCode =
@@ -105,6 +120,44 @@ export class Refusal extends Error {
     this.name = 'Refusal';
     this.code = code;
   }
+}
+
+/** M5a (D-159): one Compendium entry as memoryList lists it. */
+export interface MemoryRow {
+  /** Its handle C<n> (D-150). */
+  ref: string;
+  key: string;
+  type: EntryType | 'note' | 'arc';
+  name: string;
+  aliases: string[];
+  /** '' for notes and arcs. */
+  tagline: string;
+  /** 'session', or the library book (its library id) and the entry's id there. */
+  origin: 'session' | { book: string; id: string };
+  retired?: { reason: string };
+  /** JSON characters of the entry's data; a note's or an arc's: the length of its text. */
+  size: number;
+  featured?: true;
+  /** A library entry changed by this session's rows. */
+  overlay?: true;
+}
+
+/** M5a (the lead's rulings after the review): what a writing memory verb did. */
+export interface MemoryWrite {
+  /** The entry's key (CEntry.key). */
+  key: string;
+  /**
+   * false: the dry run showed the change is already there (an edit that changes nothing, a restore
+   * of a live entry, a file that merges nothing new), so no row was written and no event published.
+   */
+  changed: boolean;
+  /**
+   * The Compendium's notices (compendium_large_entry, library_entry_missing) not yet told in this
+   * open session, for the caller to show; returning them is what tells them (the next turn will not).
+   * Returned whether or not the verb changed anything (changed:false too), so a caller shows them on
+   * every path. Absent when there are none, and while the Compendium is disabled.
+   */
+  notices?: Notice[];
 }
 
 export interface CreateSessionInput {
@@ -212,7 +265,10 @@ export interface SessionHandle {
   header(): SessionHeader;
   /** version(session) (§5.3). */
   version(): number;
-  /** The PathView at the current head (cached per version). */
+  /**
+   * The PathView at the current head (cached per version). M5a: its Compendium is folded with the
+   * library seed (the session's readable books, D-141).
+   */
   view(): PathView;
   /** True while a turn is running. */
   busy(): boolean;
@@ -240,7 +296,12 @@ export interface SessionHandle {
   select(input: { messageId: string; expectedVersion: number; exact?: boolean }): { version: number };
   /** Copy the path up to `at` into a new session; returns the new session id (not opened). */
   fork(input: { at: string }): string;
-  /** Append a config entry (does not change the version). */
+  /**
+   * Append a config entry (does not change the version). M5a: `{compendium: {enabled}}` switches the
+   * Compendium for this session; view(), compendium(), the memory verbs, a preview and the next turn
+   * read the new value at once. A patch's `compendium` fields are checked with config.toml's ranges
+   * (camelCase names; invalid_params with the dotted path).
+   */
   configure(patch: DeepPartial<SessionConfig>): void;
   /**
    * M2: build the request a turn would send, without sending or writing anything (§6.1). Same path
@@ -265,14 +326,70 @@ export interface SessionHandle {
    * M3: add a note (one human `mem` row, on:null, op 'note'). keys default to [title]. Returns its
    * key. Refusals: session_busy during a turn; invalid_params for an empty title or content, or a
    * title with no letters or digits. Publishes a `memory` event {change:'note', kind:'note', by:'user'}.
+   * M5a: returns the Compendium's untold notices too (MemoryWrite; `changed` is always true).
    */
-  memoryAdd(input: { title: string; keys?: string[]; content: string }): { key: string };
-  /** M3: change a note's title, keys or text (op 'edit'; its key stays). not_found for an unknown ref. Event change 'edited'. */
-  memoryEdit(input: { ref: string; title?: string; keys?: string[]; content?: string }): { key: string };
-  /** M3: retire a note (op 'retire'): it stops firing and leaves search_lore. Event change 'retired'. */
-  memoryRetire(input: { ref: string; reason?: string }): { key: string };
-  /** M3: bring a retired note back (op 'restore'). Event change 'restored'. */
-  memoryRestore(input: { ref: string }): { key: string };
+  memoryAdd(input: { title: string; keys?: string[]; content: string }): MemoryWrite;
+  /**
+   * M5a (D-144, D-159, D-168): file a typed entry (op 'file'): merged into the live entry of that
+   * type it names (session first, then the library: a library entry becomes an overlay), else
+   * created. A summary is always new. The row stores the key its dry run found (op.target), so it
+   * keeps addressing that entry whatever books are attached, set to 'read' or enabled later.
+   * Refusals (nothing written): invalid_params with the reason in words for an unknown type, data
+   * that is not an object, a missing required field, a name that is a plain entry of a readable book
+   * (classic_conflict), a merge that would give the entry a name (an alias) another live entry of the
+   * type answers to (not for summaries); session_busy during a turn. A merge that adds nothing writes
+   * nothing (changed:false). Event change 'created' or 'merged', kind = the type.
+   */
+  memoryFile(input: { type: EntryType; data: Rec }): MemoryWrite & { ref: string; change: 'created' | 'merged' };
+  /**
+   * Change an entry (op 'edit'; its key stays). A note takes title, keys, content and featured (M3);
+   * a typed entry, a library entry (it becomes an overlay; the book file is never written) and an arc
+   * take set (top-level data fields replaced; the identity field renames), unset, keys and featured
+   * (an arc's set.content replaces its overview). not_found for an unknown ref; invalid_params for a
+   * change the fold would refuse, said in words, and for a rename, a new alias (or a title or topic
+   * field) onto a name (name, alias or former name) another live entry of the same type answers to
+   * (summaries are exempt: they never merge by name). An edit that changes nothing writes nothing
+   * (changed:false); `set.aliases` equal to the aliases the entry already shows is no change. Event
+   * change 'edited'.
+   */
+  memoryEdit(input: { ref: string; title?: string; keys?: string[]; content?: string; set?: Rec; unset?: string[]; featured?: boolean }): MemoryWrite;
+  /**
+   * Retire any entry (op 'retire'): it leaves the block, the tools and the lore. Event change
+   * 'retired'. An entry already retired is refused (invalid_params "… is already retired").
+   */
+  memoryRetire(input: { ref: string; reason?: string }): MemoryWrite;
+  /**
+   * Bring any retired entry back (op 'restore'). A live entry: nothing written (changed:false). Refused
+   * (invalid_params) while another live entry of the type answers to one of its names (name, alias,
+   * former name); summaries, notes and arcs are exempt. Event change 'restored'.
+   */
+  memoryRestore(input: { ref: string }): MemoryWrite;
+  /**
+   * M5a: the entries of the current path's Compendium (library seed included) in handle order, live
+   * only unless includeRetired; `type` keeps one entry type, 'note' or 'arc'. Read-only.
+   */
+  memoryList(input?: { type?: EntryType | 'note' | 'arc'; includeRetired?: boolean }): MemoryRow[];
+  /** M5a: one entry (C<n>, key or a unique name; live first) with its full render and its brief. not_found. */
+  memoryGet(input: { ref: string }): { ref: string; entry: CEntry; render: string; brief: string };
+  /**
+   * M5a (D-165): the session's tree first, then one tree per readable book (its overlays applied),
+   * or only that book's with `book` (a library id; not_found when it is not a readable book).
+   */
+  memoryTree(input?: { book?: string }): TreeNode[];
+  /**
+   * M5a (D-163): export the session's entries and overlays (live and retired) under `name`. 'core':
+   * a library lorebook (canonicalId(name)); 'compendium': <home>/exports/<id>.compendium.json. An
+   * existing id or file is refused (invalid_params) unless `force`, which overwrites it in place
+   * (temp file, fsync, rename, folder fsync); a core export whose id is one of this session's own
+   * lorebooks is refused even with `force` (it would replace that book with the session's part of
+   * it). Writes no row; session_busy during a turn. `warnings`: what the file could not keep (the
+   * codec's compendiumWarnings, e.g. featured_dropped: RoleCall keeps one featured entry per type),
+   * for the caller to show; absent when none. The export folds with the readable books' seed even
+   * while the Compendium is off (an export is a data operation), so the overlays are always in it.
+   */
+  memoryExport(input: { name: string; format: 'core' | 'compendium'; force?: boolean }): { path: string; id: string; entries: number; warnings?: ImportWarning[] };
+  /** M5a: the head view's Compendium (the fold with the library seed). */
+  compendium(): CompendiumView;
 
   /** Stop any running turn (keeping partial text), wait for it to settle, release the lock. */
   close(): Promise<void>;

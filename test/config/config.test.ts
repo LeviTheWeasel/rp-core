@@ -168,7 +168,7 @@ describe('CONFIG_TEMPLATE', () => {
 });
 
 describe('the §13 example', () => {
-  test('parses: anthropic gets its official base_url, compendium is kept as written', () => {
+  test('parses: anthropic gets its official base_url, compendium maps to camelCase (D-158)', () => {
     const cfg = parseConfig(SECTION_13, '/x/config.toml');
     expect(cfg.path).toBe('/x/config.toml');
     expect(cfg.connections.local).toEqual({ id: 'local', dialect: 'openai-chat', baseUrl: 'http://127.0.0.1:8080', maxInFlight: 1 });
@@ -186,10 +186,19 @@ describe('the §13 example', () => {
       recorder: { conn: 'local', model: 'qwen3-14b' },
       recall: 'recorder',
     });
-    expect(cfg.sessionDefaults.compendium!.enabled).toBe(true);
-    expect(cfg.sessionDefaults.compendium!.idle_delay_sec).toBe(8);
-    expect(cfg.sessionDefaults.compendium!.recall).toMatchObject({ mode: 'auto', grace_sec: 4 });
-    expect(cfg.sessionDefaults.compendium!.books).toEqual({});
+    expect(cfg.sessionDefaults.compendium).toEqual({
+      enabled: true,
+      profile: 'auto',
+      language: '',
+      guidance: '',
+      minShare: 0.4,
+      maxAttempts: 3,
+      idleDelaySec: 8,
+      recall: { mode: 'auto', onMiss: 'auto', maxEntries: 0, minEntries: 0, contextMessages: 0, graceSec: 4, timeoutSec: 0, onSwipe: 'reuse', guidance: '' },
+      filing: { enabled: true, wait: 1, everyN: 1, allow: [] },
+      historian: { interval: 20, recapAfter: 24, overlap: 0 },
+      books: {},
+    });
     expect(cfg.caps).toEqual({ 'local:qwen3-14b': { tools: 'native' } });
     expect(cfg.prices).toEqual({
       'openrouter:anthropic/claude-sonnet-5-5': { inPerM: 2, outPerM: 10, asOf: '2026-10-06' },

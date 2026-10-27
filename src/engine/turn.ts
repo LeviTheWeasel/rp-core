@@ -50,7 +50,16 @@
 // rides `prep` and the commit body (`dir`), its directive goes to depth 1, its calls to trace.calls
 // and CALL_CEILING, its status to trace.agents.director. A Stop during planning ends the turn
 // stopped-empty with no `dir`. A continue never plans: it re-sends the target's stored directive.
+//
+// M5a (.notes/m5a-decisions.md D-141, D-157, D-164): the turn reads the session's books once
+// (TurnHost.library) and folds every view with their seed; the Director gets the Compendium's world
+// snapshot while the Compendium is on. With EngineOptions.keepRequests every provider-level request
+// of the turn (narrator rounds, the Director) is kept as JSON under <home>/sessions/<id>.requests/.
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { resolveCompendium } from '../agents/compendium/profile.ts';
+import { worldSnapshot } from '../agents/compendium/world.ts';
 import { directiveInsert, runDirector, type DirectorAgentRow } from '../agents/director/call.ts';
 import { checkRecord } from '../agents/director/state.ts';
 import type { DirectorRecord } from '../agents/director/types.ts';
@@ -76,6 +85,7 @@ import {
   type KeyedNotice,
   type ReplyLimits,
   type RequestInput,
+  type SessionLibrary,
   type Shaped,
   startView,
 } from './request.ts';
@@ -85,9 +95,9 @@ import { continuationResult } from '../prompt/shape.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import type { Event, EventBody, Notice } from '../protocol/events.ts';
 import { stripToolCallLeaks } from '../tools/leaks.ts';
-import type { FinishReason, ProviderError, Usage } from '../providers/types.ts';
+import type { FinishReason, ModelRequest, ProviderError, Usage } from '../providers/types.ts';
 import type { Block, Generation, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
-import { SessionLockedError } from '../session/log.ts';
+import { SessionLockedError, sessionsDir } from '../session/log.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 
 /** Re-exported for session.ts: an event before the session id and timestamp are stamped on it. */
@@ -103,7 +113,20 @@ export interface TurnHost extends Journal {
   firstNotice(code: string): boolean;
   /** The turn is over: the session stops being busy. Called before the terminal event. */
   turnEnded(run: TurnRun): void;
+  /** M5a (D-141): the session's books and the Compendium's seed view() was folded with. */
+  library(): SessionLibrary;
 }
+
+/** D-164: where a session's kept requests go. */
+export function requestsDir(home: string, sessionId: string): string {
+  return join(sessionsDir(home), `${sessionId}.requests`);
+}
+
+/**
+ * D-164: a call key as a file name: every character outside [A-Za-z0-9._-] becomes '_'. The n-th
+ * request under one call key (a retry, a fallback's round 0) gets `-n` before `.json` (n ≥ 2).
+ */
+export const requestFileName = (callKey: string, n = 1): string => `${callKey.replace(/[^A-Za-z0-9._-]/g, '_')}${n > 1 ? `-${n}` : ''}.json`;
 
 type Category = string;
 interface Ending {
@@ -187,6 +210,10 @@ export class TurnRun {
   private dirAgent: DirectorAgentRow | { status: 'skipped' } | undefined;
   /** M4: the view at U the Director planned from (request.ts startView). */
   private dirView: PathView | undefined;
+  /** M5a: the session's books for this turn (read once, at the start). */
+  private lib: SessionLibrary | undefined;
+  /** D-164: keeps each provider request when EngineOptions.keepRequests is on. */
+  private readonly keep: ((req: ModelRequest) => void) | undefined;
 
   constructor(
     private readonly host: TurnHost,
@@ -205,6 +232,41 @@ export class TurnRun {
       ctx.timers,
     );
     this.hookCtx = { sessionId: host.sessionId, turnId: entry.turn, kind: entry.kind, signal: this.ctrl.signal };
+    this.keep = ctx.keepRequests === true ? (req) => this.keepRequest(req) : undefined;
+  }
+
+  /** The session's books, read once per turn (the Director, the request and a fallback's share them). */
+  private library(): SessionLibrary {
+    return (this.lib ??= this.host.library());
+  }
+
+  /**
+   * D-164: one provider-level request (the ModelRequest the provider gets, not the HTTP body it then
+   * builds) as JSON under <home>/sessions/<id>.requests/, without the abort signal and without the
+   * messages' `replay` payloads (provider data kept in memory only, §8.6); headers and keys are never
+   * in it. A call key that comes again never overwrites: the file is created exclusively, and a taken
+   * name moves on to `-2`, `-3`… A failure to write is told once and never touches the turn.
+   */
+  private keepRequest(req: ModelRequest): void {
+    const { signal: _signal, ...rest } = req;
+    const body = { ...rest, messages: rest.messages.map(({ replay: _replay, ...m }) => m) };
+    try {
+      const dir = requestsDir(this.ctx.home, this.host.sessionId);
+      mkdirSync(dir, { recursive: true });
+      const text = `${JSON.stringify(body, null, 2)}\n`;
+      for (let n = 1; ; n++) {
+        try {
+          writeFileSync(join(dir, requestFileName(req.callKey, n)), text, { flag: 'wx' });
+          break;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+        }
+      }
+    } catch (e) {
+      if (this.host.firstNotice('keep_requests_failed')) {
+        this.notice({ level: 'warn', code: 'keep_requests_failed', message: `A request could not be kept (--keep-requests): ${errMessage(e)}` });
+      }
+    }
   }
 
   get turnId(): string {
@@ -253,6 +315,7 @@ export class TurnRun {
       tree: this.host.tree(),
       // The view the Director read (folded at U on a swipe), so the request does not fold it again.
       view: this.dirView ?? this.host.view(),
+      library: this.library(),
       plan,
       seed: this.entry.seed,
       now: this.entry.now,
@@ -367,8 +430,9 @@ export class TurnRun {
       ...(this.ctx.prices ? { prices: this.ctx.prices } : {}),
       emit: (ev) => this.emit(ev),
       onProviderError: (info) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, turnId, ...info }),
+      ...(this.keep ? { keepRequest: this.keep } : {}),
     };
-    const view = startView(header, tree, this.host.view(), plan.upTo);
+    const view = startView(header, tree, this.host.view(), plan.upTo, this.library().seed);
     this.dirView = view;
     const run = await runDirector({
       tree,
@@ -380,6 +444,8 @@ export class TurnRun {
       config: plan.config,
       ...(persona ? { persona: { name: persona.name, description: persona.description, ...(persona.aliases ? { aliases: persona.aliases } : {}) } } : {}),
       charName: header.cast.character.name,
+      // D-157: the Compendium's characters and places, while the Compendium is on.
+      ...(resolveCompendium(plan.config.compendium).enabled ? { worldSnapshot } : {}),
       route,
       binding,
       counter: this.ctx.counter,
@@ -489,6 +555,7 @@ export class TurnRun {
           });
         },
         onCall: (c) => this.recorded(c, r, calls),
+        ...(this.keep ? { keepRequest: this.keep } : {}),
         onNotice: (code, message, key) => {
           if (this.host.firstNotice(key ?? code)) this.notice({ level: 'warn', code, message });
         },

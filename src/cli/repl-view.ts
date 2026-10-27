@@ -50,7 +50,7 @@ export interface TurnOptions {
   label: string;
   /** Read when a reasoning segment starts: true shows it, false folds it to one line (/think). */
   showReasoning: () => boolean;
-  /** Show a notice event. The Repl dedupes by code per session and says it through line(). */
+  /** Show a notice event. The Repl dedupes by code and message per session and says it through line(). */
   notice: (n: Notice) => void;
   /** /c: the answer's text before this turn (the line view shows the addition after its last words). */
   continueFrom?: string;

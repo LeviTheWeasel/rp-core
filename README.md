@@ -4,10 +4,12 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M4**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+- **Status:** milestone **M5a**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
   koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
-  it notes to remember. A Story Director can plan the story before each answer (off by default).
+  it notes to remember. The [Compendium](#the-compendium) keeps typed world knowledge (characters,
+  places, items…) from RoleCall exports and from your own entries, and sends the narrator the
+  entries the story names. A Story Director can plan the story before each answer (off by default).
   Besides the line chat there is a [full-screen TUI](#the-full-screen-tui) with the models, the chat
   and the agents side by side.
 - **Built with:** TypeScript on [Bun](https://bun.sh), with four runtime dependencies: `re2js`
@@ -28,20 +30,21 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 8. [Presets and lorebooks](#presets-and-lorebooks)
 9. [Tools and search](#tools-and-search)
 10. [Notes](#notes)
-11. [The Story Director](#the-story-director)
-12. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-13. [Active probes](#active-probes)
-14. [config.toml reference](#configtoml-reference)
-15. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-16. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-17. [Where your data lives](#where-your-data-lives)
-18. [Troubleshooting](#troubleshooting)
-19. [Command reference](#command-reference)
-20. [Development](#development)
+11. [The Compendium](#the-compendium)
+12. [The Story Director](#the-story-director)
+13. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+14. [Active probes](#active-probes)
+15. [config.toml reference](#configtoml-reference)
+16. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+17. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+18. [Where your data lives](#where-your-data-lives)
+19. [Troubleshooting](#troubleshooting)
+20. [Command reference](#command-reference)
+21. [Development](#development)
 
 ## What works today
 
-**Works now (M4, and the M4.5 TUI):**
+**Works now (M5a, and the M4.5 TUI):**
 
 | Area | What you get |
 |---|---|
@@ -54,16 +57,18 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Models | Switch the model in the middle of a session (`/model`) |
 | Tools and search | The narrator looks up earlier messages and lore before it answers, with the server's own tool calling or with calls written as text; `/search` runs the same search for you |
 | Notes | Author's note; your own notes for the narrator (`/memory add`), sent when their keys come up |
+| Compendium | Typed entries of 11 kinds (characters, places, items, events, plots…) from RoleCall Compendium exports and from your own `/memory new`. Each answer, the entries the story names go to the narrator in one block, short or whole by the window; the Director sees the characters and places in the scene. You edit library entries without touching the book, and export the session's entries as a lorebook or a RoleCall file (`/memory`) |
 | Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
-| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, and the tool rounds; `/preview` prints the exact request before it is sent; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
+| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, which Compendium entries were picked, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
 | Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls; `rp-core compact` shrinks a session's journal |
 
 **Not yet:**
 
 | Milestone | Arrives |
 |---|---|
-| M5 | The Compendium (memory) |
+| M5b | The Compendium's agents: entries filed from the story, summaries and arc overviews by a historian, `/memory undo`, `refile`, `retry` |
+| M5c | Recall: a model picks the entries before the answer; `/memory recall`, `profile`, `mode` |
 | M6 | `--stdio` for other UIs |
 | M7, M8 | Native Anthropic, then native Gemini |
 
@@ -332,7 +337,8 @@ Maren Vell › …
 | `/usage` | Tokens and cost of the current path (cost needs `[prices]` or a server that reports it) |
 | `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, the tool rounds and calls |
 | `/search <words> [before=n]` | Find earlier messages of this path, newest first ([details](#tools-and-search)) |
-| `/memory`, `/memory show\|add\|edit\|retire\|restore` | Your notes for the narrator ([details](#notes)) |
+| `/memory`, `/memory list\|show\|tree\|new\|edit\|retire\|restore\|export\|on\|off` | The Compendium of this path: list its entries, write and change them, export them ([details](#the-compendium)) |
+| `/memory add <title> \| <keys> \| <text>` | A note for the narrator ([details](#notes)) |
 | `/director`, `/director show` | The Story Director's plan at this point of the story: chapter, arcs, seeds, hidden arcs, and the last directive in full, as the narrator got it ([details](#the-story-director)) |
 | `/director on`, `/director off` | Let the Director plan every reply from the next turn, or stop it. Its plan is kept |
 | `/probe --active [--write]` | Test the narrator's model with a few tiny calls ([details](#active-probes)) |
@@ -565,7 +571,8 @@ Director · planned · 42.2s
 ## Editing messages and choosing an editor
 
 `/e [n]` edits message *n* (default: the last). How depends on whether you named an editor. In the
-full-screen TUI it always edits in the input box ([details](#typing-and-editing)).
+full-screen TUI it always edits in the input box ([details](#typing-and-editing)). The same editor
+opens for `/memory new` and `/memory edit` ([details](#writing-entries-in-the-editor)).
 
 ### Default: editing in place
 
@@ -625,8 +632,9 @@ end.
 
 ## Presets and lorebooks
 
-rp-core reads SillyTavern's chat-completion presets and its world info (lorebook) files. You import
-a file once into your library; from then on a session names it by its library id.
+rp-core reads SillyTavern's chat-completion presets and its world info (lorebook) files, and
+RoleCall's Compendium exports. You import a file once into your library; from then on a session
+names it by its library id.
 
 ### Importing
 
@@ -644,10 +652,13 @@ rp-core import ~/worlds/Eldoria.json
   world info in `data/default-user/worlds/`; its export buttons give the same files.
 - **Library ids.** Presets go to `library/presets`, world info to `library/lorebooks`. The id is the
   name in lower case with its words joined by `-`. SillyTavern writes no name into presets and world
-  info, so those are named after the file: `My Preset.json` becomes `my-preset`. Cards and bare
-  `character_book` files carry a name of their own and are named by it (a `character_book` without
-  one, by its file). `--as <name>` picks another name. Importing the same file twice changes nothing.
-  `builtin` is the built-in layout's id: a preset called that is saved as `builtin-2`.
+  info, so those are named after the file: `My Preset.json` becomes `my-preset`. Cards, bare
+  `character_book` files and RoleCall Compendium exports carry a name of their own and are named by
+  it (a `character_book` without one, by its file). `--as <name>` picks another name. Importing the
+  same file twice changes nothing. `builtin` is the built-in layout's id: a preset called that is
+  saved as `builtin-2`.
+- **RoleCall Compendium exports** (`compendium-v1.0.0`) become lorebooks whose typed entries feed
+  [the Compendium](#the-compendium); see [Importing a RoleCall Compendium](#importing-a-rolecall-compendium).
 - **Warnings.** Settings rp-core does not honour are named in a warning and kept in the imported
   file. A preset's connection settings (API source, model names, proxy and its password) are left
   out on purpose: the connection comes from `config.toml`.
@@ -704,8 +715,8 @@ In the chat:
 | `/preset` | The session's preset and the presets in your library |
 | `/preset <id\|file>` | Switch the preset from the next answer. `builtin` is the built-in layout. A file is imported first and its warnings are shown |
 | `/lore` | The lorebooks this session scans, in order: your persona's (the `book` of your `--persona` file), the card's own, then the ones you added |
-| `/lore add <id\|file>` | Add a lorebook from the next answer; a world info file is imported first. A book with the name of one already in the session takes its place: a changed copy of `Harbor.json`, imported as `harbor-2`, replaces `harbor` |
-| `/lore rm <id>` | Take a lorebook out of the session. It stays in the library |
+| `/lore add <id\|file>` | Add a lorebook from the next answer; a world info or Compendium file is imported first. A book with the name of one already in the session takes its place: a changed copy of `Harbor.json`, imported as `harbor-2`, replaces `harbor`. Its [Compendium](#the-compendium) entries join `/memory` at once, and the line says so |
+| `/lore rm <id>` | Take a lorebook out of the session. It stays in the library. Its [Compendium](#the-compendium) entries leave `/memory` at once, and the line says so |
 | `/lore test <text>` | Which entries a message with this text would wake, and why. Nothing is sent or saved |
 
 Changing the preset or the lorebooks is refused while an answer is being written.
@@ -803,13 +814,14 @@ The narrator can look things up before it writes. It has four tools, and all of 
 |---|---|
 | `search_history` | Finds earlier messages of this story by words, newest first |
 | `read_history` | Reads earlier messages in full, by their numbers (`#1` is the greeting) |
-| `search_lore` | Finds lorebook entries and your [notes](#notes) by words |
+| `search_lore` | Finds lorebook entries and [Compendium](#the-compendium) entries, your [notes](#notes) included, by words |
 | `read_lore` | Reads those entries in full |
 
 - **Offered only when they can help.** The history tools come when the story no longer fits the
   window and its oldest messages were left out; the lore tools when a lorebook entry or a note did
-  not fire for this answer. A short story whose lore is all in the prompt gets no tools, and its
-  request is exactly what it would be without them. Continuing an answer (`/c`) never offers tools.
+  not fire for this answer, or a Compendium entry was not sent with it. A short story whose lore is
+  all in the prompt gets no tools, and its request is exactly what it would be without them.
+  Continuing an answer (`/c`) never offers tools.
 - **Told what is hidden.** With the history tools comes a note where the left-out messages were
   (`[Messages #2–#161 of this chat are not shown here. search_history finds what was said in them;
   read_history shows them in full.]`) and, at the end of the request, a reminder to look a detail up
@@ -845,9 +857,10 @@ answer.
 
 Small local models often do not look anything up in a roleplay prompt, even when told to: in the M3
 demo and its reruns, Mag-Mell 12B (prompted) and gemma4:26b (native) answered from the visible chat,
-often with a made-up name ([`docs/M3-DEMO.md`](docs/M3-DEMO.md)). For local models the planned path
-is recall before the answer (M5), which does not wait for the model to ask. To see the same demo on a hosted model, see
-[`docs/M3-DEMO.md`](docs/M3-DEMO.md#on-a-hosted-model).
+often with a made-up name ([`docs/M3-DEMO.md`](docs/M3-DEMO.md)). For local models the
+[Compendium](#the-compendium) does not wait for the model to ask: the entries a message names are
+sent with it (M5a), and a model that picks entries before the answer comes in M5c. To see the same
+demo on a hosted model, see [`docs/M3-DEMO.md`](docs/M3-DEMO.md#on-a-hosted-model).
 
 ### Rounds
 
@@ -932,7 +945,8 @@ trace of 7c1e09ab · ollama:qwen3:14b
 ## Notes
 
 A note is something you want the narrator to keep in mind: a name, a promise, a place. It has a
-title, keys and a text, and works like a small lorebook entry that belongs to the story.
+title, keys and a text, and works like a small lorebook entry that belongs to the story. Notes are
+the plain part of [the Compendium](#the-compendium): no type and no fields, just text with keys.
 
 ```
 /memory add Brother | Yan, brother | Mira's brother Yan sails the north road and owes Levi a favour.
@@ -942,19 +956,22 @@ title, keys and a text, and works like a small lorebook entry that belongs to th
   4 messages from the end, as `[Memory: Brother]` followed by its text. Keys match by word roots
   and ignore case (`брат` matches `брата` and `братом`). A note without keys is keyed by its title.
 - **Budget.** Notes count against the lore budget, like any lorebook entry; `/trace` lists a note
-  that fired with the rest of the lore.
+  that fired with the rest of the lore. Notes stay lore: unlike the Compendium's typed entries,
+  they never go into its block.
 - **Found anyway.** A note that did not fire can still be found by the narrator: `search_lore`
   searches notes too.
 - **Saved in the session.** Each change is one line in the session's journal: nothing is deleted,
   and the story itself does not change (no new swipe, no new version). A change is refused while an
   answer is being written.
+- **Sent either way.** `/memory off` stops the Compendium's block, not the notes.
 
 | Command | What it does |
 |---|---|
-| `/memory` | Your notes, oldest first, each with its handle (`C1`, `C2`, …), its text and its keys; retired ones dimmed |
+| `/memory` | The Compendium of this path; your notes are under `Notes`, each with its handle (`C1`, `C2`, …), the start of its text and its keys. `/memory list note --retired` adds the retired ones, dimmed |
 | `/memory show <ref>` | One note: its keys, when it was written and last changed, and the exact text the narrator gets |
 | `/memory add <title> \| <keys> \| <text>` | A new note. Keys are separated by commas and may be left empty |
 | `/memory edit <ref> <title> \| <keys> \| <text>` | Change a note. An empty part keeps the old value: `/memory edit C1 \| \| new text` changes only the text. The note keeps its handle and its `note:…` key when its title changes; a note without keys then fires on the new title |
+| `/memory edit <ref>` | The note's text in your editor ([details](#editing-messages-and-choosing-an-editor)) |
 | `/memory retire <ref> [reason]` | The note stops firing and leaves the search. It stays in the journal |
 | `/memory restore <ref>` | A retired note comes back |
 
@@ -963,9 +980,392 @@ spaces goes in quotes for `edit` and `retire`: `/memory retire "Old lighthouse" 
 
 The narrator sees the same handles: in a lookup line such as `⋯ read_lore ids=C3`, `C3` is the note
 that `/memory show C3` prints. Lorebook entries are numbered `L1`, `L2`, … for one answer only, in
-the order the narrator's searches found them; the next answer numbers them again. The
-rest of `/memory` (`tree`, `recall`, `export`, …) comes with the Compendium in M5, which will also
-write notes of its own.
+the order the narrator's searches found them; the next answer numbers them again. A typed entry of
+a library book is not one of those: it has its `C<n>`, as `/memory` prints it.
+
+One numbering covers the whole Compendium: the books' typed entries first, then the session's
+entries in the order they were written. So adding a book with typed entries moves the notes'
+handles up by that many, and removing it moves them back (`/lore add` and `/lore rm` say so).
+
+## The Compendium
+
+The Compendium is the story's book of its world: who is who, where things are, what happened. Each
+entry has a type and fields. A character has a role, a state, relationships and memories; a place
+has a parent place and dangers; and so on. There are 11 types: `character`, `location`, `item`,
+`power`, `organization`, `event`, `plot`, `threat`, `worldbuilding`, `summary` and `creature`.
+
+The design is Chi's (Coneja-Chibi). She built the Compendium for RoleCall and Bunraku, and rp-core
+ports it; [`PROVENANCE.md`](PROVENANCE.md) lists what was taken and what changed, and
+[`docs/COMPENDIUM-DEVIATIONS.md`](docs/COMPENDIUM-DEVIATIONS.md) lists every place where it differs
+on purpose, for her review.
+
+M5a is the data and the manual part. Entries come from:
+
+- **library books:** a RoleCall Compendium export, added to the session like any lorebook;
+- **you:** `/memory new` writes an entry in your editor, `/memory edit` changes one;
+- **your notes** (`/memory add`, see [Notes](#notes)): Compendium entries without a type.
+
+The agents that write entries by themselves come later ([Not in M5a yet](#not-in-m5a-yet)).
+
+**Notes and typed entries.** `/memory` lists both, with one numbering, but they reach the narrator
+differently. A note is lore: it fires by its keys, 4 messages from the end.
+A typed entry never goes through the lorebook engine: it reaches the narrator only through the
+Compendium's own block (below), when the story names it. This holds for a book's typed entries too,
+while the Compendium reads the book. A book's plain entries stay ordinary lore.
+
+### Importing a RoleCall Compendium
+
+RoleCall exports a Compendium as one JSON file (`compendium-v1.0.0`). It imports like any lorebook:
+
+```bash
+rp-core import lantern.compendium.json
+```
+
+```
+lantern
+rp-core: warning: RoleCall's stored tree and node constraints are dropped: rp-core derives the tree from the entries (tree)
+rp-core: imported lorebook "Lantern" as <home>/library/lorebooks/lantern.json
+rp-core: hint: /lore add lantern in the chat, or rp-core new --lore lantern
+```
+
+Then add it to a session: `--lore lantern` at `new`, or `/lore add lantern` in the chat. Both also
+take the file itself and import it on the way.
+
+- **The name.** The book is named by the name inside the file: "Lantern" becomes `lantern`. `--as
+  <name>` picks another.
+- **Typed entries** keep their type, their fields and their aliases. A typed entry with no filled
+  field stays plain lore.
+- **The rest.** RoleCall's plain entries become ordinary lorebook entries, with their keys,
+  positions and settings; the warnings name the settings rp-core does not honour. `[Arc]` overviews
+  stay plain lore in M5a (a constant one fires every turn); M5b moves them into a recap.
+- **The tree.** RoleCall's stored tree is dropped: rp-core builds the tree from the entries
+  (`/memory tree`).
+- **The book file never changes.** When you edit one of its entries, the change is kept in the
+  session as an *overlay* over the book. One book can serve several stories.
+
+### What the narrator gets
+
+Before each answer a selector picks the entries the story names. It calls no model. In this order:
+
+1. **`mention`:** entries your message names;
+2. **`window`:** entries named in the 4 messages before it;
+3. **`constant`:** a book's entries marked constant.
+
+- **Names.** An entry is named by its name, by an alias, or, for a book's entry, by one of its
+  lorebook keys (not a `/regex/` one). Words match by their roots, ignoring case. A name matches
+  when every significant word of it is in one message, in any order: «Это фонарь вашего мужа,
+  Гордея?» names «Фонарь Гордея», and «Мире» names «Мира». These must appear in order instead: a
+  book's keys (with their secondary keys, as in the lorebook), the titles of events, plots and
+  summaries, and names with a one- or two-letter word or a word like «the» («Блок А», «The Lantern
+  Guild»).
+- **Last in their group:** entries about the card's character or your persona, whose names come up
+  in almost every message.
+- **Never picked:** notes (they are lore), arcs and retired entries.
+
+The picks go into one block at depth 1, just above your message: after any lore or author's note at
+that depth, before the Director's directive. `/preview` shows it as `compendium:block`. From a live
+run on Mag-Mell 12B (window 16 384), the block sent with «Это фонарь вашего мужа, Гордея? Он висит у
+двери.»:
+
+```
+[Retrieved World Knowledge]
+[Lore: Фонарь Гордея]
+# Фонарь Гордея
+Медный фонарь со слюдяными оконцами, с которым покойный Гордей ходил на перевоз.
+Type: mundane
+Current owner: Марфа
+Condition: good
+(more: read_lore C8)
+
+[Lore: Глеб]
+# Глеб
+Охотник из Соснового бора: угрюмый бородач в волчьей шапке, говорит мало, лес…
+Role: ally
+State: греется у печи после ночи в лесу, at Сонный гусь
+Relationships: Сыч (enemy); Марфа (ally)
+(more: read_lore C1)
+…
+```
+
+The card says nothing about a lantern; the answer took its facts from the entry. Марфа looks at
+«медный фонарь» and says «Он брал его с собой на перевоз».
+
+How much of each entry goes in depends on the profile:
+
+| Profile | Used by `auto` | Entries | Each entry | The block |
+|---|---|---|---|---|
+| `full` | on a window of 24 576 tokens or more | up to 12 | whole, up to 4 000 characters; a longer one as a brief of up to 1 200 | what the lore budget leaves |
+| `lite` | below 24 576 | up to 6 | always a brief, up to 700 characters | what the lore budget leaves, at most 1 600 tokens |
+
+- **The window** is the narrator's. `profile` under `[compendium]` can fix one.
+- **A brief** is the name, one line about the entry, then its main fields as `Label: value` lines: a
+  character's role, state, closest relationships and last memories; a place's type, parent and
+  dangers; an item's owner and condition; and so on.
+- **`(more: read_lore C8)`** ends a brief that left something out, when the narrator has the lore
+  tools for this answer. `read_lore C8` returns the whole entry. `search_lore` finds Compendium
+  entries too, and the lore tools are offered when an entry was not sent.
+- **The budget.** The block shares the lore budget with the lorebooks. When there is something to
+  send, the lorebooks may use 60 % of it, and the block gets what they leave (`min_share = 0.4`). An
+  entry that does not fit is cut, and the next one is tried. With nothing picked, the request is the
+  same as without the Compendium.
+- **Never held back:** your entries and the books'. The rule that holds back facts the prompt's
+  messages still show applies to what the M5b agents will file from them.
+
+`/trace` gives the block one line. From the same answer:
+
+```
+  compendium: lite · picked 3: C8 "Фонарь Гордея" (mention), C1 "Глеб" (window), C2 "Сыч" (window) · injected 3: C8 "Фонарь Гордея" brief 72 tok, C1 "Глеб" brief 96 tok, C2 "Сыч" brief 70 tok · block 244 tok
+```
+
+The profile; each pick and why; what went in, as `brief` or `full`, and its cost; then, when they
+happen, `cut by the budget`, `over the entry limit (lite: 6)` and `hidden by freshness`. The counts
+are budget tokens ([Testing the lore](#testing-the-lore)), so `/preview` shows the same block a
+little smaller.
+
+**Known limits of matching by roots.** A short one-word name can match a common word: «Мира» also
+matches «мир» (world). A vowel that drops out misses: «Уголёк» and «Уголька» have different roots.
+The words of a name split over two messages do not count. In a long message the words of a name
+can match even when they belong to different sentences, and a hyphenated name («Жан-Поль») matches
+in any order too.
+
+### The Director's [COMPENDIUM CONTEXT]
+
+With [the Director](#the-story-director) on, its prompt also gets a short snapshot of the world from
+the Compendium: the characters, their relationships, the tensions between them, and the key places.
+First come the characters named in the last 6 messages, the card's character and your persona; then
+those they have relationships with; then featured entries; then the rest. Lite fits it into 1 500
+characters (6 characters, 3 tensions, 2 places), full into 4 000 (15, 5, 5); long fields are cut.
+From the same live run, the Director's request for that answer (kept with `--keep-requests`):
+
+```
+[COMPENDIUM CONTEXT]
+Characters:
+  - Глеб: Охотник из Соснового бора: угрюмый бородач в волчьей шапке, говорит мало, лес знает как свою избу. (ally). греется у печи после ночи в лесу. At: Сонный гусь
+    Relationships: Марфа (ally), Сыч (enemy)
+  - Сыч: Атаман лихих людей со старой гати за Сосновым бором. (antagonist). At: старая гать за Сосновым бором
+    Relationships: Глеб (enemy)
+  - Савелий Рогов: Купец из Лисьего Брода, крепкий и обстоятельный; каждую осень ведёт на север обоз с солью, сукном и железом. (neutral). Status: missing. обоз из шести подвод запаздывает пятый день
+    Relationships: Марфа (ally)
+
+Unresolved Tensions:
+  Tension: Глеб / Сыч: enemy relationship (active): не раз уводил возы в обход старой гати
+
+Key Locations:
+  - Горелая балка: Овраг на тракте к Лисьему Броду; через него — старый мост на сваях.
+  - Велеград: Большой торговый город на севере, куда ведёт Старый тракт; осенью там шумит ярмарка.
+```
+
+Only characters and places go in. Building it calls no model.
+
+### The /memory commands
+
+| Command | What it does |
+|---|---|
+| `/memory`, `/memory list [type\|note\|arc] [--retired]` | The Compendium of this path, grouped as in the tree: per entry its handle, name, aliases, a line about it, its book and its size. Give a type (or `note`, `arc`) for just those; `--retired` adds the retired ones |
+| `/memory show <ref>` | One entry: its key, aliases, where it came from (a book, an overlay, you), when it last changed, and its whole text, as `read_lore` gives it |
+| `/memory tree [book]` | The session's own tree, then one per book (or only that book's) |
+| `/memory new <type> [name]` | A new entry, written in your editor ([below](#writing-entries-in-the-editor)) |
+| `/memory edit <ref>` | Change an entry in your editor. A book's entry gets an overlay; the book file stays as it is |
+| `/memory retire <ref> [reason]` | The entry leaves the story: no block, no lore tools. It stays in the journal. A name of several words needs no quotes: the longest run of first words that names an entry is the ref, the rest the reason |
+| `/memory restore <ref>` | A retired entry comes back |
+| `/memory export <name> [--format core\|compendium] [--force]` | Copy this session's entries out ([below](#exporting)) |
+| `/memory on`, `/memory off` | Send the Compendium from the next answer, or stop. The entries are kept either way |
+| `/memory add <title> \| <keys> \| <text>` | A note ([Notes](#notes)) |
+
+`<ref>` is the entry's handle (`C16`), its key (`character:мира`), or a name or alias only one entry
+has. For example:
+
+```
+/memory list character
+/memory show Мира
+/memory new character Мира
+/memory edit Ульяна
+/memory retire C2 уехала из города
+/memory export lantern2 --format compendium
+```
+
+`/memory list` right after adding the book `lantern` (from the demo):
+
+```
+you        › /memory list
+The Compendium of this path: 15 live · /memory show <ref> prints one
+Cast (3)
+  C1  Арсений Кеттер (aka Старшина, Арсений) — Старшина Гильдии фонарщиков, сорок лет зажигает огни Вельмара. [lib: lantern] [featured] [1.6k]
+  C2  Селина Бранд — Хочет, чтобы свет принадлежал городу. [lib: lantern] [406]
+  C3  Ульяна (aka Смотрительница) — Смотрительница Серого маяка, тридцать зим не пропустившая ни одной ночи. [lib: lantern] [338]
+Places (3)
+  C4  Вельмар — Портовый город на Сером мысу; ночью его улицы держат только фонари. [lib: lantern] [256]
+…
+```
+
+`[lib: lantern]` marks a book's entry, `[lib: lantern, edited]` one with an overlay. The last number
+is the size of its fields in characters (of a note or an arc: of its text).
+
+```
+you        › /memory tree
+World Knowledge (this session) · 0
+Lantern (lib: lantern) · 15
+  Cast · 3
+    Гильдия фонарщиков · 1: C1 Арсений Кеттер
+    Соляной суд · 1: C2 Селина Бранд
+    Unaffiliated · 1: C3 Ульяна
+  Places · 3
+    C4 Вельмар · 3
+      C5 Фонарный ряд
+      C6 Серый маяк
+  Items · 1: C7 Латунный фонарь
+…
+```
+
+The tree is built from the entries, as in RoleCall: Cast, Places, Items, Powers, Organizations,
+Events, Plots, Threats, Worldbuilding, Narrative and Bestiary; characters grouped by their
+affiliation, places under their parent place, events by their plot. A tree of fewer than 5 entries,
+or of more notes than typed entries, is grouped by category instead (one `General` group when there
+are none).
+
+- **Saved in the session.** Every change is one line in the journal, and shows from the next turn.
+  A change is refused while an answer is being written.
+- **On every branch.** Your entries and edits belong to no message: a swipe or a rewind keeps them,
+  and a fork copies them with the same keys.
+
+### Writing entries in the editor
+
+`/memory new character Мира` opens your editor (`$VISUAL` or `$EDITOR`, else editing in place; the
+TUI uses its input box) on a template:
+
+```json
+{
+  "//": "fill what you know; blank fields are ignored. role: protagonist|antagonist|ally|rival|neutral|background|deity|player_character; current_state.status: alive|dead|missing|transformed|imprisoned|unknown; relationships[].nature: ally|enemy|romantic|family|mentor|rival|unknown; relationships[].status: active|past|strained|unknown; memories[].emotional_weight: trivial|notable|formative|defining",
+  "name": "Мира",
+  "aliases": [],
+  "description": "",
+  "role": "",
+  "current_state": {},
+  "relationships": [],
+  "memories": []
+}
+```
+
+- **Fill what you know** and save. Blank fields are ignored. The `"//"` line lists the values a
+  field may take; it is not saved. A summary's template has `title`, `summary`, `significance` and
+  `participants`.
+- **A mistake** (broken JSON, a missing name, a refusal) prints one red line, and the editor opens
+  again on your text. In a piped script without a named editor nothing is written instead; there
+  the in-place editor gets one line, so write the JSON on one line.
+- **Nothing is written** when you quit without saving, or save it empty or unchanged.
+- **A name already taken** by an entry of the same type, a book's included, is refused before the
+  editor opens: `/memory new: "Мира" is already C16; use /memory edit C16`.
+- **The confirmation** names the entry: `character C16 "Мира" filed (from the next turn)`.
+
+`/memory edit <ref>` opens the entry's fields the same way. On save, what you changed or removed
+becomes one edit; if nothing changed, nothing is written. The entry keeps its handle and its key.
+Changing its name (`name`; a summary's `title`, a worldbuilding entry's `topic`) renames it: the old
+name stays as a former name (`/memory show` lists it), and a name another entry of that type has is
+refused. An arc opens as its `overview`, a note as its text.
+
+A book's entry gets an overlay (from the demo):
+
+```
+you        › /memory edit Ульяна
+character C3 "Ульяна" changed: set current_state (from the next turn; the book file stays as it is)
+you        › /memory show Ульяна
+C3 Ульяна · character · lib:lantern:00000000-0000-4000-8000-000000000e03
+  aka: Смотрительница
+  origin: the library book lantern, entry 00000000-0000-4000-8000-000000000e03; changed in this session (an overlay: the book file stays as it is)
+  last changed at journal row 10
+  keys: Ульяна
+…
+```
+
+- **The book changes later:** the overlay applies over the new version of the entry.
+- **The entry leaves the book, or the book leaves the session:** the overlay stays in the journal
+  but is not applied, and the notice `library_entry_missing` says so once. It applies again when the
+  book comes back (`/lore add`).
+- **A very large entry** (12 000 characters of fields or more) gets the notice
+  `compendium_large_entry` once. It still works; the block sends a brief of it.
+
+### Exporting
+
+`/memory export <name>` copies out what this session added to the world: its own entries and its
+overlays (as whole entries), retired ones included and switched off. A book's untouched entries are
+not copied: they are in the library already.
+
+- **`--format core`** (the default): a library lorebook `<name>`; another session adds it with
+  `/lore add <name>`. A library book of that name is refused unless `--force` replaces it; a book
+  this session reads is never replaced.
+- **`--format compendium`:** a RoleCall file, `<home>/exports/<name>.compendium.json`
+  (`compendium-v1.0.0`), for RoleCall or for `rp-core import`. An existing file is refused unless
+  `--force`. RoleCall keeps one featured entry per type, so a warning names the entries that lose the
+  flag. More than 5 000 entries or 10 MB is refused: RoleCall would not import it.
+
+```
+you        › /memory export lantern2 --format compendium
+exported 2 entries as a RoleCall Compendium file (compendium-v1.0.0): <home>/exports/lantern2.compendium.json
+```
+
+Imported again, that file gives the same types, names, aliases and fields.
+
+### Turning it on and off
+
+- **New sessions** have the Compendium on. Sessions made before M5a have it off: `/memory on` turns
+  it on, and `/memory` says when it is off.
+- **`/memory off`** keeps every entry and stops the block and the Director's snapshot. A book's
+  typed entries are then sent as plain lore again, with their text from the file. Notes are sent
+  either way. While it is off, `/memory new` refuses a name that a book's entry of that type has:
+  turn the Compendium on and edit that entry instead.
+- **One book as a plain lorebook:** set it `"off"` under `[compendium.books]` (new sessions).
+
+### The [compendium] keys
+
+`[compendium]` in `config.toml` sets new sessions only: a session keeps the values it was created
+with, as with `[director]`. M5a reads these:
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `true` | Use the Compendium; `/memory on` and `/memory off` switch a session |
+| `profile` | `"auto"` | `auto`, `full` or `lite` ([above](#what-the-narrator-gets)) |
+| `min_share` | `0.4` | The part of the lore budget kept for the block when it has something to send, 0–1 |
+| `[compendium.books]` | every book `"read"` | `<library id> = "read"` or `"off"`; an `"off"` book is a plain lorebook |
+
+```toml
+[compendium]
+profile = "lite"
+
+[compendium.books]
+harbor = "off"
+```
+
+The other keys (`language`, `guidance`, `max_attempts`, `idle_delay_sec`, and the tables
+`[compendium.recall]`, `[compendium.filing]` and `[compendium.historian]`) are checked, so a typo is
+still an error, but nothing uses them yet: they are for the agents (M5b) and recall (M5c).
+
+### Keeping the requests
+
+`--keep-requests` on `rp-core chat`, `tui` or `new` writes every model request of each turn to a
+file:
+
+```
+<home>/sessions/<session>.requests/<call key>.json
+```
+
+In the live run, one answer with the Director on left `t_89099cd6_director_0.json` and
+`t_89099cd6_narrator_0.json`; its swipe reused the plan and left only a narrator file. A call key
+that comes again (a retry, a fallback) gets `-2`, `-3`. The file is the engine's request (messages,
+tools, samplers), not the HTTP body (`/preview --wire` shows that), and never holds headers or keys.
+It holds your story, so keep it where you keep sessions. Off by default; `send` and `preview` refuse
+the flag.
+
+### Not in M5a yet
+
+- **Filing (M5b):** agents that read each answer and write entries by themselves, with `/memory
+  undo`, `refile` and `retry`. Until then only you write entries.
+- **The historian (M5b):** summaries of the story as old messages leave the prompt, and arc
+  overviews in a `{{recap}}` slot. Until then `[Arc]` entries are plain lore.
+- **Recall (M5c):** a model that picks the entries before the answer, with `/memory recall`,
+  `profile` and `mode`.
+
+Those commands already answer, with the milestone they come in. The demo of this milestone, step by
+step: [`docs/M5A-DEMO.md`](docs/M5A-DEMO.md).
 
 ## The Story Director
 
@@ -982,7 +1382,9 @@ plan from the turns before, and updates that plan:
 
 The narrator gets the directive near the end of its prompt (at depth 1) and writes the answer under
 it. The plan is saved on the answer in the session's journal, so every point of the story has its
-own plan. The Director is **off by default**.
+own plan. With [the Compendium](#the-compendium) on, the Director also reads a short snapshot of the
+characters and places in the scene ([details](#the-directors-compendium-context)). The Director is
+**off by default**.
 
 ### Turning it on
 
@@ -1339,10 +1741,10 @@ the round trip.
 | Table | Holds |
 |---|---|
 | `[connections.<name>]` | One per server. Fields: `dialect` (`"openai-chat"`), `base_url`, `key_env`, `key_cmd`, `max_in_flight` (1–64), `local` (overrides the guess from the URL), `headers` (header name → *name of the env variable* holding its value), `extra_body` (fields added to every request; `model`, `messages`, `stream`, `tools`, `tool_choice` are protected), `exclude_body`. Names may hold letters, digits, `_` and `-`, never `:` |
-| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), and `recorder`/`recall` (M5; they may say `"narrator"`). A session keeps its own copy; `/model` changes it there |
+| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), and `recorder`/`recall` (M5b, M5c; they may say `"narrator"`). A session keeps its own copy; `/model` changes it there |
 | `[narrator]` | `max_rounds` (rounds of lookups per answer, 1–8, default 4; see [Rounds](#rounds)) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
 | `[director]` | The Story Director for new sessions: `enabled` (default `false`), `profile` (`"auto"`, `"full"`, `"lite"`), `on_swipe` (`"reuse"`, `"replan"`), `instructions` (up to 2 000 characters), `style` (a personality, default `"the-balanced"`), `creativity` (`"subtle"`, `"moderate"`, `"dramatic"`), `timeout_sec` (1–3600); see [The \[director\] keys](#the-director-keys) |
-| `[compendium]` | Reserved for M5 |
+| `[compendium]` | The Compendium for new sessions: `enabled` (default `true`), `profile` (`"auto"`, `"full"`, `"lite"`), `min_share` (0–1, default 0.4) and `[compendium.books]` (`<library id> = "read"` or `"off"`). The other keys and the `[compendium.recall]`, `[compendium.filing]` and `[compendium.historian]` tables are checked and kept for M5b and M5c; see [The \[compendium\] keys](#the-compendium-keys) |
 | `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, … Override only after checking (`rp-core probe` shows the current values) |
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
 
@@ -1451,15 +1853,18 @@ a temporary folder that is removed at exit.
   caps-cache.json      what `probe --write` learned (the catalog, and with --active the probe facts)
   library/characters/  imported cards in the native format
   library/presets/     imported presets
-  library/lorebooks/   imported world info and lorebooks
+  library/lorebooks/   imported world info, lorebooks and Compendium books
   sessions/<id>.jsonl  one session = one append-only journal
   sessions/<id>.lock   held while a process has the session open
+  sessions/<id>.requests/  with --keep-requests: every model request of each turn
+  exports/             RoleCall files written by /memory export --format compendium
   logs/tui.log         what the full-screen TUI said and logged
 ```
 
 A session file is plain JSONL that only ever grows. Everything in it stays recoverable: every swipe,
 edit and hidden message is still there. Back it up by copying the file. With the Director on, each
-answer's line also holds the Director's plan at that point (its state is at most 32 768 bytes).
+answer's line also holds the Director's plan at that point (its state is at most 32 768 bytes). Your
+notes, Compendium entries and edits of book entries are lines of the same journal.
 
 ### Compacting a session
 
@@ -1504,6 +1909,9 @@ That is a copy of the M4 live session (6 answers with the Director on). A second
 | `⋯ director: failed (undecodable)` | The Director's plan was cut off at its reply limit or its JSON was broken, also after the correction. The answer still came, without a directive | One now and then is harmless: the next turn plans again. On every turn the model does not manage the plan's format: give the Director a larger model (`/model director <conn:model>`), or `/director off` |
 | `⋯ director: failed (no_room)` and notice `director_no_room` | The Director's window cannot hold its shortened prompt and 600 tokens for a plan; nothing was sent | Give its model a bigger window and set `context_length` ([Small windows](#small-windows)); 4 096 is too small |
 | `⋯ director: failed (timeout)` | The Director did not answer within `timeout_sec` (default 660 s on a local server, 180 s on a remote one) | Raise `timeout_sec` under `[director]` for new sessions; check that the model is not loading or spilling to the CPU (`ollama ps`) |
+| `the Compendium is off for this session` | The session was made before M5a, or `/memory off` was used. Entries are kept but not sent | `/memory on` |
+| A Compendium entry the message names is not in the block | Every significant word of its name must be in one message, matched by its roots; the block also has an entry limit and a budget | `/trace` names each pick and each cut; add an alias the story uses (`/memory edit`) |
+| notice `library_entry_missing` | You changed a book's entry in this session, and the entry or its book is gone | Add the book back (`/lore add <id>`): the change applies again |
 | `rp-core tui needs a terminal; use rp-core chat` (exit 64) | `tui` or `new --tui` was run with stdin or stdout not a terminal (a pipe or a script) | Run it in a terminal window, or use `rp-core chat` |
 | TUI: white text on a white background, or text missing on a light theme | An early build of the TUI drew text in OpenTUI's bright white | Update rp-core. The TUI now takes every colour from the terminal's theme ([Colours](#colours)) |
 | TUI: text cannot be selected, or a selection does not reach the clipboard | The mouse is on (the default), so a plain drag is the TUI's own selection, copied with OSC 52; some terminals (GNOME Terminal, other VTE ones) ignore OSC 52, and there the status row says so | Hold Shift while you drag for the terminal's own selection, or press F3 to turn the mouse off ([details](#mouse-selecting-and-copying)) |
@@ -1519,10 +1927,10 @@ redacted.
 | Command | What it does |
 |---|---|
 | `init [--json]` | Writes the starter `config.toml` unless one exists; prints its path |
-| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--tui \| --no-chat] [--json] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal (`--tui`: the full-screen TUI), else prints the id (`--json`: `{sessionId, title, greetings}`) |
-| `chat <session> [--provider …]` | The chat on a session (lock and crash recovery first) |
-| `tui <session> [--provider …]` | The same chat full-screen: models, chat and agents side by side ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
-| `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info or a character_book into the library; prints its id |
+| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--tui \| --no-chat] [--json] [--keep-requests] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal (`--tui`: the full-screen TUI), else prints the id (`--json`: `{sessionId, title, greetings}`) |
+| `chat <session> [--keep-requests] [--provider …]` | The chat on a session (lock and crash recovery first) |
+| `tui <session> [--keep-requests] [--provider …]` | The same chat full-screen: models, chat and agents side by side ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
+| `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info, a character_book or a RoleCall Compendium export into the library; prints its id |
 | `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
 | `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |
 | `probe [conn[:model]] [--active] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only) and the caps a model gets; `--active` also tries one model with a few tiny calls ([details](#active-probes)); `--write` stores what was learned |
@@ -1533,6 +1941,9 @@ redacted.
 
 **`--provider`** takes `script:<file>` (a scripted fake model), `record:<file>` or `replay:<file>`
 ([details](#recording-and-replaying-a-chat)).
+
+**`--keep-requests`** writes every model request of each turn to
+`<home>/sessions/<session>.requests/` ([details](#keeping-the-requests)).
 
 **Global flags** may go anywhere on the line: `--home <dir>`, `--sandbox`, `--debug`, `--help`
 (also `rp-core help <command>`) and `--version`.
@@ -1561,9 +1972,10 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite: 4544 tests in 215 files (4541 pass), about two and a half minutes; the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
+| `bun test` | The full suite: 5044 tests in 250 files (5041 pass), a little over two minutes; the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
 | `bun test test/tui` | The full-screen TUI (268 tests in 15 files, about 11 seconds) on a headless OpenTUI renderer with a scripted model: the layout at several widths, typing and streaming, Ctrl+C, every slash command, hotkeys (also on a Russian layout), the mouse and copying, colours, signals and the lock. The frame-time checks run only with `RP_CORE_PERF=1` |
 | `bun test test/demo-m4` | The M4 demos on a scripted model (5 tests, a few seconds): 30 turns with chapters, arcs, seeds and hidden arcs; swipe reuse, `/regen` and rollback; a broken plan on a small window; 300 verbose Russian turns under the state cap. They print what they did ([`docs/M4-DEMO.md`](docs/M4-DEMO.md)) |
+| `bun test test/demo-m5a` | The M5a demo on a scripted model (9 tests, about a second): the real CLI imports a RoleCall Compendium, writes an entry in an editor, sends its brief in the block, edits a book entry as an overlay, swipes, rewinds and forks, exports and imports again, and keeps the Director's request with `[COMPENDIUM CONTEXT]`. It prints the transcript ([`docs/M5A-DEMO.md`](docs/M5A-DEMO.md)) |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
@@ -1585,18 +1997,19 @@ run).
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
 | `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
-| `src/formats` | Cards, presets, world info, library |
+| `src/formats` | Cards, presets, world info, RoleCall Compendium files, library |
 | `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
 | `src/tools` | The narrator's tools, their arguments, prompted calls and leak recovery |
 | `src/text` | Word folding and light stemming for search and note keys |
-| `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and your notes (the Compendium arrives in M5) |
+| `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and the Compendium (`agents/compendium`: the fold of its journal lines, merge, render, tree, the selector and the block, the Director's world snapshot, export) |
 | `src/config` | Config and keys |
 | `src/cli` | Commands and the chat; the full-screen TUI in `src/cli/tui` |
 
-The design and its decisions (D-1…D-139; the M4 ones are D-98…D-124, the TUI's D-125…D-139) are in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md), [`docs/M1B-DEMO.md`](docs/M1B-DEMO.md),
-[`docs/M2-DEMO.md`](docs/M2-DEMO.md), [`docs/M3-DEMO.md`](docs/M3-DEMO.md) and
-[`docs/M4-DEMO.md`](docs/M4-DEMO.md). How rp-core differs
+The design and its decisions (D-1…D-169; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
+D-140…D-169) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The milestone demos with
+transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md), [`docs/M1B-DEMO.md`](docs/M1B-DEMO.md),
+[`docs/M2-DEMO.md`](docs/M2-DEMO.md), [`docs/M3-DEMO.md`](docs/M3-DEMO.md),
+[`docs/M4-DEMO.md`](docs/M4-DEMO.md) and [`docs/M5A-DEMO.md`](docs/M5A-DEMO.md). How rp-core differs
 from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](docs/PARITY-RC.md) and
 [`test/golden/st/README.md`](test/golden/st/README.md).
 

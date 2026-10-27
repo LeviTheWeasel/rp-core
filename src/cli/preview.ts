@@ -17,7 +17,7 @@ import { readSessionFile } from '../session/log.ts';
 import type { Io } from './io.ts';
 import { EXIT, reportRefusal } from './oneshot.ts';
 import { entryTitles } from './refs.ts';
-import { NOTES_BOOK_KEY, noteRefs } from '../agents/compendium/notes.ts';
+import { NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
 import { entryLabel } from '../lore/engine.ts';
 import { describeEvent } from './render.ts';
 import { configOf, journalOf, resolveMessageId } from './repl-journal.ts';
@@ -105,8 +105,8 @@ export async function cmdPreview(a: PreviewArgs): Promise<number> {
     const header = session.header();
     const { entries } = readSessionFile(a.home, session.id);
     const titles = entryTitles(a.home, header.cast, configOf(journalOf(header, entries)).lorebooks);
-    // M3: a note that fired is named by its title too.
-    for (const { entry } of noteRefs(session.view().compendium)) titles.set(entryLabel(NOTES_BOOK_KEY, entry.key), entry.name);
+    // M3: a note that fired is named by its title too (M5a: the engine's own view, its library seed included).
+    for (const r of session.memoryList({ type: 'note', includeRetired: true })) titles.set(entryLabel(NOTES_BOOK_KEY, r.key), r.name);
     const verdicts = (ok: Extract<PreviewResult, { ok: true }>): string =>
       `lore verdicts:\n${renderVerdicts(ok.verdicts ?? [], ok.trace.lore, style, titles, Infinity, ok.loreUse)}`;
     if (a.wire) {

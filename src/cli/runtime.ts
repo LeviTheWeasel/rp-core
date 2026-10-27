@@ -35,6 +35,11 @@ export interface Runtime {
    * Without --debug the server's own words are never printed (§13).
    */
   debug?: (line: string) => void;
+  /**
+   * --keep-requests (D-164; chat, tui, new): every provider request of a turn is kept as JSON under
+   * <home>/sessions/<id>.requests/ (EngineOptions.keepRequests).
+   */
+  keepRequests?: boolean;
 }
 
 /** Text with every secret this runtime knows (keys resolved so far, header values) replaced. */
@@ -83,11 +88,12 @@ export function connectionsWith(rt: Runtime, capsCache: Record<string, CapsCache
   return buildConnections(rt.config, { env: rt.env, secrets: rt.secrets, capsCache }).connections;
 }
 
-/** The engine options of a runtime: connections, prices, the override, and the --debug tap. */
+/** The engine options of a runtime: connections, prices, the override, the --debug tap and --keep-requests. */
 export function engineOptions(rt: Runtime): EngineOptions {
   const o: EngineOptions = { home: rt.home, connections: rt.connections };
   if (Object.keys(rt.config.prices).length > 0) o.prices = rt.config.prices;
   if (rt.provider) o.providerOverride = rt.provider;
+  if (rt.keepRequests === true) o.keepRequests = true;
   if (rt.debug) {
     const redact = redactor(rt);
     // rt.debug is read when a failure happens (the REPL swaps it while it runs).

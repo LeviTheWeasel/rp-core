@@ -60,14 +60,15 @@ describe('/memory', () => {
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    expect(out).toContain('no notes on this path yet: /memory add <title> | <keys> | <text> writes one');
+    expect(out).toContain('nothing in the Compendium on this path yet: /memory new <type> [name] files an entry, /memory add <title> | <keys> | <text> writes a note');
     expect(out).toContain('note C1 "Brother" added (note:brother): from the next turn it is sent when Yan or brother comes up');
     expect(out).toContain('note C2 "Lamp" added (note:lamp): from the next turn it is sent when Lamp comes up');
     expect(out).toContain(
       [
-        'notes on this path: 2 live (/memory show <ref> prints one)',
-        "  C1  Brother — Mira's brother Yan sails the north road. · keys: Yan, brother",
-        '  C2  Lamp — The lamp in the window never goes out. · keys: Lamp',
+        'The Compendium of this path: 2 live · /memory show <ref> prints one',
+        'Notes (2)',
+        "  C1 Brother — Mira's brother Yan sails the north road. · keys: Yan, brother [40]",
+        '  C2 Lamp — The lamp in the window never goes out. · keys: Lamp [38]',
       ].join('\n'),
     );
     expect(out).toMatch(/C1 Brother · note:brother\n {2}keys: Yan, brother\n {2}written by you at journal row \d+\n {2}sent when one of its keys comes up in the last 4 messages, as:\n {4}\[Memory: Brother\]\n {4}Mira's brother Yan sails the north road\./);
@@ -77,8 +78,8 @@ describe('/memory', () => {
     expect(out).toMatch(/C1 Big brother · note:brother\n {2}keys: Yan, brother\n {2}written by you at journal row \d+; last changed at row \d+/);
     expect(out).toContain('    [Memory: Big brother]\n    He came back in spring.');
     expect(out).toContain('note C2 "Lamp" retired: it no longer fires (/memory restore C2 brings it back)');
-    expect(out).toContain('notes on this path: 1 live, 1 retired (/memory show <ref> prints one)');
-    expect(out).toContain('  C2  Lamp — The lamp in the window never goes out. · keys: Lamp · retired (it went out at last)');
+    // M5a: a retired entry is counted, and listed with --retired.
+    expect(out).toContain('The Compendium of this path: 1 live, 1 retired (/memory list --retired shows them) · /memory show <ref> prints one');
     expect(out).toContain('note C2 "Lamp" restored: it fires again from the next turn');
     expect(out).toMatch(/C2 Lamp · note:lamp\n {2}keys: Lamp\n {2}written by you at journal row \d+; last changed at row \d+\n {2}sent when/);
 
@@ -109,7 +110,7 @@ describe('/memory', () => {
     r.type(
       '/memory add Brother | | Yan.',
       '/memory show C9',
-      '/memory edit C9 New',
+      '/memory edit C9 New |',
       '/memory restore C1',
       '/memory retire C1',
       '/memory retire C1',
@@ -120,11 +121,12 @@ describe('/memory', () => {
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    expect(out).toContain('/memory show: no single note matches "C9" (use its C<n> as /memory lists it, or its key)\n');
-    expect(out).toContain('/memory edit: no single note matches "C9" (use its C<n> handle or key)\n');
-    expect(out).toContain('/memory restore: the note "Brother" is not retired\n');
+    // M5a: every entry is looked up the same way (the engine's words).
+    expect(out).toContain('/memory show: no single entry matches "C9" (use its C<n> handle or key)\n');
+    expect(out).toContain('/memory edit: no single entry matches "C9" (use its C<n> handle or key)\n');
+    expect(out).toContain('/memory restore: "Brother" is not retired; nothing changed\n');
     expect(out).toContain('note C1 "Brother" retired');
-    expect(out).toContain('/memory retire: the note "Brother" is already retired\n');
+    expect(out).toContain('/memory retire: "Brother" is already retired\n');
     expect(out).toContain('/memory add: a note title needs at least one letter or digit\n');
     // A retired note can still be edited by its handle.
     expect(out).toContain('note C1 "Brother" changed: text (from the next turn)');
@@ -141,7 +143,7 @@ describe('/memory', () => {
     await r.until('(runs when this answer ends)');
     expect(r.out()).toContain('refused [session_busy]: /memory changes the story while an answer is being written');
     r.provider.release('p');
-    await r.until('no notes on this path yet');
+    await r.until('nothing in the Compendium on this path yet');
     r.type('/quit');
     expect(await r.done).toBe(0);
     expect(memRows(r)).toEqual([]);

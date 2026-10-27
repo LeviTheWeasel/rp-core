@@ -72,7 +72,10 @@
 //   is said only when a recursion loop ran and its text would have woken the entry.
 // - Book `match: 'stem'` (the notes book, any book that asks) matches non-regex keys by word stems
 //   (lore/keys.ts, text/normalize.ts); the entry's caseSensitive and wholeWords do not apply there.
-// - Entries with meta.type are ordinary entries in M2 (M5a hands them to Compendium, D-76).
+// - Entries with meta.type are ordinary entries here. From M5a the engine takes the Compendium
+//   entries of readable library books out of the sources before a run (agents/compendium/library.ts
+//   routeBooks, D-76/D-142): they reach the prompt through the Compendium block. A plain engine call,
+//   an 'off' book and a disabled Compendium keep them as lore.
 
 import { NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
 import type { LoreBook, LoreEntry } from '../formats/native.ts';

@@ -1,0 +1,642 @@
+{
+  "schemaVersion": "compendium-v1.0.0",
+  "format": "rolecall-compendium",
+  "exportDate": "2026-10-20T09:00:00.000Z",
+  "lorebook": {
+    "id": "00000000-0000-4000-8000-000000000b01",
+    "name": "Lantern",
+    "description": "Портовый город Вельмар, где ночь держат только фонари.",
+    "creator_id": "00000000-0000-4000-8000-000000000a01",
+    "status": "draft",
+    "created_at": "2026-10-12T18:00:00.000Z",
+    "updated_at": "2026-10-19T21:00:00.000Z",
+    "global_case_sensitive": null,
+    "global_match_whole_words": null,
+    "global_scan_depth": null,
+    "global_recursion": null,
+    "token_budget": null,
+    "genre": "фэнтези",
+    "fandom": null,
+    "tags": ["фонари", "порт"],
+    "lorebook_type": "world",
+    "forked_from_id": null,
+    "original_creator_id": null,
+    "provenance": null
+  },
+  "entries": [
+    {
+      "id": "00000000-0000-4000-8000-000000000e01",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Арсений Кеттер",
+      "content": "# Арсений Кеттер\n\nСтаршина Гильдии фонарщиков, сорок лет зажигает огни Вельмара.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [{ "keyword": "Арсений Кеттер", "isRegex": false }],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 0,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "use_memo": false,
+      "allow_recursion": false,
+      "exclude_recursion": false,
+      "prevent_recursion": false,
+      "delay_until_recursion": 0,
+      "boost_ids": [],
+      "boost_amount": 0,
+      "character_filter": null,
+      "scan_character_description": false,
+      "scan_character_personality": false,
+      "scan_user_persona": false,
+      "scan_scenario": false,
+      "scan_preset": false,
+      "ignore_budget": false,
+      "side_effects": null,
+      "token_count": null,
+      "origin": "created",
+      "origin_source_id": null,
+      "created_at": "2026-10-12T18:03:11.000Z",
+      "updated_at": "2026-10-19T20:41:05.000Z",
+      "is_featured": true,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "character",
+        "turnNumber": 14,
+        "structured_data": {
+          "name": "Арсений Кеттер",
+          "aliases": ["Старшина", "Арсений"],
+          "description": "Старшина Гильдии фонарщиков, сорок лет зажигает огни Вельмара. Ворчит на всех, кроме своей ученицы.",
+          "role": "ally",
+          "species": "человек",
+          "age": "за шестьдесят",
+          "pronouns": "он",
+          "physical": {
+            "summary": "Сухой, сутулый, седая борода клином.",
+            "distinguishing_features": ["ожог на левой ладони", "латунная серьга в виде фитиля"]
+          },
+          "personality": {
+            "traits": ["ворчлив", "честен", "суеверен"],
+            "goals": ["вернуть Латунный фонарь до Чёрного прилива"],
+            "fears": ["что Вельмар однажды останется без огня"],
+            "secrets": ["догадывается, кто снял фонарь с маяка"]
+          },
+          "current_state": { "status": "alive", "location": "Фонарный ряд", "condition": "не спит третью ночь" },
+          "relationships": [
+            { "with": "Мира", "nature": "mentor", "status": "active", "notes": "учит её ремеслу с двенадцати лет" },
+            { "with": "Селина Бранд", "nature": "rival", "status": "strained", "notes": "спорят о праве огня" },
+            { "with": "Ульяна", "nature": "family", "status": "past", "notes": "бывшая жена" }
+          ],
+          "affiliations": [{ "org": "Гильдия фонарщиков", "role": "старшина", "status": "active" }],
+          "memories": [
+            {
+              "what_happened": "В ночь, когда погас Серый маяк, он первым поднялся на башню и нашёл пустой крюк.",
+              "when": "три ночи назад",
+              "where": "Серый маяк",
+              "emotional_weight": "formative",
+              "emotion": "страх",
+              "changed_belief": "Свет можно украсть, а не только погасить.",
+              "changed_behavior": "Сам обходит фонари дважды за ночь.",
+              "writer_source": "postgen",
+              "source_turn": 14,
+              "source_job_id": "00000000-0000-4000-8000-000000000d14"
+            }
+          ],
+          "possessions": ["связка гильдейских ключей"],
+          "voice": { "speech_pattern": "говорит коротко, будто бережёт масло" },
+          "smell": "ламповое масло и дым"
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e02",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Селина Бранд",
+      "content": "# Селина Бранд\n\nСудья Соляного суда.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Селина Бранд", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "character",
+        "turnNumber": 6,
+        "structured_data": {
+          "name": "Селина Бранд",
+          "tagline": "Хочет, чтобы свет принадлежал городу.",
+          "description": "Судья Соляного суда. Считает, что огни Вельмара должны принадлежать городу, а не гильдии.",
+          "role": "rival",
+          "current_state": { "status": "alive", "location": "Вельмар" },
+          "relationships": [
+            { "with": "Арсений Кеттер", "nature": "rival", "status": "strained" },
+            { "with": "Мира", "nature": "unknown" }
+          ],
+          "affiliations": [{ "with": "Соляной суд" }]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e03",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Ульяна",
+      "content": "# Ульяна\n\nСмотрительница Серого маяка.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Ульяна", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "character",
+        "turnNumber": 9,
+        "structured_data": {
+          "name": "Ульяна",
+          "aliases": ["Смотрительница"],
+          "description": "Смотрительница Серого маяка, тридцать зим не пропустившая ни одной ночи.",
+          "role": "neutral",
+          "current_state": { "status": "missing", "location": "Серый маяк", "condition": "пропала в ночь, когда погас маяк" },
+          "relationships": [{ "with": "Арсений Кеттер", "nature": "family", "status": "past" }]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e04",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Вельмар",
+      "content": "# Вельмар\n\nПортовый город на Сером мысу.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Вельмар", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "location",
+        "turnNumber": 1,
+        "structured_data": {
+          "name": "Вельмар",
+          "type": "city",
+          "description": "Портовый город на Сером мысу; ночью его улицы держат только фонари.",
+          "climate": "сырой, туманный",
+          "controlling_faction": "Соляной суд",
+          "dangers": ["Чёрный прилив"],
+          "points_of_interest": [{ "name": "Соляная биржа" }]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e05",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Фонарный ряд",
+      "content": "# Фонарный ряд\n\nКвартал гильдии.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Фонарный ряд", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "location",
+        "turnNumber": 2,
+        "structured_data": {
+          "name": "Фонарный ряд",
+          "type": "district",
+          "parent_location": "Вельмар",
+          "description": "Квартал Гильдии фонарщиков: мастерские, склады масла и колокольня, по которой зажигают огни.",
+          "atmosphere": { "smell": "горячее масло", "sound": "вечерний колокол" }
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e06",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Серый маяк",
+      "content": "# Серый маяк\n\nМаяк на краю мыса.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Серый маяк", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": true,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "location",
+        "turnNumber": 9,
+        "structured_data": {
+          "name": "Серый маяк",
+          "aliases": ["маяк"],
+          "type": "building",
+          "parent_location": "Вельмар",
+          "description": "Каменная башня на краю мыса; на её крюке висел Латунный фонарь.",
+          "current_state": { "condition": "тёмный третью ночь" }
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e07",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Латунный фонарь",
+      "content": "# Латунный фонарь\n\nФонарь Серого маяка.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Латунный фонарь", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "item",
+        "turnNumber": 9,
+        "structured_data": {
+          "name": "Латунный фонарь",
+          "type": "artifact",
+          "description": "Старый фонарь с закопчённым стеклом, который не гаснет на ветру.",
+          "current_owner": "Мира",
+          "current_location": "неизвестно",
+          "condition": "lost",
+          "significance": "Пока он горит на Сером маяке, Чёрный прилив не входит в гавань.",
+          "linked_powers": ["Негасимый свет"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e08",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Негасимый свет",
+      "content": "# Негасимый свет\n\nОгонь, который не гаснет.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Негасимый свет", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "power",
+        "turnNumber": 4,
+        "structured_data": {
+          "name": "Негасимый свет",
+          "tagline": "Огонь, который не гаснет ни от воды, ни от ветра.",
+          "description": "Дар зажечь пламя, которое держится, пока зажёгший не уснёт.",
+          "category": "utility",
+          "mastery": "learning",
+          "source": "inherited",
+          "users": ["Мира"],
+          "cost": "бессонная ночь после каждого зажжения",
+          "limitations": ["только живой огонь, не искра"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e09",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Гильдия фонарщиков",
+      "content": "# Гильдия фонарщиков\n\nГильдия, что зажигает огни Вельмара.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Гильдия фонарщиков", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "organization",
+        "turnNumber": 2,
+        "structured_data": {
+          "name": "Гильдия фонарщиков",
+          "type": "guild",
+          "description": "Старейшая гильдия Вельмара: каждую ночь зажигает и бережёт уличные огни.",
+          "leader": "Арсений Кеттер",
+          "members": ["Арсений Кеттер", "Мира"],
+          "headquarters": "Фонарный ряд",
+          "goals": ["держать огни Вельмара до рассвета"],
+          "enemies": ["Соляной суд"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e10",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Погасший маяк",
+      "content": "# Погасший маяк\n\nНочь, когда маяк ослеп.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Погасший маяк", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "event",
+        "turnNumber": 9,
+        "structured_data": {
+          "name": "Погасший маяк",
+          "type": "supernatural",
+          "description": "Серый маяк погас без ветра и дождя; утром фонаря на крюке не было.",
+          "when": "три ночи назад",
+          "where": "Серый маяк",
+          "participants": ["Ульяна", "Арсений Кеттер"],
+          "outcome": "Фонарь пропал, Ульяна исчезла.",
+          "significance": "pivotal",
+          "consequences": ["гавань осталась без огня"],
+          "related_plots": ["Украденный свет"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e11",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Украденный свет",
+      "content": "# Украденный свет\n\nПоиски Латунного фонаря.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Украденный свет", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": true,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "plot",
+        "turnNumber": 10,
+        "structured_data": {
+          "name": "Украденный свет",
+          "type": "mystery",
+          "status": "active",
+          "description": "Кто снял Латунный фонарь с Серого маяка и зачем.",
+          "central_characters": ["Мира", "Арсений Кеттер"],
+          "key_locations": ["Серый маяк", "Фонарный ряд"],
+          "goal": "Вернуть фонарь на маяк до Чёрного прилива.",
+          "stakes": "Без него туман войдёт в гавань.",
+          "recent_developments": ["На камнях у маяка нашли соль."]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e12",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Чёрный прилив",
+      "content": "# Чёрный прилив\n\nТуман с моря.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Чёрный прилив", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "threat",
+        "turnNumber": 11,
+        "structured_data": {
+          "name": "Чёрный прилив",
+          "description": "Осенний туман с моря, в котором гаснет любой огонь, кроме живого.",
+          "nature": "supernatural",
+          "scope": "local",
+          "severity": "moderate",
+          "status": "stirring",
+          "what_happens_if_unaddressed": "Туман заберёт всех, кто окажется на улице без огня.",
+          "counters": ["свет Латунного фонаря"],
+          "knowledge_level": "rumored"
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e13",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Право огня",
+      "content": "# Право огня\n\nТолько гильдия зажигает уличные огни.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Право огня", "isRegex": false }, { "keyword": "закон", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "worldbuilding",
+        "turnNumber": 3,
+        "original_classic_content": "Право огня: зажигать и гасить огни на улицах может только гильдия.",
+        "standardization_state": "standardized",
+        "structured_data": {
+          "topic": "Право огня",
+          "category": "закон",
+          "description": "Только Гильдия фонарщиков вправе зажигать и гасить уличные огни Вельмара.",
+          "key_facts": ["Погасить чужой фонарь — проступок перед гильдией.", "Соляной суд оспаривает это право третий год."],
+          "applies_to": ["Гильдия фонарщиков", "Соляной суд"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e14",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "[Summary] Фонарь погас",
+      "content": "# Фонарь погас\n\nНочь, когда маяк ослеп.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Мира", "isRegex": false }, { "keyword": "Арсений Кеттер", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "summary",
+        "turnNumber": 16,
+        "structured_data": {
+          "title": "Фонарь погас",
+          "tagline": "Ночь, когда маяк ослеп.",
+          "summary": "Серый маяк погас в тихую ночь. Арсений поднялся на башню и нашёл пустой крюк, а смотрительница Ульяна пропала. Утром на камнях у подножия нашли соль, и Мира поклялась вернуть фонарь до прилива.",
+          "parent_plot": "Украденный свет",
+          "participants": ["Мира", "Арсений Кеттер"],
+          "involved_locations": ["Серый маяк"],
+          "significance": "major",
+          "mood": "tense",
+          "messages_covered": 20,
+          "turn_range": { "from": 12, "to": 31 },
+          "key_moments": ["Пустой крюк на башне", "Соль на камнях"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e15",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Туманник",
+      "content": "# Туманник\n\nТень в тумане.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "Туманник", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "creature",
+        "turnNumber": 12,
+        "structured_data": {
+          "name": "Туманник",
+          "tagline": "Тень в тумане, которая боится огня.",
+          "classification": "дух",
+          "rarity": "uncommon",
+          "disposition": "predatory",
+          "knowledge_level": "rumored",
+          "description": "Высокая тень, что приходит с Чёрным приливом и уводит тех, кто остался без света.",
+          "habitat": "гавань в ночи прилива",
+          "weaknesses": ["живой огонь"],
+          "known_locations": ["Вельмар"]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e16",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Старая пристань",
+      "content": "# Старая пристань\n\nЗаброшенный причал.",
+      "enabled": false,
+      "constant": false,
+      "triggers": [{ "keyword": "Старая пристань", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "entry_type": "location",
+        "turnNumber": 5,
+        "disableReason": "merged",
+        "structured_data": {
+          "name": "Старая пристань",
+          "type": "building",
+          "parent_location": "Вельмар",
+          "description": "Заброшенный причал под маяком."
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e17",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "[Arc] Украденный свет",
+      "content": "Маяк погас, фонарь пропал вместе со смотрительницей. Гильдия ищет его в городе, Соляной суд требует отдать огни городу, а с моря идёт Чёрный прилив.",
+      "enabled": true,
+      "constant": true,
+      "triggers": [{ "keyword": "Мира", "isRegex": false }, { "keyword": "Арсений Кеттер", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": null,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_arc_overview",
+        "chatId": "00000000-0000-4000-8000-000000000c01",
+        "arcId": "arc-00000000-0000-4000-8000-000000000a11"
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000e18",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "title": "Песня фонарщиков",
+      "content": "Фонарщики поют за работой: «Масло в лампу, искру в фитиль — ночь подождёт до утра». Эту песню знает каждый ребёнок Фонарного ряда.",
+      "enabled": true,
+      "constant": false,
+      "triggers": [{ "keyword": "песня фонарщиков", "isRegex": false }, { "keyword": "песню фонарщиков", "isRegex": false }],
+      "position": "character",
+      "depth": 4,
+      "sort_order": 0,
+      "category_id": "00000000-0000-4000-8000-000000000f01",
+      "is_featured": false,
+      "metadata": null
+    }
+  ],
+  "tree": {
+    "tree_data": {
+      "root": { "id": "root", "label": "World Knowledge", "summary": "18 entries", "entryIds": [], "children": [], "entryCount": 18, "collapsed": false }
+    },
+    "build_mode": "typed",
+    "granularity": "auto",
+    "version": 3,
+    "built_at": "2026-10-19T21:00:00.000Z"
+  },
+  "nodeConstraints": [
+    {
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "node_id": "bucket:character",
+      "user_locked": true,
+      "user_forbidden": false,
+      "user_reorganize": false,
+      "display_label": "Cast",
+      "created_at": "2026-10-19T21:00:00.000Z",
+      "updated_at": "2026-10-19T21:00:00.000Z"
+    }
+  ],
+  "categories": [
+    {
+      "id": "00000000-0000-4000-8000-000000000f01",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b01",
+      "name": "Песни и обычаи",
+      "sort_order": 1,
+      "enabled": true,
+      "parent_category_id": null
+    }
+  ],
+  "counts": { "totalEntries": 18, "typedEntries": 16, "classicEntries": 2 }
+}

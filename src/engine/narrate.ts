@@ -97,6 +97,8 @@ export interface CallInput {
   responseSchema?: { name: string; schema: JSONSchema };
   /** M4 (D-101): called once, right after the call got its semaphore slot (an agent's budget starts here). */
   onSlot?(): void;
+  /** M5a (D-164, --keep-requests): handed the request right before the provider gets it. */
+  keepRequest?(req: ModelRequest): void;
   /** Streamed text / reasoning deltas, in arrival order. */
   onText(delta: string): void;
   onReasoning(delta: string): void;
@@ -376,7 +378,9 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
   // M3: native calls by stream index; `closed` once tool_end arrived.
   const open = new Map<number, { id: string; name: string; args: string; closed: boolean }>();
   try {
-    const stream = input.conn.provider.stream(modelRequest(input, call.signal), {
+    const req = modelRequest(input, call.signal);
+    input.keepRequest?.(req);
+    const stream = input.conn.provider.stream(req, {
       fetch: input.fetch,
       key: keyed.key,
       onActivity: () => watch.bytes(),
@@ -743,6 +747,7 @@ export async function narrateRounds(input: RoundsInput): Promise<RoundsResult> {
       timers: input.timers,
       clock,
       ...fields,
+      ...(input.keepRequest ? { keepRequest: input.keepRequest } : {}),
       onText: (d) => show(stripper === null ? d : stripper.push(d)),
       onReasoning: (d) => {
         out.reasoning += d;

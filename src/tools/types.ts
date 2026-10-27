@@ -31,13 +31,21 @@ export interface ToolCtx {
   upTo: string;
   /** Speaker names for results: the character and the persona. */
   names: { char: string; user: string };
-  /** The lore sources the turn's lore run read: persona, card, notes, session books (LoreSource keys). */
+  /**
+   * The lore sources the turn's lore run read: persona, card, notes, session books (LoreSource keys),
+   * already routed (D-142: the Compendium entries of readable books are not in them).
+   */
   lore: readonly LoreSource[];
-  /** The Compendium at the turn's start (M3: notes). */
+  /**
+   * The Compendium at the turn's start: the view's fold with the library seed (D-141): notes, typed
+   * session entries, arcs, library entries and their overlays. search_lore and read_lore read it whole
+   * (D-156), with no freshness filter.
+   */
   compendium: CompendiumView;
   /**
-   * Short handles [D-59, amended]: `L<n>` for lore entries, per turn; a note's `C<n>` is its /memory
-   * handle (stable), other Compendium records numbered after the notes.
+   * Short handles [D-59, amended by D-150]: `L<n>` for lore entries, per turn; a Compendium entry's
+   * `C<n>` is its place in the view's one numbering (refs.ts entryRefs), the same as /memory and the
+   * block's brief tail, stable across turns.
    */
   handles: HandleTable;
   /** D-56: true when the message's text is in the request the model is answering ("(in context)"). */

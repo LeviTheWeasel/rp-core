@@ -24,6 +24,16 @@
 // M4 (D-106): while director.enabled the core block holds the Director's contract on every kind
 // (continue included) and in previews, so the head stays the same whether or not the Director planned;
 // the directive itself arrives in `placements` (depth 1). Director off: no contract, the M3 bytes.
+//
+// M5a (.notes/m5a-decisions.md D-141, D-142, D-155, D-156): the session's library books come loaded
+// (SessionLibrary, kept by the session while nothing changed), with the Compendium's seed the view was
+// folded with. The Compendium entries of readable books leave the lore sources (routeBooks); the block
+// input (selector picks, rendered full and brief) goes to assemble when the Compendium is on and the
+// view has a live typed entry. An opening (no user message U) runs the selector with an empty U: the
+// greeting's window and the constant entries (section H), so a constant typed entry is never lost.
+// Otherwise nothing changes: no input, the M4 bytes. The lore tools are also offered when a live typed
+// entry was not injected. trace.loreHashes hash the books as loaded, before routing (the lead's ruling
+// I): turning the Compendium on or off is the Compendium's change (trace.compendium), not a book's.
 
 import { contractText } from '../agents/director/render.ts';
 import type { Route } from './admit.ts';
@@ -31,6 +41,14 @@ import { MIN_ROOM_TOKENS, type TurnTools } from './narrate.ts';
 import { tokenFactorFor } from './ema.ts';
 import { modelLabel } from './route.ts';
 import { NOTES_BOOK_KEY, notesBook } from '../agents/compendium/notes.ts';
+import { visibilityAt, visibleCopy } from '../agents/compendium/fresh.ts';
+import { librarySeed, routeBooks } from '../agents/compendium/library.ts';
+import { messageText } from '../agents/compendium/mention.ts';
+import { COMPENDIUM_LIMITS, compendiumProfile, resolveCompendium, type ResolvedCompendiumConfig } from '../agents/compendium/profile.ts';
+import { entryRefs } from '../agents/compendium/refs.ts';
+import { renderBriefParts, renderEntry } from '../agents/compendium/render.ts';
+import { select, WINDOW_MESSAGES } from '../agents/compendium/select.ts';
+import { EMPTY_SEED, type BlockCandidate, type CEntry, type CompendiumBlockInput, type CompendiumView, type LibrarySeed } from '../agents/compendium/types.ts';
 import type { Preset, Samplers } from '../formats/native.ts';
 import { validateLoreBook } from '../formats/native.ts';
 import { loadFromLibrary } from '../formats/library.ts';
@@ -44,7 +62,7 @@ import { shape } from '../prompt/shape.ts';
 import { estimateTokens, type TokenCounter } from '../prompt/tokens.ts';
 import type { Notice } from '../protocol/events.ts';
 import type { PromptMsg } from '../providers/types.ts';
-import type { Binding, SessionConfig, SessionHeader, TurnKind } from '../session/entries.ts';
+import type { Binding, CompendiumConfig, SessionConfig, SessionHeader, TurnKind } from '../session/entries.ts';
 import { foldViewAt } from '../session/fold.ts';
 import type { TreeIndex } from '../session/tree.ts';
 import type { PathView } from '../session/view.ts';
@@ -94,8 +112,13 @@ export interface RequestInput {
   now: string;
   timeZone: string;
   counter: TokenCounter;
-  /** Agent inserts (Director M4, Compendium M5, host beforeAssemble M9). */
+  /** Agent inserts (Director M4, host beforeAssemble M9). */
   placements: DepthInsert[];
+  /**
+   * M5a (D-141): the session's books, already loaded, with the seed `view` was folded with. Absent:
+   * loaded here (loadLibrary) and the view folded again at upTo with that seed.
+   */
+  library?: SessionLibrary;
   /** Also return the lore verdicts (preview, /lore test) [D-45]. */
   explain?: boolean;
   /**
@@ -170,9 +193,12 @@ export function maxTokensFor(route: Route, reserve: number): number {
   return Math.min(reserve, tokenLimit(route.caps.maxOutput) ?? reserve);
 }
 
-/** The view a request starts from: the given one when its head is upTo, else folded at upTo. */
-export function startView(header: SessionHeader, tree: TreeIndex, view: PathView, upTo: string): PathView {
-  return view.head === upTo ? view : foldViewAt(header, tree, upTo);
+/**
+ * The view a request starts from: the given one when its head is upTo, else folded at upTo with the
+ * library seed the given view was folded with (D-141).
+ */
+export function startView(header: SessionHeader, tree: TreeIndex, view: PathView, upTo: string, seed?: LibrarySeed): PathView {
+  return view.head === upTo ? view : foldViewAt(header, tree, upTo, seed !== undefined ? { library: seed } : undefined);
 }
 
 // ---- lorebooks --------------------------------------------------------------------------------
@@ -221,6 +247,143 @@ export function loadLorebooks(home: string, ids: readonly string[]): { sources: 
     sources.push({ key: id, book: v.value });
   }
   return { sources, notices };
+}
+
+/** D-141: the session's library books, loaded once and kept while nothing changed (SessionImpl). */
+export interface SessionLibrary {
+  /** config.lorebooks as loadLorebooks gave them: every entry (routing is per request, D-142). */
+  sources: LoreSource[];
+  /** loadLorebooks' notices (a missing or invalid book). */
+  notices: KeyedNotice[];
+  /**
+   * The Compendium's seed: the typed entries of the readable books that survive the "read once by
+   * name" shadowing for the session's cast (D-141). EMPTY_SEED while the Compendium is disabled. The
+   * fold caches on this object: callers pass the same one while the books are unchanged.
+   */
+  seed: LibrarySeed;
+}
+
+/** The stored Compendium config; a header without one reads as enabled (resolveCompendium's default). */
+export const compendiumConfigOf = (config: SessionConfig): CompendiumConfig => config.compendium ?? { enabled: true };
+
+/** config.lorebooks loaded and the Compendium's seed made from them (D-141). */
+export function loadLibrary(home: string, config: SessionConfig, cast: SessionHeader['cast']): SessionLibrary {
+  const books = loadLorebooks(home, config.lorebooks ?? []);
+  return { sources: books.sources, notices: books.notices, seed: librarySeed(loreSources(cast, books.sources), compendiumConfigOf(config)) };
+}
+
+// ---- the Compendium -----------------------------------------------------------------------------
+
+/** Live typed entries of a view, in handle order (selector candidates before freshness, D-153). */
+export function liveTyped(c: CompendiumView): CEntry[] {
+  const out: CEntry[] = [];
+  for (const e of c.entries.values()) if (e.type !== null && e.retired === undefined && e.arc === undefined) out.push(e);
+  return out;
+}
+
+/** The user message a request answers: the newest user message on the path (none on an opening). */
+function userMessageOf(view: PathView): number {
+  for (let i = view.path.length - 1; i >= 0; i--) if (view.path[i]!.role === 'user') return i;
+  return -1;
+}
+
+/**
+ * D-155: the block's input for a request, or undefined when there is none: the Compendium is off or
+ * the view has no live typed entry. The candidates are the selector's picks over the fresh copies
+ * (D-152, D-153), rendered for the profile of the narrator's window (D-154): full when it fits the
+ * profile, and always a brief with its tail apart. An opening (no user message) selects with an
+ * empty U over the path's last messages (tier 2) and the constant entries (tier 3).
+ */
+export function compendiumBlockInput(
+  view: PathView,
+  tree: TreeIndex,
+  cfg: ResolvedCompendiumConfig,
+  window: number,
+  guidance: string | undefined,
+): CompendiumBlockInput | undefined {
+  if (!cfg.enabled) return undefined;
+  const live = liveTyped(view.compendium);
+  if (live.length === 0) return undefined;
+  const u = userMessageOf(view);
+  const U = u < 0 ? undefined : view.path[u]!;
+  const vis = visibilityAt(view, tree, U?.id ?? null);
+  let hidden = 0;
+  const fresh = new Map<string, CEntry>();
+  for (const e of live) {
+    const r = visibleCopy(e, vis);
+    hidden += r.dropped;
+    if (r.entry !== null) fresh.set(e.key, r.entry);
+  }
+  const refs = new Map(entryRefs(view.compendium).map((r) => [r.entry.key, r.ref]));
+  const refOf = (key: string): string => refs.get(key) ?? key;
+  const windowTexts = view.path
+    .slice(0, U === undefined ? view.path.length : u)
+    .filter((m) => !m.hidden)
+    .slice(-WINDOW_MESSAGES)
+    .map(messageText);
+  const picks = select({
+    entries: [...fresh.values()],
+    refOf,
+    uText: U === undefined ? '' : messageText(U),
+    ...(guidance !== undefined && guidance !== '' ? { guidance } : {}),
+    windowTexts,
+    castNames: view.castNames,
+  });
+  const profile = compendiumProfile(cfg.profile, window);
+  const limits = COMPENDIUM_LIMITS[profile];
+  const candidates: BlockCandidate[] = picks.map((p) => {
+    const e = fresh.get(p.key)!;
+    const whole = profile === 'full' ? renderEntry(e) : null;
+    const brief = renderBriefParts(e, limits.briefChars, `(more: read_lore ${p.ref})`);
+    return { ...p, name: e.name, full: whole !== null && whole.length <= limits.fullChars ? whole : null, brief: brief.text, briefTail: brief.tail };
+  });
+  return { rev: view.compendium.rev, profile, candidates, limits, minShare: cfg.minShare, inPrompt: new Set(), hidden };
+}
+
+/** D-156: a live typed entry the block did not inject (by ref): search_lore / read_lore can reach it. */
+export function unfiredCompendium(c: CompendiumView, injected: readonly { ref: string }[]): boolean {
+  const live = liveTyped(c);
+  if (live.length === 0) return false;
+  const done = new Set(injected.map((i) => i.ref));
+  const refs = new Map(entryRefs(c).map((r) => [r.entry.key, r.ref]));
+  return live.some((e) => !done.has(refs.get(e.key) ?? e.key));
+}
+
+/**
+ * D-144.6, D-147: the fold's large_entry and library_entry_missing issues as notices, keyed by the
+ * entry (once per key per open session): `compendium_large_entry:<key>`, `library_entry_missing:<key>`.
+ */
+export function compendiumNotices(c: CompendiumView): KeyedNotice[] {
+  const out: KeyedNotice[] = [];
+  const seen = new Set<string>();
+  let refs: Map<string, string> | undefined;
+  for (const i of c.issues) {
+    if (i.key === undefined || (i.why !== 'large_entry' && i.why !== 'library_entry_missing')) continue;
+    const code = i.why === 'large_entry' ? 'compendium_large_entry' : 'library_entry_missing';
+    const key = `${code}:${i.key}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (code === 'compendium_large_entry') {
+      refs ??= new Map(entryRefs(c).map((r) => [r.entry.key, r.ref]));
+      const e = c.entries.get(i.key);
+      const name = e ? `${JSON.stringify(e.name)} (${refs.get(i.key) ?? i.key})` : i.key;
+      const size = e ? JSON.stringify(e.data).length : 0;
+      out.push({
+        key,
+        notice: { level: 'info', code, message: `The Compendium entry ${name} holds ${size} characters of data; a long entry costs the block room. Consider trimming it.` },
+      });
+    } else {
+      out.push({
+        key,
+        notice: {
+          level: 'warn',
+          code,
+          message: `The changes made to the library entry ${i.key} are skipped: its book is no longer read (removed, set off, or the Compendium is disabled) or the entry is gone.`,
+        },
+      });
+    }
+  }
+  return out;
 }
 
 // ---- the request ------------------------------------------------------------------------------
@@ -302,18 +465,29 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     });
   }
 
+  // The session's books (D-141): loaded by the session, else here (then the view is folded again with
+  // their seed, unless there is none).
+  const lib = input.library ?? loadLibrary(input.home, plan.config, input.header.cast);
+  notices.push(...lib.notices);
   // The state the turn starts from: the head, except on a swipe (and a past answer's preview),
   // which regrows the answer from U (§6.3).
-  const view = startView(input.header, input.tree, input.view, plan.upTo);
+  const view =
+    input.library !== undefined || lib.seed === EMPTY_SEED
+      ? startView(input.header, input.tree, input.view, plan.upTo, lib.seed)
+      : foldViewAt(input.header, input.tree, plan.upTo, { library: lib.seed });
   // D-50: the model's token correction, learned from the earlier answers on this path that were
   // counted the same way.
   const tokenFactor = tokenFactorFor(input.tree, view, primary.model, input.counter.id);
-  const books = loadLorebooks(input.home, plan.config.lorebooks ?? []);
-  notices.push(...books.notices);
+  const compendium = resolveCompendium(plan.config.compendium);
+  if (compendium.enabled) notices.push(...compendiumNotices(view.compendium));
   // C5: the path's live notes are one more book, before the session's (the lore engine gathers
-  // '@notes' after '@card'); none without notes, so an M2 request stays as it was.
+  // '@notes' after '@card'); none without notes, so an M2 request stays as it was. D-142: the
+  // Compendium entries of readable books leave the lore (the same array when there is none).
   const notes = notesBook(view.compendium);
-  const lorebooks: LoreSource[] = notes ? [{ key: NOTES_BOOK_KEY, book: notes }, ...books.sources] : books.sources;
+  const routed = routeBooks(lib.sources, compendiumConfigOf(plan.config));
+  const withNotes = (books: LoreSource[]): LoreSource[] => (notes ? [{ key: NOTES_BOOK_KEY, book: notes }, ...books] : books);
+  const lorebooks = withNotes(routed);
+  const block = compendiumBlockInput(view, input.tree, compendium, window, plan.guidance);
 
   const base: AssembleInput = {
     sessionId: input.sessionId,
@@ -323,6 +497,8 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     cast: input.header.cast,
     preset: plan.preset,
     lorebooks,
+    // trace.loreHashes hashes the books as loaded (the lead's ruling I); the request is the same.
+    ...(routed !== lib.sources ? { booksAsLoaded: withNotes(lib.sources) } : {}),
     ...(input.explain ? { explain: true } : {}),
     counter: input.counter,
     placements: input.placements,
@@ -338,6 +514,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     tools: [],
     ...(plan.config.director?.enabled === true ? { contract: contractText(input.header.cast.persona?.name ?? '') } : {}),
     prefillVsTools: plan.config.narrator.prefillVsTools,
+    ...(block !== undefined ? { compendium: block } : {}),
   };
   const common = { window, reserve, limits, tokenFactor, view };
 
@@ -352,7 +529,9 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   const sets = input.toolSets ?? BUILTIN_TOOL_SETS;
   const sources = loreSources(input.header.cast, lorebooks);
   const history = a.asm.trace.trimmed !== null;
-  let offered: Tool[] = [...(history ? sets.history() : []), ...(unfiredLore(sources, a.asm.trace.lore.fired) ? sets.lore() : [])];
+  // D-156: the lore tools also reach a live typed entry the block left out (Compendium on).
+  const loreLeft = unfiredLore(sources, a.asm.trace.lore.fired) || (compendium.enabled && unfiredCompendium(view.compendium, a.asm.trace.compendium?.injected ?? []));
+  let offered: Tool[] = [...(history ? sets.history() : []), ...(loreLeft ? sets.lore() : [])];
   if (offered.length === 0) return passA();
 
   // Pass B: with the specs and, when this route's tool requests echo reasoning (D-94 revised), this

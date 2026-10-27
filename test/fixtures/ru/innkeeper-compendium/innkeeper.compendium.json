@@ -1,0 +1,575 @@
+{
+  "schemaVersion": "compendium-v1.0.0",
+  "format": "rolecall-compendium",
+  "exportDate": "2026-10-27T12:00:00.000Z",
+  "lorebook": {
+    "id": "00000000-0000-4000-8000-000000000b02",
+    "name": "Innkeeper",
+    "description": "Трактир «Сонный гусь» у Старого тракта: люди, места и дела вокруг него.",
+    "lorebook_type": "world",
+    "tags": []
+  },
+  "entries": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Глеб",
+      "content": "# Глеб\n\nОхотник из Соснового бора: угрюмый бородач в волчьей шапке, говорит мало, лес знает как свою избу.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Глеб",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 0,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "character",
+        "structured_data": {
+          "name": "Глеб",
+          "aliases": [
+            "охотник"
+          ],
+          "role": "ally",
+          "description": "Охотник из Соснового бора: угрюмый бородач в волчьей шапке, говорит мало, лес знает как свою избу.",
+          "current_state": {
+            "status": "alive",
+            "location": "Сонный гусь",
+            "condition": "греется у печи после ночи в лесу"
+          },
+          "relationships": [
+            {
+              "with": "Марфа",
+              "nature": "ally",
+              "status": "active",
+              "notes": "в непогоду ночует у неё и платит дичью"
+            },
+            {
+              "with": "Сыч",
+              "nature": "enemy",
+              "status": "active",
+              "notes": "не раз уводил возы в обход старой гати"
+            }
+          ],
+          "possessions": [
+            "старое ружьё"
+          ],
+          "skills": [
+            "ходить по гати и болоту"
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Сыч",
+      "content": "# Сыч\n\nАтаман лихих людей со старой гати за Сосновым бором.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Сыч",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 1,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "character",
+        "structured_data": {
+          "name": "Сыч",
+          "aliases": [
+            "атаман"
+          ],
+          "role": "antagonist",
+          "description": "Атаман лихих людей со старой гати за Сосновым бором.",
+          "physical": {
+            "summary": "Глаза круглые, по ночам не спит — за то и прозван."
+          },
+          "current_state": {
+            "status": "alive",
+            "location": "старая гать за Сосновым бором"
+          },
+          "relationships": [
+            {
+              "with": "Глеб",
+              "nature": "enemy",
+              "status": "active"
+            }
+          ],
+          "affiliations": [
+            {
+              "org": "Ватага Сыча",
+              "role": "атаман"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Савелий Рогов",
+      "content": "# Савелий Рогов\n\nКупец из Лисьего Брода, крепкий и обстоятельный; каждую осень ведёт на север обоз с солью, сукном и железом.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Савелий Рогов",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 2,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "character",
+        "structured_data": {
+          "name": "Савелий Рогов",
+          "aliases": [
+            "Рогов"
+          ],
+          "role": "neutral",
+          "description": "Купец из Лисьего Брода, крепкий и обстоятельный; каждую осень ведёт на север обоз с солью, сукном и железом.",
+          "current_state": {
+            "status": "missing",
+            "condition": "обоз из шести подвод запаздывает пятый день"
+          },
+          "relationships": [
+            {
+              "with": "Марфа",
+              "nature": "ally",
+              "status": "active",
+              "notes": "старый постоялец; торгуются каждый год"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Горелая балка",
+      "content": "# Горелая балка\n\nОвраг на тракте к Лисьему Броду; через него — старый мост на сваях.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Горелая балка",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 3,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "location",
+        "structured_data": {
+          "name": "Горелая балка",
+          "type": "wilderness",
+          "description": "Овраг на тракте к Лисьему Броду; через него — старый мост на сваях.",
+          "dangers": [
+            "сваи подгнили, кованые скобы Харитона держат гниль"
+          ],
+          "connected_to": [
+            "Старый тракт",
+            "Лисий Брод"
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Велеград",
+      "content": "# Велеград\n\nБольшой торговый город на севере, куда ведёт Старый тракт; осенью там шумит ярмарка.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Велеград",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 4,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "location",
+        "structured_data": {
+          "name": "Велеград",
+          "type": "city",
+          "description": "Большой торговый город на севере, куда ведёт Старый тракт; осенью там шумит ярмарка.",
+          "connected_to": [
+            "Старый тракт"
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Старая мельница",
+      "content": "# Старая мельница\n\nЗаброшенная мельница у Чёртова омута: крыша провалилась, колесо стоит.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Старая мельница",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 5,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "location",
+        "structured_data": {
+          "name": "Старая мельница",
+          "type": "building",
+          "description": "Заброшенная мельница у Чёртова омута: крыша провалилась, колесо стоит.",
+          "points_of_interest": [
+            {
+              "name": "брод ниже по ручью",
+              "description": "дно каменистое; летом там ходили подводы"
+            }
+          ],
+          "history": "Гордей однажды провёл здесь телегу с бочками."
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000007",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Ватага Сыча",
+      "content": "# Ватага Сыча\n\nПятеро-шестеро лихих людей на старой гати за бором.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Ватага Сыча",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 6,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "organization",
+        "structured_data": {
+          "name": "Ватага Сыча",
+          "aliases": [
+            "лихие люди"
+          ],
+          "type": "criminal",
+          "description": "Пятеро-шестеро лихих людей на старой гати за бором.",
+          "leader": "Сыч",
+          "methods": [
+            "останавливают телеги и забирают товар, людей не трогают"
+          ],
+          "territory": [
+            "старая гать за Сосновым бором"
+          ]
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000008",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Фонарь Гордея",
+      "content": "# Фонарь Гордея\n\nМедный фонарь со слюдяными оконцами, с которым покойный Гордей ходил на перевоз.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Фонарь Гордея",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 7,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "item",
+        "structured_data": {
+          "name": "Фонарь Гордея",
+          "aliases": [
+            "фонарь мужа"
+          ],
+          "type": "mundane",
+          "description": "Медный фонарь со слюдяными оконцами, с которым покойный Гордей ходил на перевоз.",
+          "current_owner": "Марфа",
+          "current_location": "Сонный гусь, на гвозде у двери",
+          "condition": "good",
+          "significance": "Марфа не зажигала его с похорон."
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000009",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Пропавший обоз",
+      "content": "# Пропавший обоз\n\nОбоз Савелия Рогова из Лисьего Брода запаздывает пятый день.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Пропавший обоз",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 8,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "plot",
+        "structured_data": {
+          "name": "Пропавший обоз",
+          "aliases": [
+            "обоз Рогова"
+          ],
+          "type": "side_quest",
+          "status": "active",
+          "description": "Обоз Савелия Рогова из Лисьего Брода запаздывает пятый день.",
+          "central_characters": [
+            "Савелий Рогов",
+            "Глеб",
+            "Елисей"
+          ],
+          "key_locations": [
+            "Горелая балка",
+            "Старая мельница"
+          ],
+          "goal": "Узнать, где застрял обоз, и провести подводы в обход моста.",
+          "stakes": "Без соли и железа деревне не перезимовать."
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000010",
+      "lorebook_id": "00000000-0000-4000-8000-000000000b02",
+      "title": "Гибель Гордея",
+      "content": "# Гибель Гордея\n\nМуж Марфы простыл, помогая Лукьяну удержать паром, когда лопнул канат, и умер за неделю.",
+      "comment": null,
+      "enabled": true,
+      "constant": false,
+      "trigger_mode": "simple",
+      "triggers": [
+        {
+          "keyword": "Гибель Гордея",
+          "isRegex": false
+        }
+      ],
+      "secondary_triggers": [],
+      "selective_logic": "and_any",
+      "case_sensitive": null,
+      "match_whole_words": null,
+      "scan_depth": null,
+      "position": "character",
+      "depth": 4,
+      "role": "system",
+      "sort_order": 9,
+      "priority": 100,
+      "sticky": 0,
+      "cooldown": 0,
+      "delay": 0,
+      "group_name": null,
+      "category_id": null,
+      "group_weight": 1,
+      "probability": 100,
+      "is_featured": false,
+      "metadata": {
+        "source": "tv_compendium",
+        "entry_type": "event",
+        "structured_data": {
+          "name": "Гибель Гордея",
+          "type": "death",
+          "description": "Муж Марфы простыл, помогая Лукьяну удержать паром, когда лопнул канат, и умер за неделю.",
+          "when": "шесть лет назад, осенью",
+          "where": "перевоз на Ольшанке",
+          "participants": [
+            "Гордей",
+            "Лукьян"
+          ],
+          "outcome": "Марфа овдовела.",
+          "significance": "major"
+        }
+      }
+    }
+  ],
+  "tree": null,
+  "nodeConstraints": [],
+  "categories": [],
+  "counts": {
+    "totalEntries": 10,
+    "typedEntries": 10,
+    "classicEntries": 0
+  }
+}

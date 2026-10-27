@@ -15,11 +15,11 @@ const error = (line: string): string => {
 };
 
 describe('/memory', () => {
-  test('bare and list: the notes of this path; list takes no filters yet', () => {
+  test('bare and list: the Compendium of this path; M5a: list takes a type (or note, arc) and --retired', () => {
     expect(cmd('/memory')).toEqual({ name: 'memory', action: 'list' });
     expect(cmd('/MEMORY list')).toEqual({ name: 'memory', action: 'list' });
-    expect(error('/memory list character')).toContain('arrive with the Compendium, M5');
-    expect(error('/memory list --retired')).toContain('takes no arguments yet');
+    expect(cmd('/memory list character')).toEqual({ name: 'memory', action: 'list', type: 'character' });
+    expect(cmd('/memory list --retired')).toEqual({ name: 'memory', action: 'list', retired: true });
   });
 
   test('show and restore take the rest of the line as the ref (a title may hold spaces)', () => {
@@ -27,7 +27,7 @@ describe('/memory', () => {
     expect(cmd('/memory show Old lighthouse')).toEqual({ name: 'memory', action: 'show', ref: 'Old lighthouse' });
     expect(cmd('/memory show "Old lighthouse"')).toEqual({ name: 'memory', action: 'show', ref: 'Old lighthouse' });
     expect(cmd('/memory restore note:брат')).toEqual({ name: 'memory', action: 'restore', ref: 'note:брат' });
-    expect(error('/memory show')).toContain('/memory show needs a note');
+    expect(error('/memory show')).toContain('/memory show needs an entry');
     expect(error('/memory restore')).toContain('C<n>');
   });
 
@@ -61,13 +61,19 @@ describe('/memory', () => {
     });
     expect(cmd('/memory edit C1 | | He came back')).toEqual({ name: 'memory', action: 'edit', ref: 'C1', content: 'He came back' });
     expect(cmd('/memory edit C1 | Yan, Ян')).toEqual({ name: 'memory', action: 'edit', ref: 'C1', keys: ['Yan', 'Ян'] });
+    // Section I: without a '|' the whole rest is the ref (the editor form), unless it starts with a
+    // handle or key: then it is M3's title-only rename.
+    expect(cmd('/memory edit c3 New title |')).toEqual({ name: 'memory', action: 'edit', ref: 'c3', title: 'New title' });
     expect(cmd('/memory edit c3 New title')).toEqual({ name: 'memory', action: 'edit', ref: 'c3', title: 'New title' });
+    expect(cmd('/memory edit note:brother Uncle')).toEqual({ name: 'memory', action: 'edit', ref: 'note:brother', title: 'Uncle' });
+    expect(cmd('/memory edit Мира Ванс')).toEqual({ name: 'memory', action: 'edit', ref: 'Мира Ванс' });
     expect(cmd('/memory edit "Old lighthouse" | | Rebuilt')).toEqual({ name: 'memory', action: 'edit', ref: 'Old lighthouse', content: 'Rebuilt' });
   });
 
-  test('edit errors: no ref, nothing to change', () => {
+  test('edit errors: no ref, nothing to change (M5a: the ref alone opens the editor)', () => {
     expect(error('/memory edit')).toContain('usage: /memory edit <ref>');
-    expect(error('/memory edit C1')).toContain('nothing to change');
+    expect(cmd('/memory edit C1')).toEqual({ name: 'memory', action: 'edit', ref: 'C1' });
+    expect(error('/memory edit C1 | | ')).toContain('nothing to change');
     expect(error('/memory edit C1 | | ')).toContain('an empty part keeps the old value');
   });
 
@@ -75,14 +81,13 @@ describe('/memory', () => {
     expect(cmd('/memory retire C2')).toEqual({ name: 'memory', action: 'retire', ref: 'C2' });
     expect(cmd('/memory retire C2 he left the story')).toEqual({ name: 'memory', action: 'retire', ref: 'C2', reason: 'he left the story' });
     expect(cmd('/memory retire "Old lighthouse" burnt down')).toEqual({ name: 'memory', action: 'retire', ref: 'Old lighthouse', reason: 'burnt down' });
-    expect(error('/memory retire')).toContain('needs a note');
+    expect(error('/memory retire')).toContain('needs an entry');
   });
 
-  test('the Compendium subcommands of M5 are "later"; an unknown one is an error', () => {
-    for (const sub of ['tree', 'new', 'undo', 'refile', 'retry', 'recall', 'export', 'profile', 'mode']) {
-      expect(cmd(`/memory ${sub} x`)).toEqual({ name: 'later', command: `memory ${sub}`, when: 'M5 (Compendium)' });
-    }
-    expect(error('/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists your notes, then show, add, edit, retire, restore');
+  test('the subcommands of M5b and M5c are "later"; an unknown one is an error', () => {
+    for (const sub of ['undo', 'refile', 'retry']) expect(cmd(`/memory ${sub} x`)).toEqual({ name: 'later', command: `memory ${sub}`, when: 'M5b (Compendium agents)' });
+    for (const sub of ['recall', 'profile', 'mode']) expect(cmd(`/memory ${sub} x`)).toEqual({ name: 'later', command: `memory ${sub}`, when: 'M5c (recall)' });
+    expect(error('/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off');
   });
 
   test('takeRef: a quoted ref, else the first word', () => {
@@ -135,7 +140,7 @@ describe('classes and help (M3)', () => {
     }
   });
 
-  test('/memory and /search are no longer later; /help lists them and keeps the M5 subcommands for later', () => {
+  test('/memory and /search are no longer later; /help lists them and keeps the M5b/M5c subcommands for later', () => {
     for (const l of ['/memory', '/search x']) expect(cmd(l).name).not.toBe('later');
     const help = helpText();
     for (const s of [
@@ -148,8 +153,8 @@ describe('classes and help (M3)', () => {
     ]) {
       expect(help).toContain(s);
     }
-    // M4: /director arrived (D-113), so the Later line keeps only the Compendium's subcommands.
-    expect(help).toContain('Later: /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).');
+    // M4: /director arrived (D-113); M5a: tree, new and export did too, so the Later line keeps the agents' and recall's.
+    expect(help).toContain('Later: /memory undo|refile|retry (M5b, the Compendium agents), /memory recall|profile|mode (M5c, recall).');
     expect(help).not.toContain('(M3)');
   });
 });

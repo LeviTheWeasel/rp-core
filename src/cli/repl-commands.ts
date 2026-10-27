@@ -11,6 +11,7 @@
 // - "//text" sends "/text" as story text (the escape for a message that starts with a slash);
 // - anything else is story text, trimmed.
 
+import { ENTRY_TYPES, type EntryType } from '../agents/compendium/types.ts';
 import { ConfigError, splitBinding } from '../config/config.ts';
 
 export type RoleName = 'narrator' | 'director' | 'recorder' | 'recall';
@@ -59,15 +60,30 @@ export type Command =
   | { name: 'preview'; at?: { n: number } | { id: string }; wire: boolean; verdicts: boolean }
   /** /probe alone: how to probe from the shell; /probe --active [--write]: probe the narrator's model (M3). */
   | { name: 'probe'; active?: true; write?: boolean }
-  /** M3 (§7.4.9 subset, decision F6): the notes of this path. `ref` is C<n>, a key or a unique title. */
-  | { name: 'memory'; action: 'list' }
+  /**
+   * M5a (§7.4.9, D-161): the Compendium of this path. `ref` is C<n>, a key or a unique name. /memory and
+   * /memory list [type|note|arc] [--retired]: the entries by tree bucket (live only unless --retired).
+   */
+  | { name: 'memory'; action: 'list'; type?: EntryType | 'note' | 'arc'; retired?: true }
   | { name: 'memory'; action: 'show'; ref: string }
+  /** /memory tree [book]: the session's tree, then one per readable book (or only that book's). */
+  | { name: 'memory'; action: 'tree'; book?: string }
+  /** /memory new <type> [name] (D-160): a JSON template in the editor, then memoryFile. */
+  | { name: 'memory'; action: 'new'; type: EntryType; entryName?: string }
   /** /memory add <title> | <keys> | <content>: keys comma-separated; [] lets the session key it by its title. */
   | { name: 'memory'; action: 'add'; title: string; keys: string[]; content: string }
-  /** /memory edit <ref> <title> | <keys> | <content>: an empty (or missing) part keeps the old value. */
+  /**
+   * /memory edit <ref>: the editor (a typed entry's or an arc's JSON, a note's text, D-160); without a
+   * '|' the whole rest of the line is the ref (section I). With a '|', a note's one-line change (M3:
+   * <ref> <title> | <keys> | <content>; an empty or missing part keeps the old value).
+   */
   | { name: 'memory'; action: 'edit'; ref: string; title?: string; keys?: string[]; content?: string }
   | { name: 'memory'; action: 'retire'; ref: string; reason?: string }
   | { name: 'memory'; action: 'restore'; ref: string }
+  /** /memory export <name> [--format core|compendium] [--force] (D-163); format absent = core. */
+  | { name: 'memory'; action: 'export'; exportName: string; format?: 'core' | 'compendium'; force?: true }
+  /** /memory on|off (the lead's ruling after the review): compendium.enabled of this session; entries are kept either way. */
+  | { name: 'memory'; action: 'on' | 'off' }
   /** /search <query> [before=<n>] (§7.5): the narrator's search_history over this path. */
   | { name: 'search'; query: string; before?: number }
   /** M4 (D-113): /director (= show), /director show|on|off. */
@@ -124,8 +140,9 @@ export function commandClass(c: Command): CommandClass {
     case 'search':
       return 'read';
     case 'memory':
-      // Notes are written to the journal: refused mid-turn like any other edit (session_busy).
-      return c.action === 'list' || c.action === 'show' ? 'read' : 'edit';
+      // Rows are written to the journal: refused mid-turn like any other edit (session_busy); an
+      // export writes no row but is refused mid-turn too (D-159: one rule for every memory verb).
+      return c.action === 'list' || c.action === 'show' || c.action === 'tree' ? 'read' : 'edit';
     case 'director':
       return c.action === 'show' ? 'read' : 'edit';
     default:
@@ -139,8 +156,15 @@ const LATER: Readonly<Record<string, string>> = {
   impersonate: 'M9 (draft)',
 };
 
-/** §7.4.9 /memory subcommands of the Compendium (M5); M3 has list, show, add, edit, retire, restore. */
-const MEMORY_LATER: readonly string[] = ['tree', 'new', 'undo', 'refile', 'retry', 'recall', 'export', 'profile', 'mode'];
+/** §7.4.9 /memory subcommands of the Compendium's later parts: the agents (M5b) and recall (M5c). */
+const MEMORY_LATER: Readonly<Record<string, string>> = {
+  undo: 'M5b (Compendium agents)',
+  refile: 'M5b (Compendium agents)',
+  retry: 'M5b (Compendium agents)',
+  recall: 'M5c (recall)',
+  profile: 'M5c (recall)',
+  mode: 'M5c (recall)',
+};
 
 /** Default author's note depth (SillyTavern's default). */
 export const DEFAULT_NOTE_DEPTH = 4;
@@ -301,8 +325,10 @@ function parseProbe(rest: string): ParsedLine {
 }
 
 const ADD_USAGE = '/memory add <title> | <keys> | <text>, e.g. /memory add Brother | Yan, brother | Mira\'s brother Yan sails the north road (keys may be empty)';
-const EDIT_USAGE = '/memory edit <ref> <title> | <keys> | <text> (an empty part keeps the old value)';
-const REF_HINT = 'its C<n> as /memory lists it, its key, or its title';
+const EDIT_USAGE = '/memory edit <ref> opens an entry in the editor; a note also takes <ref> <title> | <keys> | <text> (an empty part keeps the old value)';
+const REF_HINT = 'its C<n> as /memory lists it, its key, or its name';
+const EXPORT_USAGE = '/memory export <name> [--format core|compendium] [--force]';
+const SUBCOMMANDS = 'list, show, tree, new, add, edit, retire, restore, export, on, off';
 
 /**
  * The note a command names, then the rest of the line: a quoted ref ("Old lighthouse") may hold
@@ -327,23 +353,102 @@ const splitKeys = (s: string): string[] =>
     .map((k) => k.trim())
     .filter((k) => k !== '');
 
-/** /memory [list|show|add|edit|retire|restore] (decision F6); the M5 subcommands are 'later'. */
+/** An entry type as typed (any case; a plural "characters" too), or null. */
+function entryTypeOf(word: string): EntryType | null {
+  const w = word.toLowerCase();
+  for (const t of ENTRY_TYPES) if (w === t || w === `${t}s` || (t === 'summary' && w === 'summaries')) return t;
+  return null;
+}
+
+/** /memory list [type|note|arc] [--retired]: what to keep, or the error. */
+function parseMemoryList(words: readonly string[]): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  let type: EntryType | 'note' | 'arc' | undefined;
+  let retired = false;
+  for (const w of words) {
+    if (w === '--retired') {
+      retired = true;
+      continue;
+    }
+    if (w.startsWith('--')) return err(`/memory list: unknown flag ${w} (it takes [type|note|arc] [--retired])`);
+    const lower = w.toLowerCase();
+    const t = lower === 'note' || lower === 'notes' ? 'note' : lower === 'arc' || lower === 'arcs' ? 'arc' : entryTypeOf(w);
+    if (t === null) return err(`/memory list: "${w}" is not an entry type (${ENTRY_TYPES.join(', ')}, note, arc)`);
+    if (type !== undefined) return err('/memory list takes one type (or note, or arc)');
+    type = t;
+  }
+  return { kind: 'command', command: { name: 'memory', action: 'list', ...(type !== undefined ? { type } : {}), ...(retired ? { retired: true as const } : {}) } };
+}
+
+/** /memory new <type> [name]: the type, then the rest of the line (outer quotes removed) as the name. */
+function parseMemoryNew(arg: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const m = /^(\S+)\s*([\s\S]*)$/.exec(arg);
+  if (!m) return err(`/memory new needs a type: ${ENTRY_TYPES.join(', ')} (then a name if you like)`);
+  const word = m[1]!.toLowerCase();
+  if (word === 'note' || word === 'notes') return err(`/memory new files a typed entry; a note is written with ${ADD_USAGE.split(',')[0]}`);
+  const type = entryTypeOf(word);
+  if (type === null) return err(`/memory new: "${m[1]}" is not an entry type (${ENTRY_TYPES.join(', ')})`);
+  const name = unquote(m[2]!);
+  return { kind: 'command', command: { name: 'memory', action: 'new', type, ...(name !== '' ? { entryName: name } : {}) } };
+}
+
+/** /memory export <name> [--format core|compendium] [--force]: the words left after the flags are the name. */
+function parseMemoryExport(arg: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const words = arg === '' ? [] : arg.split(/\s+/);
+  const name: string[] = [];
+  let format: 'core' | 'compendium' | undefined;
+  let force = false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (w === '--force') {
+      force = true;
+    } else if (w === '--format' || w.startsWith('--format=')) {
+      if (format !== undefined) return err('/memory export: --format given twice');
+      const v = w === '--format' ? words[++i] : w.slice('--format='.length);
+      if (v !== 'core' && v !== 'compendium') return err(`/memory export: --format takes core or compendium${v ? `, got "${v}"` : ''}`);
+      format = v;
+    } else if (w.startsWith('--')) {
+      return err(`/memory export: unknown flag ${w} (${EXPORT_USAGE})`);
+    } else {
+      name.push(w);
+    }
+  }
+  const exportName = unquote(name.join(' '));
+  if (exportName === '') return err(`/memory export needs a name: ${EXPORT_USAGE}`);
+  return {
+    kind: 'command',
+    command: { name: 'memory', action: 'export', exportName, ...(format !== undefined ? { format } : {}), ...(force ? { force: true as const } : {}) },
+  };
+}
+
+/** /memory [list|show|tree|new|add|edit|retire|restore|export|on|off] (D-161); the agents' and recall's subcommands are 'later'. */
 function parseMemory(rest: string): ParsedLine {
   const m = /^(\S+)\s*([\s\S]*)$/.exec(rest);
   const sub = m ? m[1]!.toLowerCase() : '';
   const arg = m ? m[2]!.trim() : '';
   const err = (message: string): ParsedLine => ({ kind: 'error', message });
   const cmd = (command: Command): ParsedLine => ({ kind: 'command', command });
+  // `/memory --retired` lists too.
+  if (sub.startsWith('--')) return parseMemoryList(rest.split(/\s+/));
   switch (sub) {
     case '':
     case 'list':
-      return arg === '' ? cmd({ name: 'memory', action: 'list' }) : err('/memory list takes no arguments yet (entry types and --retired arrive with the Compendium, M5)');
+      return parseMemoryList(arg === '' ? [] : arg.split(/\s+/));
     case 'show':
     case 'restore': {
       const ref = unquote(arg);
-      if (ref === '') return err(`/memory ${sub} needs a note: ${REF_HINT}`);
+      if (ref === '') return err(`/memory ${sub} needs an entry: ${REF_HINT}`);
       return cmd({ name: 'memory', action: sub === 'show' ? 'show' : 'restore', ref });
     }
+    case 'tree': {
+      const book = unquote(arg);
+      if (/\s/.test(book)) return err('/memory tree takes at most one book (its library id, as /lore lists it)');
+      return cmd({ name: 'memory', action: 'tree', ...(book !== '' ? { book } : {}) });
+    }
+    case 'new':
+      return parseMemoryNew(arg);
     case 'add': {
       const [title, keys, ...text] = arg.split('|');
       if (keys === undefined || text.length === 0) return err(`usage: ${ADD_USAGE}`);
@@ -353,8 +458,19 @@ function parseMemory(rest: string): ParsedLine {
       return cmd({ name: 'memory', action: 'add', title: title!.trim(), keys: splitKeys(keys), content });
     }
     case 'edit': {
+      // Without a '|' the whole rest is the ref, a name with spaces too, and it opens the editor
+      // (D-160, section I); with one, or after a handle or key (`/memory edit C2 Uncle`, M3's
+      // title-only rename), it is a note's <ref> <title> | <keys> | <text> (M3).
+      const head = takeRef(arg);
+      const handleFirst = head !== null && head.rest !== '' && /^(?:[CcСс]\d+|[^\s:]+:\S+)$/u.test(head.ref);
+      if (!arg.includes('|') && !handleFirst) {
+        const ref = unquote(arg);
+        if (ref === '') return err(`usage: ${EDIT_USAGE}`);
+        return cmd({ name: 'memory', action: 'edit', ref });
+      }
       const r = takeRef(arg);
       if (!r || r.ref === '') return err(`usage: ${EDIT_USAGE}`);
+      if (r.rest === '') return cmd({ name: 'memory', action: 'edit', ref: r.ref });
       const [title, keys, ...text] = r.rest.split('|');
       const change: { title?: string; keys?: string[]; content?: string } = {};
       if (title !== undefined && title.trim() !== '') change.title = title.trim();
@@ -365,12 +481,20 @@ function parseMemory(rest: string): ParsedLine {
     }
     case 'retire': {
       const r = takeRef(arg);
-      if (!r || r.ref === '') return err(`/memory retire needs a note (${REF_HINT}), then an optional reason`);
+      if (!r || r.ref === '') return err(`/memory retire needs an entry (${REF_HINT}), then an optional reason`);
       return cmd({ name: 'memory', action: 'retire', ref: r.ref, ...(r.rest !== '' ? { reason: r.rest } : {}) });
     }
-    default:
-      if (MEMORY_LATER.includes(sub)) return cmd({ name: 'later', command: `memory ${sub}`, when: 'M5 (Compendium)' });
-      return err(`/memory: "${m![1]}" is not a subcommand; /memory lists your notes, then show, add, edit, retire, restore`);
+    case 'export':
+      return parseMemoryExport(arg);
+    case 'on':
+    case 'off':
+      if (arg !== '') return err(`/memory ${sub} takes nothing after it (/memory on sends the Compendium's entries, /memory off stops it)`);
+      return cmd({ name: 'memory', action: sub });
+    default: {
+      const when = Object.hasOwn(MEMORY_LATER, sub) ? MEMORY_LATER[sub] : undefined;
+      if (when !== undefined) return cmd({ name: 'later', command: `memory ${sub}`, when });
+      return err(`/memory: "${m![1]}" is not a subcommand; /memory lists the Compendium, then ${SUBCOMMANDS.split(', ').slice(1).join(', ')}`);
+    }
   }
 }
 
@@ -483,7 +607,7 @@ export function resolveBindingArg(
   return { ok: true, value: parts };
 }
 
-/** /help text (the M4 set; later commands are listed with their milestone). */
+/** /help text (the M5a set; later commands are listed with their milestone). */
 export function helpText(): string {
   return [
     'Type to speak. Commands:',
@@ -502,10 +626,15 @@ export function helpText(): string {
     '  /show              the story so far, numbered      /usage   tokens and cost of this path',
     '  /trace             what the last answer\'s prompt held: the lore that fired, and why the rest did not; its tool rounds',
     '  /search <words> [before=n]   find earlier messages on this path, newest first (what the narrator\'s search_history finds)',
-    '  /memory            your notes; /memory show <ref> (ref: C<n>, its key or its title)',
+    '  /memory [list] [type|note|arc] [--retired]   the Compendium of this path by bucket: C<n>, name, tagline, book, size',
+    '  /memory show <ref>, /memory tree [book]   one entry and where it came from (ref: C<n>, its key or its name); the tree',
+    '  /memory new <type> [name]   file an entry: its JSON template opens in the editor (character, location, item, …)',
+    '  /memory edit <ref>  change an entry in the editor (a typed entry\'s or an arc\'s JSON, a note\'s text)',
     '  /memory add <title> | <keys> | <text>    a note: sent to the narrator when one of its keys comes up',
-    '  /memory edit <ref> <title> | <keys> | <text>    change a note (an empty part keeps the old value)',
-    '  /memory retire <ref> [reason], /memory restore <ref>    stop a note firing / bring it back',
+    '  /memory edit <ref> <title> | <keys> | <text>    change a note in one line (an empty part keeps the old value)',
+    '  /memory retire <ref> [reason], /memory restore <ref>    take an entry out of the story / bring it back',
+    '  /memory export <name> [--format core|compendium] [--force]   copy this session\'s entries to a library lorebook or a RoleCall file',
+    '  /memory on|off     send the Compendium\'s entries with every reply, or stop sending them (they are kept)',
     '  /director          the Story Director\'s plan: chapter, arcs, seeds, hidden arcs, the last directive',
     '  /director on|off   let the Director plan every reply, or stop it (its plan is kept)',
     '  /probe             how to probe a server; /probe --active [--write] tests the narrator\'s model (a few tiny calls)',
@@ -516,7 +645,7 @@ export function helpText(): string {
     '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',
-    'Later: /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).',
+    'Later: /memory undo|refile|retry (M5b, the Compendium agents), /memory recall|profile|mode (M5c, recall).',
     'Start a line with // to send text that begins with "/".',
   ].join('\n');
 }

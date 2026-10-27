@@ -8,7 +8,8 @@
 // config.toml's connections behind every turn. M2: import of presets and world info, new --preset /
 // --lore, preview, --provider record:/replay:. M3: probe --active, a script's caps line, tool lines
 // in send's text mode. M4.5: tui and new --tui
-// (the full-screen host; OpenTUI is imported dynamically on that path only). `--stdio` comes in M6.
+// (the full-screen host; OpenTUI is imported dynamically on that path only). M5a: --keep-requests on
+// chat, tui and new (D-164). `--stdio` comes in M6.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
@@ -54,6 +55,10 @@ const PROVIDER_HELP = `  --provider script:<file>  play a scripted provider (JSO
   --provider replay:<file>  play a recording back instead of the network; a request that differs
                             from the recorded one fails with replay_mismatch and a diff`;
 const PROVIDER_FLAG = '--provider script:<f>|record:<f>|replay:<f>';
+const KEEP_HELP = `  --keep-requests           keep every provider request of a turn in
+                            <home>/sessions/<session>.requests/<call key>.json: the engine's
+                            provider-level request for each model call (messages, tools, samplers),
+                            not the HTTP body (/preview --wire shows that), never headers or keys`;
 /** tui/run.ts NEEDS_TERMINAL, repeated here so main never loads OpenTUI to say it. */
 const NEEDS_TERMINAL = 'rp-core tui needs a terminal; use rp-core chat';
 
@@ -79,8 +84,9 @@ unless the file exists, and prints its path. Edit [connections] and [roles] narr
       provider: 'string',
       preset: 'string',
       lore: 'list',
+      'keep-requests': 'bool',
     },
-    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <json file>] [--title text] [--tui | --no-chat] [--json] [${PROVIDER_FLAG}]`,
+    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <json file>] [--title text] [--tui | --no-chat] [--json] [--keep-requests] [${PROVIDER_FLAG}]`,
     summary: 'import a card and start a session (opens the chat on a terminal)',
     help: `Imports the card (PNG or JSON, CCv1/V2/V3) into the library and creates a session with its
 greetings; its config starts from config.toml ([roles], [narrator], [director]). On a terminal
@@ -100,11 +106,12 @@ the chat opens right away; otherwise (or with --no-chat / --json) the session id
   --tui               open the new session full-screen (rp-core tui) instead of the line REPL
   --no-chat           only create the session and print its id
   --json              print {"sessionId","title","greetings":[{id,text}]} (implies --no-chat)
+${KEEP_HELP}
 ${PROVIDER_HELP}`,
   },
   chat: {
-    flags: { provider: 'string' },
-    usage: `rp-core chat <session> [${PROVIDER_FLAG}]`,
+    flags: { provider: 'string', 'keep-requests': 'bool' },
+    usage: `rp-core chat <session> [--keep-requests] [${PROVIDER_FLAG}]`,
     summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, /preset, /lore, /memory, /search, ...)',
     help: `Opens the session (lock + recovery of an interrupted answer) and reads lines: text is your
 message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /tails, /goto,
@@ -113,13 +120,14 @@ message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /t
 banner says whether the narrator can use tools (native, prompted or off). Ctrl+C stops an answer and keeps
 what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
 previous answer.
+${KEEP_HELP}
 ${PROVIDER_HELP}
 Exit 0 at /quit or the end of input; 3 under --provider script: or replay: when an answer failed
 (a piped script or replay also stops at the first replay_mismatch, or when it runs out of calls).`,
   },
   tui: {
-    flags: { provider: 'string' },
-    usage: `rp-core tui <session> [${PROVIDER_FLAG}]`,
+    flags: { provider: 'string', 'keep-requests': 'bool' },
+    usage: `rp-core tui <session> [--keep-requests] [${PROVIDER_FLAG}]`,
     summary: 'open a session full-screen: models, chat and agents side by side (needs a terminal)',
     help: `The same chat as rp-core chat (every slash command, held lines, Ctrl+C rules), on one screen:
 the models and hotkeys on the left, the chat in the middle, the agents and their tool calls on the
@@ -130,6 +138,7 @@ PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel
 stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
 Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes
 and scripts use rp-core chat.
+${KEEP_HELP}
 ${PROVIDER_HELP}
 Exit 0 at /quit; 3 under --provider script: or replay: when an answer failed; 64 without a terminal.`,
   },
@@ -138,12 +147,13 @@ Exit 0 at /quit; 3 under --provider script: or replay: when an answer failed; 64
     usage: 'rp-core import <file> [--as name] [--json]',
     summary: 'import a card, preset or lorebook into the library; prints its library id',
     help: `Detects the file and converts it to the native format, in this order: PNG card, JSON card
-(CCv1/V2/V3), SillyTavern chat-completion preset, SillyTavern world info, a bare character_book.
+(CCv1/V2/V3), SillyTavern chat-completion preset, RoleCall Compendium export (compendium-v1.0.0),
+SillyTavern world info, a bare character_book.
 It lands in library/characters, library/presets or library/lorebooks as <id>.json, where id is
 the name in lower case with its words joined by "-". The name is the file's own name field when
-it has one (cards and character_books do); SillyTavern writes none into presets and world info,
-so those are named after the file: "My Preset.json" becomes my-preset. The preset id "builtin"
-is the built-in layout's: a preset of that name becomes builtin-2.
+it has one (cards, Compendium exports and character_books do); SillyTavern writes none into
+presets and world info, so those are named after the file: "My Preset.json" becomes my-preset.
+The preset id "builtin" is the built-in layout's: a preset of that name becomes builtin-2.
 Importing the same file twice is a no-op; a different file with the same name gets id-2.
 Warnings name what the file holds that rp-core does not honour.
   --as <name>  save under this name instead
@@ -256,7 +266,7 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M4)
+  return `rp-core — headless roleplay agent core (milestone M5a)
 
 Usage: rp-core <command> [flags]
 
@@ -321,12 +331,15 @@ function providerOf(p: Parsed, command: string, interactive = false): PreparedPr
 
 /**
  * config.toml and its connections, with --provider attached (script/replay: the override; record:
- * every connection wrapped). ConfigError propagates to main (exit 64). --debug wires the raw-failure tap.
+ * every connection wrapped). ConfigError propagates to main (exit 64). --debug wires the raw-failure tap,
+ * --keep-requests the engine's request keeper.
  */
 function runtimeOf(home: Home, deps: MainDeps, p: Parsed, provider?: PreparedProvider): Runtime {
   const debug = bool(p, 'debug') ? (line: string): void => deps.io.err.write(`rp-core: debug: ${line}\n`) : undefined;
   const rt = loadRuntime(home.dir, deps.env, debug ? { debug } : {});
   provider?.attach(rt);
+  // Only chat, tui and new know the flag; the others' parse refuses it.
+  if (bool(p, 'keep-requests')) rt.keepRequests = true;
   return rt;
 }
 

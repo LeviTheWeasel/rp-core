@@ -62,7 +62,7 @@ export function msg(id: string, role: 'user' | 'assistant', text: string, opts: 
 }
 
 /** The empty Compendium (agents/compendium EMPTY_COMPENDIUM), inline: M2 has no such module. */
-const NO_NOTES = { entries: new Map(), rev: '', lastSeq: 0, issues: [] } as unknown as PathView['compendium'];
+const NO_NOTES = { entries: new Map(), rev: '', lastSeq: 0, issues: [], tasks: new Map(), effects: [] } as unknown as PathView['compendium'];
 
 export function chain(msgs: MessageView[]): PathView {
   const linked = msgs.map((x, i) => ({ ...x, parent: i === 0 ? null : msgs[i - 1]!.id }));

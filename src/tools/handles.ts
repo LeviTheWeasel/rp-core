@@ -2,20 +2,22 @@
 // Copyright (C) 2026 the rp-core authors
 //
 // Short handles for records the tools show (ARCHITECTURE.md §9.2, D-59 as amended in M3 decisions
-// K): models garble long ids, so search_lore shows 'L12' for a lore entry and 'C3' for a Compendium
-// record (a note), and read_lore maps them back.
+// K and by .notes/m5a-decisions.md D-150): models garble long ids, so search_lore shows 'L12' for a
+// lore entry and 'C3' for a Compendium entry, and read_lore maps them back.
 // - L<n>: per turn, from 1 in order of first appearance; a turn has one table, so a handle means the
 //   same entry in every round of that turn.
-// - C<n> of a note: its /memory handle (noteRefs: creation order of all notes on the path, from 1),
-//   once the table is bound to the turn's Compendium (constructor or bindNotes); stable across turns,
-//   and every note of the view resolves, listed this turn or not. Unbound, C<n> falls back to first
-//   appearance; a Compendium record that is not a note is numbered after the notes.
+// - C<n>: the entry's handle in the view's one numbering (agents/compendium/refs.ts entryRefs: the
+//   library seed first, then session entries in creation order; retired entries keep their numbers),
+//   once the table is bound to the turn's Compendium (constructor or bindNotes). `/memory`, the tools
+//   and the Compendium block's brief tail print the same C<n>; every entry of the view resolves,
+//   listed this turn or not. A key the bound view does not hold (or any key, unbound) is numbered
+//   after the view's entries in order of first appearance.
 // CONTRACT FILE (M3): signatures are fixed; the tools-run agent implements the bodies.
 //
 // The idea (no code) is Bunraku's `e<n>` entry handles (studio/dramaturg-tools.ts) and RoleCall's
 // toReadableId; both found that models copy short handles back intact and long ids not.
 
-import { noteRefs } from '../agents/compendium/notes.ts';
+import { entryRefs } from '../agents/compendium/refs.ts';
 import type { CompendiumView } from '../agents/compendium/types.ts';
 
 export type HandleTarget = { kind: 'lore'; book: string; id: string } | { kind: 'compendium'; key: string };
@@ -47,10 +49,10 @@ export class HandleTable {
   private readonly byHandle = new Map<string, HandleTarget>();
   private lore = 0;
   private compendium = 0;
-  /** The Compendium the notes' numbers come from (D-59 amended); undefined until bound. */
-  private notes: CompendiumView | undefined;
-  /** Notes in the bound view: C1..C<noteCount> are theirs; other Compendium records come after. */
-  private noteCount = 0;
+  /** The Compendium the C numbers come from (D-150); undefined until bound. */
+  private bound: CompendiumView | undefined;
+  /** Entries in the bound view: C1..C<size> are theirs; keys outside it come after. */
+  private size = 0;
 
   /** A table for one turn; with `notes`, bound to that Compendium at once (see bindNotes). */
   constructor(notes?: CompendiumView) {
@@ -58,22 +60,23 @@ export class HandleTable {
   }
 
   /**
-   * D-59 (amended): number notes as /memory does. Every note of `view` (live and retired, noteRefs
-   * order) gets C<n>, its /memory handle, so a lookup line's C3 and `/memory show C3` are the same
-   * note, across turns too, and read_lore resolves C<n> before any search listed it. Binding the
-   * same view again does nothing; another view replaces every C handle (L handles stay).
+   * D-150: number the Compendium as /memory does. Every entry of `view` (notes, typed entries, arcs,
+   * library entries; live and retired) gets its entryRefs handle C<n>, so a lookup line's C12, the
+   * block's `(more: read_lore C12)` and `/memory show C12` are the same entry, across turns too, and
+   * read_lore resolves C<n> before any search listed it. Binding the same view again does nothing;
+   * another view replaces every C handle (L handles stay). The name is M3's (it bound notes only).
    */
   bindNotes(view: CompendiumView): void {
-    if (this.notes === view) return;
-    this.notes = view;
+    if (this.bound === view) return;
+    this.bound = view;
     for (const [handle, target] of [...this.byHandle]) {
       if (target.kind !== 'compendium') continue;
       this.byHandle.delete(handle);
       this.byTarget.delete(keyOf(target));
     }
     this.compendium = 0;
-    const refs = view.entries === undefined ? [] : noteRefs(view);
-    this.noteCount = refs.length;
+    const refs = view.entries === undefined ? [] : entryRefs(view);
+    this.size = refs.length;
     for (const { ref, entry } of refs) {
       const target: HandleTarget = { kind: 'compendium', key: entry.key };
       this.byTarget.set(keyOf(target), ref);
@@ -81,12 +84,12 @@ export class HandleTable {
     }
   }
 
-  /** The handle of a target, issuing the next number on first sight (a bound note already has its own). */
+  /** The handle of a target, issuing the next number on first sight (an entry of the bound view already has its own). */
   handleFor(target: HandleTarget): string {
     const key = keyOf(target);
     const known = this.byTarget.get(key);
     if (known !== undefined) return known;
-    const handle = target.kind === 'lore' ? `L${++this.lore}` : `C${this.noteCount + ++this.compendium}`;
+    const handle = target.kind === 'lore' ? `L${++this.lore}` : `C${this.size + ++this.compendium}`;
     this.byTarget.set(key, handle);
     this.byHandle.set(handle, target.kind === 'lore' ? { kind: 'lore', book: target.book, id: target.id } : { kind: 'compendium', key: target.key });
     return handle;

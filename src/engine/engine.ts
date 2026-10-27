@@ -63,6 +63,7 @@ export class Engine {
       ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
       ...(opts.prices ? { prices: { ...opts.prices } } : {}),
       ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
+      ...(opts.keepRequests === true ? { keepRequests: true } : {}),
       ...(opts.toolSets ? { toolSets: opts.toolSets } : {}),
     };
     return new EngineImpl(ctx);

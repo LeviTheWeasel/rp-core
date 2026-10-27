@@ -1,0 +1,20 @@
+/lore add lantern
+/memory tree
+/memory list
+/memory new character Мира
+/memory show Мира
+/director on
+— Отдай это Мире, — говорю я лодочнику. — Она ждёт у маяка.
+/trace
+/preview
+/memory edit Ульяна
+/memory show Ульяна
+/memory tree
+/r
+/memory list character
+/rewind 2
+/memory list character
+/fork
+/memory list character
+/memory export lantern2 --format compendium
+/quit

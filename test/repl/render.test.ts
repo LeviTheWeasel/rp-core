@@ -156,7 +156,10 @@ describe('sideLine and notices', () => {
     expect(sideLine(ev({ type: 'director', turnId: 't', status: 'planned' }))).toBe('⋯ director: planned');
     expect(sideLine(ev({ type: 'agent', agent: 'recall', status: 'recalled', count: 2 }))).toBe('⋯ recall: recalled (2)');
     expect(sideLine(ev({ type: 'agent', agent: 'filing', status: 'queued' }))).toBeNull();
-    expect(sideLine(ev({ type: 'memory', change: 'created', ref: 'r', kind: 'npc', name: 'Old Tom', by: 'filing' }))).toBe('⋯ memory: created npc "Old Tom"');
+    // M5a: the kind and the name first, then what happened (and who did it, unless you).
+    expect(sideLine(ev({ type: 'memory', change: 'created', ref: 'r', kind: 'npc', name: 'Old Tom', by: 'filing' }))).toBe('⋯ memory: npc "Old Tom" created by filing');
+    expect(sideLine(ev({ type: 'memory', change: 'note', ref: 'note:lamp', kind: 'note', name: 'Lamp', by: 'user' }))).toBe('⋯ memory: note "Lamp" added');
+    expect(sideLine(ev({ type: 'memory', change: 'arc', ref: 'arc:x', kind: 'arc', name: 'Last fire', by: 'historian' }))).toBe('⋯ memory: arc "Last fire" overview written by historian');
     expect(sideLine(ev({ type: 'retry', callKey: 'k', attempt: 1, delayMs: 1500, code: 'rate_limited', status: 429 }))).toBe(
       '⋯ retrying in 1.5 s (rate_limited, HTTP 429)',
     );

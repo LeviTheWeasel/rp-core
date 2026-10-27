@@ -14,13 +14,14 @@ import { Engine } from '../engine/engine.ts';
 import type { EngineHandle, EngineOptions, SessionHandle } from '../engine/api.ts';
 import { CONFIG_TEMPLATE, configPath } from '../config/config.ts';
 import { openTurns } from '../engine/recover.ts';
+import { loadLibrary } from '../engine/request.ts';
 import { parseModelRef } from '../engine/route.ts';
 import { systemClock } from '../engine/system.ts';
 import { importCard, importFile, ImportError } from '../formats/import.ts';
 import { loadFromLibrary } from '../formats/library.ts';
 import { validateCharacter, validatePersona, type Character, type ImportWarning, type Persona } from '../formats/native.ts';
 import type { DeepPartial, Entry, SessionConfig } from '../session/entries.ts';
-import { foldView, mergePatch } from '../session/fold.ts';
+import { currentConfig, foldView, mergePatch } from '../session/fold.ts';
 import { DEFAULT_LOCK_TTL_MS, isLockStale, listSessions, readLock, readSessionFile, SessionNotFoundError } from '../session/log.ts';
 import { UsageError } from './args.ts';
 import type { Io } from './io.ts';
@@ -352,7 +353,10 @@ export function cmdShow(a: { home: string; id: string; json: boolean; io: Io }):
     throw e;
   }
   for (const n of file.notices) a.io.err.write(`rp-core: warning: ${n.message}${n.line ? ` (line ${n.line})` : ''}\n`);
-  const view = foldView(file.header, file.entries);
+  // Folded as an open session folds it (its library seed included, D-141), so whatever this view
+  // numbers carries the handles /memory gives the same entries.
+  const seed = loadLibrary(a.home, currentConfig(file.header, file.entries), file.header.cast).seed;
+  const view = foldView(file.header, file.entries, undefined, { library: seed });
   if (a.json) a.io.out.write(`${JSON.stringify(view.path)}\n`);
   else a.io.out.write(renderPath(view, file.header));
   const hint = unclosedTurnsHint(a.home, a.id, file.entries);

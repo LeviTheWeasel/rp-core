@@ -19,7 +19,13 @@
 // preset errors. Not taken: RoleCall's several macro passes, stripping of unknown macros, macro
 // expansion of history, the character prompt reserve that is never sent, the 60 % pre-trim (§19.3
 // "Не переносить").
+// M5a (D-155): with Compendium candidates the lore run gets (1 − minShare) of the lore budget and
+// the block (agents/compendium/place.ts) what the lore left, as one fixed system insert at depth 1;
+// without the input, or with no candidates, the request is exactly M4's.
 
+import type { CompendiumBlockInput } from '../agents/compendium/types.ts';
+import { placeBlock } from '../agents/compendium/place.ts';
+import { DEFAULT_MIN_SHARE } from '../agents/compendium/profile.ts';
 import type { Character, Persona, Preset, PresetBlock } from '../formats/native.ts';
 import { entryLabel, type LoreRunResult, type LoreSource, type LoreVerdict } from '../lore/engine.ts';
 import type { LorePlacement } from '../lore/place.ts';
@@ -94,6 +100,12 @@ export interface AssembleInput {
    * `cast`; assemble puts them first (persona, card, these), as ST's "character first" strategy.
    */
   lorebooks: LoreSource[];
+  /**
+   * M5a (the lead's ruling I): `lorebooks` as loaded, before routing took the Compendium's entries
+   * out of them (D-142): the same keys in the same order. trace.loreHashes hashes these, so the
+   * Compendium turned on or off never reads as a changed book. Absent: `lorebooks` (nothing routed).
+   */
+  booksAsLoaded?: LoreSource[];
   /** M2 [D-45]: also return one lore verdict per entry (preview, /lore test). */
   explain?: boolean;
   /** M2: how tokens are counted (default defaultCounter(): o200k). Tests that pin numbers pass CHARS_COUNTER. */
@@ -129,6 +141,15 @@ export interface AssembleInput {
    * gap note). Absent: the M3 request exactly.
    */
   contract?: string;
+  /**
+   * M5a (D-155): the Compendium's candidates for this request (the request builder runs the
+   * selector and renders the texts). With ≥ 1 candidate the lore run's budget is
+   * floor(loreBudget × (1 − minShare)) and the block takes at most what the lore run left of
+   * loreBudget (capped by limits.blockTok): one system insert at depth 1, src 'compendium:block',
+   * with no order (below lore and the author's note, above the Director by source rank), fixed.
+   * Present → trace.compendium is written (picks: [] with no candidates). Absent: the M4 request.
+   */
+  compendium?: CompendiumBlockInput;
   prefillVsTools: 'prefill' | 'tools';
   /**
    * M3 (§8.4, DeepSeek): keep the raw reasoning blocks of the history's assistant messages generated
@@ -527,6 +548,18 @@ export function traceForSent(trace: Trace, messages: readonly PromptMsg[], prefi
   return { ...trace, blocks: rows.blocks, tokens: { ...trace.tokens, ...rows.tokens } };
 }
 
+// ---- M5a: the Compendium block (D-155) ----------------------------------------------------------
+
+/** The tool whose offer adds the brief's tail ('(more: read_lore C12)'). */
+const READ_LORE = 'read_lore';
+
+/** The lore run's budget: all of the lore budget, or (1 − minShare) of it when the block has candidates. */
+function loreRunBudget(share: number, compendium: CompendiumBlockInput | undefined): number {
+  if (compendium === undefined || compendium.candidates.length === 0) return share;
+  const min = Number.isFinite(compendium.minShare) ? Math.min(1, Math.max(0, compendium.minShare)) : DEFAULT_MIN_SHARE;
+  return Math.floor(share * (1 - min));
+}
+
 /** One system message holding lore texts joined with '\n', or none when they are blank. */
 function loreMsg(texts: readonly string[], src: string): PromptMsg[] {
   const text = texts.join('\n');
@@ -574,7 +607,8 @@ export function assemble(input: AssembleInput): AssembleResult {
   // template (D-42), expanded in this run under 'lore:<book>:<id>'; keys get identity macros only;
   // history stays inert. The budget is in corrected tokens, like everything else the budgets compare.
   const sources = loreSources(input.cast, input.lorebooks);
-  const budgetForLore = loreBudget(input.window, input.reserve);
+  const loreShare = loreBudget(input.window, input.reserve);
+  const budgetForLore = loreRunBudget(loreShare, input.compendium);
   const lore = runAssembleLore({
     sources,
     view: input.view,
@@ -620,6 +654,8 @@ export function assemble(input: AssembleInput): AssembleResult {
   if (noteText !== '') {
     inserts.push({ depth: note?.depth ?? DEFAULT_NOTE_DEPTH, role: note?.role ?? DEFAULT_NOTE_ROLE, src: 'author_note', text: noteText });
   }
+  // The Compendium block goes here, ahead of the agents' inserts, once the tools are known (below).
+  const blockAt = inserts.length;
   inserts.push(...input.placements);
   const g = input.guidance;
   if (g && g.text.trim() !== '') {
@@ -635,6 +671,20 @@ export function assemble(input: AssembleInput): AssembleResult {
   // tools.length > 0, never `core !== null`.
   const tools = prefill.tools;
   const offered = tools.length > 0;
+  // M5a (D-155): the block takes what the lore run left of the lore budget, counted like the lore
+  // (budget tokens); the brief's tail only when read_lore survived the prefill rule. Never trimmed:
+  // every insert is in the fixed part below.
+  const block = input.compendium
+    ? placeBlock(
+        input.compendium,
+        Math.max(0, loreShare - lore.run.used),
+        (text) => scaled(counter.count(text), factor),
+        tools.some((t) => t.name === READ_LORE),
+      )
+    : null;
+  if (block !== null && block.text !== null) {
+    inserts.splice(blockAt, 0, { depth: 1, role: 'system', src: 'compendium', srcId: 'block', text: block.text });
+  }
   const transport = input.caps.tools === 'prompted' ? 'prompted' : 'native';
   const core = coreBlock(tools, transport, input.contract);
   const echo = tools.length > 0 ? input.echoReasoning : undefined;
@@ -712,7 +762,9 @@ export function assemble(input: AssembleInput): AssembleResult {
     const s = (n: number): number => scaled(n, factor);
     const parts = [
       `the preset's blocks ${s(blocksTok + loreOwnTok)} (lore included: ${lore.run.used} of its budget ${budgetForLore})`,
-      ...(insertsTok > 0 ? [`in-chat inserts ${s(insertsTok)} (author's note, depth prompts, depth lore)`] : []),
+      ...(insertsTok > 0
+        ? [`in-chat inserts ${s(insertsTok)} (author's note, depth prompts, depth lore${block?.text ? ', the Compendium block' : ''})`]
+        : []),
       ...(prefillTok + cueTok + placeholderTok > 0 ? [`prefill and cues ${s(prefillTok + cueTok + placeholderTok)}`] : []),
       ...(toolsTok + gapTok > 0 ? [`${offered ? 'the tool instructions' : "the Director's contract"} ${s(toolsTok + gapTok)}`] : []),
       `your current message${tail > 1 ? ' and the answer it continues' : ''} ${tailTok}`,
@@ -762,13 +814,28 @@ export function assemble(input: AssembleInput): AssembleResult {
       ...(unsent ? { unsent } : {}),
     },
     recap: { ids: [], arcs: [], boundary: null },
+    ...(input.compendium && block
+      ? {
+          compendium: {
+            rev: input.compendium.rev,
+            source: 'lexical' as const,
+            profile: input.compendium.profile,
+            picks: input.compendium.candidates.map((c) => ({ ref: c.ref, key: c.key, via: c.via })),
+            injected: block.injected,
+            cut: block.cut,
+            repeated: block.repeated,
+            hidden: input.compendium.hidden,
+            budget: { share: loreShare, lore: lore.run.used, block: block.tok },
+          },
+        }
+      : {}),
     prefill: prefill.trace,
     macros: { unknown: run.unknown() },
     trimmed: cut.trimmed,
     calls: [],
     agents: {},
     presetHash: presetHash(preset),
-    loreHashes: loreHashes(sources),
+    loreHashes: loreHashes(input.booksAsLoaded ? loreSources(input.cast, input.booksAsLoaded) : sources),
     ...(sources.length > 0 ? { loreNames: loreNames(sources) } : {}),
   };
 

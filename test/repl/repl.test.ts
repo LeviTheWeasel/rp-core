@@ -225,7 +225,7 @@ describe('REPL: models and settings', () => {
 
   test('/usage sums the path, /trace summarises the last answer, unknown and later commands get hints', async () => {
     const r = await rig(calls([{ text: 'Priced.' }, { usage: { inputTotal: 1000, outputTotal: 100 } }]));
-    r.type('/trace', 'Hello', '/usage', '/trace', '/probe', '/memory tree', '/bogus');
+    r.type('/trace', 'Hello', '/usage', '/trace', '/probe', '/memory recall', '/bogus');
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
@@ -233,7 +233,7 @@ describe('REPL: models and settings', () => {
     expect(out).toContain('1 generation on this path · in 1000 tok · out 100 tok · cost $0.0012');
     expect(out).toMatch(/trace of [0-9a-f]{8} · script:default\n {2}window 8192 · reserve \d+ · prompt ~\d+ tok \(server: 1000\)/);
     expect(out).toContain('rp-core probe <connection>');
-    expect(out).toContain('/memory tree arrives with M5 (Compendium)');
+    expect(out).toContain('/memory recall arrives with M5c (recall)');
     expect(out).toContain('unknown command /bogus; /help lists the commands');
   });
 
@@ -377,9 +377,15 @@ describe('REPL: Ctrl+C, held lines, EOF', () => {
       search: (i) => s.search(i),
       notes: () => s.notes(),
       memoryAdd: (i) => s.memoryAdd(i),
+      memoryFile: (i) => s.memoryFile(i),
       memoryEdit: (i) => s.memoryEdit(i),
       memoryRetire: (i) => s.memoryRetire(i),
       memoryRestore: (i) => s.memoryRestore(i),
+      memoryList: (i) => s.memoryList(i),
+      memoryGet: (i) => s.memoryGet(i),
+      memoryTree: (i) => s.memoryTree(i),
+      memoryExport: (i) => s.memoryExport(i),
+      compendium: () => s.compendium(),
       close: () => s.close(),
     });
     const r = await rig(calls(), { wrap });

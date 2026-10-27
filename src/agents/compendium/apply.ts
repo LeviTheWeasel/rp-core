@@ -1,17 +1,40 @@
-// normalizeName ported from Bunraku:src/core/compendium/relationships.ts@702d8120 (line 39).
+// normalizeName ported from Bunraku:src/core/compendium/relationships.ts@702d8120 (line 39);
+// entryNames and findMatch from Bunraku:src/core/compendium/snapshot.ts@702d8120 (the identity match);
+// the `file` rules from Bunraku:src/core/compendium/filing-stage.ts@702d8120 (items applied in order
+// on the working state, classic names refused, required fields for a new entry).
 // Copyright (C) 2026 Coneja-Chibi; changes Copyright (C) 2026 the rp-core authors.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The Compendium fold over `mem` rows (ARCHITECTURE.md §5.8 "Свёртка"). M3: notes only — note,
-// edit, retire and restore over human notes; file, arc and revert are recorded as issues
-// ('not_until_m5') so a row written by a later version never breaks an M3 reader. Pure.
-// normalizeName: port of Bunraku src/core/compendium/relationships.ts:39 (Chi) with the D-46 word
-// class (\p{M} kept) plus NFKC and ё→е, so 'Ёж' and 'ёж' and 'Еж' name the same note (D-95).
-// CONTRACT FILE (M3): signatures are fixed; the memory agent implements the bodies.
+// The Compendium fold over `mem` rows (ARCHITECTURE.md §5.8; .notes/m5a-decisions.md D-141…D-150).
+// Pure. Pipeline (D-143):
+//   rowsOnPath = rows with `on` null or on the path
+//   fresh      = rowsOnPath without stale agent rows (an edit or hide newer than the row in its range)
+//   effective  = human rows + per task key the newest action (a row with that key, or a revert of it)
+//   fold(library seed, effective in seq order, applyOp)
+// Ops: note (M3), file (D-144), arc (D-145), edit (D-146), retire / restore (any entry), revert (consumed
+// by the filter). Ops address entries by key; a hand-written ref may also be C<n> or a name. A `file` op
+// is matched by name unless it is pinned (`target`, D-168: a verb's row keeps the key it was written for;
+// a pinned `lib:` entry must still answer to one of the op's names, ruling I).
+// normalizeName: Bunraku's rule with the D-46 word class (\p{M} kept) plus NFKC and ё→е (D-95).
+// Changes from Bunraku's findMatch: the candidates are the fold's live entries of the type, session
+// entries before library ones; untyped names are the readable books' (LibrarySeed.classic), never notes.
 
 import { createHash } from 'node:crypto';
-import type { MemEntry, MemOp } from '../../session/entries.ts';
-import type { CEntry, CompendiumView, FoldIssue, Rec } from './types.ts';
+import type { MemEntry } from '../../session/entries.ts';
+import { deriveTagline, IDENTITY_KEEP, identityField, isBlank, isEntryType, REQUIRED_FIELDS } from './entry-types.ts';
+import { mergeData } from './merge.ts';
+import {
+  EMPTY_SEED,
+  ENTRY_TYPES,
+  type CEntry,
+  type CompendiumView,
+  type EntryType,
+  type FoldIssue,
+  type LibrarySeed,
+  type OpEffect,
+  type Rec,
+  type TaskState,
+} from './types.ts';
 
 const NOT_NAME_CHAR = /[^\p{L}\p{N}\p{M}\s]/gu;
 const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
@@ -33,39 +56,300 @@ export function normalizeName(name: string): string {
   return HAS_LETTER_OR_DIGIT.test(out) ? out : '';
 }
 
+/** Texts a memo keeps (the oldest goes first): the fold meets the same names and texts on every refold. */
+const MEMO_MAX = 16_384;
+
+function remember(memo: Map<string, string>, text: string, compute: () => string): string {
+  const hit = memo.get(text);
+  if (hit !== undefined) return hit;
+  const out = compute();
+  if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value as string);
+  memo.set(text, out);
+  return out;
+}
+
+const NAME_MEMO = new Map<string, string>();
+/** normalizeName, remembered. */
+const norm = (name: string): string => remember(NAME_MEMO, name, () => normalizeName(name));
+
+const TAGLINE_MEMO = new Map<string, string>();
+/** deriveTagline, remembered by the text it is cut from (an explicit tagline is read as is). */
+function taglineOf(type: EntryType, data: Rec): string {
+  const source = type === 'summary' ? data.summary : data.description;
+  if ((typeof data.tagline === 'string' && data.tagline.trim() !== '') || typeof source !== 'string') return deriveTagline(type, data);
+  return remember(TAGLINE_MEMO, source, () => deriveTagline(type, data));
+}
+
 export interface FoldOptions {
   /** Messages on the path the view is folded for: a row with `on` set applies only when `on` is in it. */
   pathSet: ReadonlySet<string>;
+  /** The path's ids, root → leaf: agent rows' ranges are checked for staleness against it (D-143). Absent: no staleness. */
+  path?: readonly string[];
+  /** TreeIndex.touched: per message, the seq of its newest edit or hide. */
+  touched?: ReadonlyMap<string, number>;
+  /** The readable books' Compendium entries, folded in first (D-141). */
+  library?: LibrarySeed;
 }
 
 /** The prefix of a note's key (§5.8 "Ключи записей"). */
 export const NOTE_KEY_PREFIX = 'note:';
+/** D-144.6: an entry whose data reaches this many JSON chars is flagged `large_entry`. */
+export const LARGE_ENTRY_CHARS = 12_000;
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
 const isStrArray = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter(isStr) : []);
+
+/** Sets an own property, also for the key '__proto__'. */
+function put(o: Rec, key: string, value: unknown): void {
+  if (key === '__proto__') Object.defineProperty(o, key, { value, writable: true, enumerable: true, configurable: true });
+  else o[key] = value;
+}
 
 /** A note's fields that live outside `data` (set renames or rewrites them; they cannot be unset). */
 const NOTE_FIELDS: ReadonlySet<string> = new Set(['title', 'content']);
+/** An arc's fields that live outside `data`: the overview can be set, never unset; the plot is the key. */
+const ARC_FIELDS: ReadonlySet<string> = new Set(['content', 'overview', 'title', 'name']);
 
-/** The fold's working state. Entries are built fresh per fold, so applying ops mutates them in place. */
+/** A string that is an entry key (a hand-written C<n> or name is resolved; a key is looked up only). */
+const KEY_SHAPED = new RegExp(`^(?:note|arc|lib|${ENTRY_TYPES.join('|')}):`);
+/** A handle: C<n>, c<n>, or the Cyrillic С/с a Russian keyboard types. */
+const HANDLE = /^[CcСс](\d+)$/u;
+
+/** The number of a handle ('C12' → 12), else null. */
+export function handleNumber(ref: string): number | null {
+  const m = HANDLE.exec(ref.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Every name an entry answers to, normalized, blanks dropped, deduplicated: its name, data.title,
+ * data.topic, its aliases and its former names (D-144).
+ */
+export function entryNames(e: CEntry): string[] {
+  const out: string[] = [];
+  const add = (v: unknown): void => {
+    if (!isStr(v)) return;
+    const n = norm(v);
+    if (n !== '' && !out.includes(n)) out.push(n);
+  };
+  add(e.name);
+  add(e.data.title);
+  add(e.data.topic);
+  for (const a of e.aliases) add(a);
+  for (const f of e.prov.formerNames ?? []) add(f);
+  return out;
+}
+
+/**
+ * The live entry of `type` that one of `names` (any form; normalized here) names: the first session
+ * entry in creation order, else the first library entry in seed order; null when none (D-144.3).
+ */
+export function findMatch(entries: Iterable<CEntry>, type: EntryType, names: string[]): CEntry | null {
+  const wanted = new Set(names.filter(isStr).map(norm).filter((n) => n !== ''));
+  if (wanted.size === 0) return null;
+  let library: CEntry | null = null;
+  for (const e of entries) {
+    if (e.retired !== undefined || e.type !== type) continue;
+    if (!entryNames(e).some((n) => wanted.has(n))) continue;
+    if (e.origin.kind === 'session') return e;
+    library ??= e;
+  }
+  return library;
+}
+
+/**
+ * What a ref names among `entries` (D-150): a handle C<n> (Map order, from 1), an exact key, or a
+ * normalized name/alias/former name that exactly one entry answers to — the `prefer`red pool (live or
+ * retired) first, then the other. null when nothing or several match.
+ */
+export function resolveRefIn(
+  entries: ReadonlyMap<string, CEntry>,
+  ref: string,
+  prefer: 'live' | 'retired' = 'live',
+  namesOf: (e: CEntry) => readonly string[] = entryNames,
+): CEntry | null {
+  const typed = ref.trim();
+  const n = handleNumber(typed);
+  if (n !== null) {
+    if (n < 1) return null;
+    let i = 0;
+    for (const e of entries.values()) if (++i === n) return e;
+    return null;
+  }
+  const byKey = entries.get(typed);
+  if (byKey) return byKey;
+  const name = norm(typed);
+  if (name === '') return null;
+  const same: CEntry[] = [];
+  for (const e of entries.values()) if (namesOf(e).includes(name)) same.push(e);
+  const wanted = same.filter((e) => (e.retired !== undefined) === (prefer === 'retired'));
+  const pool = wanted.length > 0 ? wanted : same;
+  return pool.length === 1 ? pool[0]! : null;
+}
+
+// ---- the fold's state -----------------------------------------------------------------------------
+
+/** Per seed (cached): each entry's names, the name index, the seed order and each entry's data JSON length. */
+interface SeedNames {
+  names: ReadonlyMap<string, readonly string[]>;
+  index: ReadonlyMap<string, readonly string[]>;
+  ordinal: ReadonlyMap<string, number>;
+  size: ReadonlyMap<string, number>;
+}
+const SEED_NAMES = new WeakMap<LibrarySeed, SeedNames>();
+
+function seedNames(seed: LibrarySeed): SeedNames {
+  const hit = SEED_NAMES.get(seed);
+  if (hit) return hit;
+  const names = new Map<string, readonly string[]>();
+  const index = new Map<string, string[]>();
+  const ordinal = new Map<string, number>();
+  const size = new Map<string, number>();
+  for (const e of seed.entries) {
+    if (ordinal.has(e.key)) continue;
+    ordinal.set(e.key, ordinal.size);
+    size.set(e.key, JSON.stringify(e.data).length);
+    const list = entryNames(e);
+    names.set(e.key, list);
+    for (const n of list) {
+      const keys = index.get(n);
+      if (keys) keys.push(e.key);
+      else index.set(n, [e.key]);
+    }
+  }
+  const out: SeedNames = { names, index, ordinal, size };
+  SEED_NAMES.set(seed, out);
+  return out;
+}
+
+/** The fold's working state. Entries are copies made for this fold, so ops mutate them in place. */
 interface FoldState {
   entries: Map<string, CEntry>;
   /** Per base key, the last '#n' suffix handed out (keys are never removed, so the next is free). */
   suffix: Map<string, number>;
   issues: FoldIssue[];
+  effects: OpEffect[];
+  seed: LibrarySeed;
+  seedNames: SeedNames;
+  /** Current names of the entries created or renamed in this fold (the seed's are in seedNames). */
+  names: Map<string, readonly string[]>;
+  /** Name → keys that had it in this fold (add-only; candidates are checked against current names). */
+  index: Map<string, string[]>;
+  /** Insertion position of the session entries (after the seed's). */
+  ordinal: Map<string, number>;
+  /** Keys whose data an op changed, with the last such op (large_entry). */
+  changed: Map<string, { seq: number; op: number }>;
+  /** Per changed key, an upper bound of its data's JSON length: only entries that may be large are measured. */
+  bound: Map<string, number>;
+  /** JSON lengths of the current row's ops. */
+  sizes: readonly number[];
 }
 
-/** The key for a new entry: `base`, else `base#2`, `base#3`… (taken by any entry, retired included). */
-function allocKey(st: FoldState, base: string): string {
+/** The first free key from `base` and its suffix number: `base`, else `base#2`, `base#3`… (taken by any entry, retired included). */
+function freeKey(st: FoldState, base: string): { key: string; n: number } {
   let n = st.suffix.get(base) ?? 0;
   let key: string;
   do {
     n++;
     key = n === 1 ? base : `${base}#${n}`;
   } while (st.entries.has(key));
+  return { key, n };
+}
+
+/** The key for a new entry (freeKey), taken. */
+function allocKey(st: FoldState, base: string): string {
+  const { key, n } = freeKey(st, base);
   st.suffix.set(base, n);
   return key;
+}
+
+const namesOf = (st: FoldState, e: CEntry): readonly string[] => st.names.get(e.key) ?? st.seedNames.names.get(e.key) ?? entryNames(e);
+
+/** Recomputes an entry's names and indexes the new ones. */
+function reindex(st: FoldState, e: CEntry): void {
+  const before = namesOf(st, e);
+  const now = entryNames(e);
+  st.names.set(e.key, now);
+  for (const n of now) {
+    if (before.includes(n)) continue; // already indexed (here or in the seed's index)
+    const keys = st.index.get(n);
+    if (keys) keys.push(e.key);
+    else st.index.set(n, [e.key]);
+  }
+}
+
+function insert(st: FoldState, e: CEntry): void {
+  st.entries.set(e.key, e);
+  st.ordinal.set(e.key, st.seedNames.ordinal.size + st.ordinal.size);
+  st.names.set(e.key, []);
+  reindex(st, e);
+}
+
+/** findMatch over the fold's index: the same answer as findMatch(st.entries.values(), …). */
+function findIn(st: FoldState, type: EntryType, wanted: ReadonlySet<string>): CEntry | null {
+  let best: CEntry | null = null;
+  let bestRank = Infinity;
+  const consider = (key: string): void => {
+    const e = st.entries.get(key);
+    if (e === undefined || e.retired !== undefined || e.type !== type) return;
+    if (!namesOf(st, e).some((n) => wanted.has(n))) return;
+    // Session entries in creation order first, then library entries in seed order.
+    const rank = e.origin.kind === 'session' ? (st.ordinal.get(key) ?? 0) : 1e12 + (st.seedNames.ordinal.get(key) ?? 0);
+    if (rank < bestRank) {
+      best = e;
+      bestRank = rank;
+    }
+  };
+  for (const n of wanted) {
+    for (const k of st.seedNames.index.get(n) ?? []) consider(k);
+    for (const k of st.index.get(n) ?? []) consider(k);
+  }
+  return best;
+}
+
+/** Aliases as stored: trimmed strings, deduplicated by normalized name, none equal to the name. */
+function aliasList(candidates: readonly string[], name: string): string[] {
+  const seen = new Set([norm(name)]);
+  const out: string[] = [];
+  for (const a of candidates) {
+    const n = norm(a);
+    if (n === '' || seen.has(n)) continue;
+    seen.add(n);
+    out.push(a.trim());
+  }
+  return out;
+}
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/** The inputs of entryNames, to tell whether an op changed them. */
+const nameInputs = (e: CEntry): unknown[] => [e.name, e.aliases, e.data.title, e.data.topic, e.prov.formerNames];
+const sameInputs = (a: unknown[], b: unknown[]): boolean => a.every((v, i) => v === b[i]);
+
+function validRange(r: unknown): [string, string] | null {
+  return Array.isArray(r) && r.length === 2 && isStr(r[0]) && isStr(r[1]) ? [r[0], r[1]] : null;
+}
+
+// ---- ops ------------------------------------------------------------------------------------------
+
+/** Why an op was skipped (and the entry it concerns); null when it applied. */
+type Skip = { why: string; key?: string } | null;
+const skip = (why: string, key?: string): Skip => (key === undefined ? { why } : { why, key });
+
+/** One applied op's effect and its bookkeeping. */
+function touch(st: FoldState, row: MemEntry, op: number, e: CEntry, change: OpEffect['change'], dataChanged: boolean): void {
+  st.effects.push({ seq: row.seq, op, key: e.key, change });
+  if (!dataChanged) return;
+  st.changed.set(e.key, { seq: row.seq, op });
+  // A merge or an edit adds at most its op's JSON to the data's (plus a little punctuation).
+  st.bound.set(e.key, (st.bound.get(e.key) ?? st.seedNames.size.get(e.key) ?? 0) + (st.sizes[op] ?? 0) + 64);
+}
+
+/** A library entry an op changed becomes an overlay (D-144.3, D-146). */
+function overlay(e: CEntry): void {
+  if (e.origin.kind === 'library' && !e.origin.overlay) e.origin = { ...e.origin, overlay: true };
 }
 
 /** A note entry (§5.8 CEntry for a human note): no type, no aliases, its text in `content`. */
@@ -84,72 +368,346 @@ function newNote(key: string, title: string, keys: string[], content: string, ro
   };
 }
 
+/** A new typed session entry from a file op's data (the caller checked type, identity and required fields). */
+function createTyped(st: FoldState, row: MemEntry, op: number, type: EntryType, key: string, name: string, data: Rec, range?: [string, string]): CEntry {
+  const m = mergeData({}, data, { keep: [], on: row.on, appended: {} });
+  const e: CEntry = {
+    key,
+    type,
+    name,
+    aliases: aliasList(strings(data.aliases), name),
+    tagline: taglineOf(type, m.data),
+    data: m.data,
+    keys: [],
+    origin: { kind: 'session' },
+    prov: { created: row.on, lastSeq: row.seq, appended: m.appended, createdSeq: row.seq },
+  };
+  if (range) e.range = range;
+  insert(st, e);
+  touch(st, row, op, e, 'created', true);
+  return e;
+}
+
 /**
- * Apply one op (§5.8 applyMemOp, M3 part). Returns the issue reason when the op was skipped, else
- * null. Every op is checked whole before it changes anything, so a skipped op leaves no trace.
+ * D-144.2: a summary never merges. A row with a range keys it by the range's end and its index among
+ * the row's summaries; a row without one (filed by hand) by its title, `summary:user:<normalizeName(title)>`
+ * (D-168: never by seq, which a fork renumbers). `#2`… when taken.
  */
-function applyOp(st: FoldState, row: MemEntry, raw: MemOp): string | null {
+function fileSummary(st: FoldState, row: MemEntry, ops: readonly unknown[], op: number, data: Rec): Skip {
+  if (isBlank(data.title) || isBlank(data.summary)) return skip('missing_required');
+  if (!isStr(data.title) || norm(data.title) === '') return skip('invalid');
+  const range = validRange(row.range);
+  let base: string;
+  if (range) {
+    let i = 0;
+    for (let j = 0; j < op; j++) {
+      const o = ops[j];
+      if (isRec(o) && o.op === 'file' && o.type === 'summary') i++;
+    }
+    base = `summary:${range[1]}.${i}`;
+  } else base = `summary:user:${norm(data.title)}`;
+  createTyped(st, row, op, 'summary', allocKey(st, base), data.title.trim(), data, range ?? undefined);
+  return null;
+}
+
+/**
+ * D-168: a `file` op pinned to the key its verb's dry run produced. An entry with that key and type (any
+ * state) → merge into it; a missing `lib:` key (or one of another type now) → library_entry_missing; a
+ * missing session key → create it with exactly that key (from it via allocKey when another type holds
+ * it). No name matching and no classic_conflict: the dry run checked those when the row was written.
+ * Ruling I: a `lib:` entry that answers to none of the op's names is another entity now (the book was
+ * replaced under the same id) → library_entry_missing, never a merge.
+ */
+function filePinned(st: FoldState, row: MemEntry, op: number, type: EntryType, data: Rec, target: unknown): Skip {
+  if (!isStr(target) || target.trim() === '') return skip('invalid');
+  const held = st.entries.get(target);
+  if (held !== undefined && held.type === type) {
+    if (target.startsWith('lib:') && !answersTo(st, held, data)) return skip('library_entry_missing', target);
+    mergeInto(st, row, op, held, data, strings(data.aliases));
+    return null;
+  }
+  if (target.startsWith('lib:')) return skip('library_entry_missing', target);
+  if (REQUIRED_FIELDS[type].some((f) => isBlank(data[f]))) return skip('missing_required');
+  const idf = identityField(type);
+  const identity = isStr(data[idf]) ? data[idf].trim() : '';
+  if (norm(identity) === '') return skip('invalid');
+  const range = type === 'summary' ? validRange(row.range) : null;
+  createTyped(st, row, op, type, held === undefined ? target : allocKey(st, target), identity, data, range ?? undefined);
+  return null;
+}
+
+/**
+ * Whether `e` answers to a name of a file op's data (name, title, topic, aliases; normalizeName): its
+ * names at this point of the fold — the book's, with the aliases, renames and former names the session
+ * gave it — so a row its verb pinned by one of those names still lands (the dry run matched on them).
+ */
+function answersTo(st: FoldState, e: CEntry, data: Rec): boolean {
+  const names = namesOf(st, e);
+  for (const v of [data.name, data.title, data.topic, ...strings(data.aliases)]) {
+    if (!isStr(v)) continue;
+    const n = norm(v);
+    if (n !== '' && names.includes(n)) return true;
+  }
+  return false;
+}
+
+/** D-144.3/4: merge into the entry the names find, else create one. */
+function fileEntry(st: FoldState, row: MemEntry, op: number, type: EntryType, data: Rec): Skip {
+  const idf = identityField(type);
+  const identity = isStr(data[idf]) ? data[idf].trim() : '';
+  const aliasesIn = strings(data.aliases);
+  const wanted = new Set([identity, ...aliasesIn].map(norm).filter((n) => n !== ''));
+  const match = wanted.size > 0 ? findIn(st, type, wanted) : null;
+  if (match) {
+    mergeInto(st, row, op, match, data, aliasesIn);
+    return null;
+  }
+  for (const n of wanted) {
+    const classic = st.seed.classic.get(n);
+    if (classic !== undefined) return skip('classic_conflict', classic);
+  }
+  if (REQUIRED_FIELDS[type].some((f) => isBlank(data[f]))) return skip('missing_required');
+  const base = norm(identity);
+  if (base === '') return skip('invalid');
+  createTyped(st, row, op, type, allocKey(st, `${type}:${base}`), identity, data);
+  return null;
+}
+
+function mergeInto(st: FoldState, row: MemEntry, op: number, e: CEntry, data: Rec, aliasesIn: readonly string[]): void {
+  const type = e.type as EntryType;
+  const idf = identityField(type);
+  const m = mergeData(e.data, data, { keep: IDENTITY_KEEP, on: row.on, appended: e.prov.appended });
+  // An entry whose data had no identity value takes the filed one as its name; the old name stays an alias.
+  let name = e.name;
+  const filled = m.data[idf];
+  if (isBlank(e.data[idf]) && isStr(filled) && !isBlank(filled)) name = filled.trim();
+  const extra = name !== e.name ? [e.name] : [];
+  const aliases = aliasesIn.length === 0 && extra.length === 0 ? e.aliases : aliasList([...e.aliases, ...extra, ...aliasesIn], name);
+  const aliasesChanged = !sameList(aliases, e.aliases);
+  // A merge that changes nothing is recorded but does not move lastSeq (D-144.4).
+  touch(st, row, op, e, 'merged', m.changed);
+  if (!m.changed && !aliasesChanged && name === e.name) return;
+  const before = nameInputs(e);
+  const old = e.data;
+  e.data = m.data;
+  e.prov.appended = m.appended;
+  e.name = name;
+  if (aliasesChanged) e.aliases = aliases;
+  if (old.tagline !== e.data.tagline || old.description !== e.data.description || old.summary !== e.data.summary) e.tagline = taglineOf(type, e.data);
+  e.prov.lastSeq = row.seq;
+  overlay(e);
+  if (!sameInputs(before, nameInputs(e))) reindex(st, e);
+}
+
+/**
+ * D-145: replace a plot's arc overview; create the plot first when no live one has that name. A
+ * readable book's untyped entry of that name owns it (as for `file`): no plot then, and an issue
+ * `classic_conflict` naming the plot's would-be key; the arc itself still applies.
+ */
+function applyArc(st: FoldState, row: MemEntry, op: number, plotRaw: unknown, overview: unknown): Skip {
+  if (!isStr(plotRaw) || !isStr(overview) || isBlank(plotRaw) || isBlank(overview)) return skip('invalid');
+  const plot = plotRaw.trim();
+  const base = norm(plot);
+  if (base === '') return skip('invalid');
+  const wanted = new Set([base]);
+  if (findIn(st, 'plot', wanted) === null) {
+    if (st.seed.classic.has(base)) st.issues.push({ seq: row.seq, op, why: 'classic_conflict', key: freeKey(st, `plot:${base}`).key });
+    else createTyped(st, row, op, 'plot', allocKey(st, `plot:${base}`), plot, { name: plot, status: 'active' });
+  }
+  const arcBase = `arc:${base}`;
+  let arc: CEntry | undefined;
+  for (let n = 1; n <= (st.suffix.get(arcBase) ?? 0) && arc === undefined; n++) {
+    const e = st.entries.get(n === 1 ? arcBase : `${arcBase}#${n}`);
+    if (e !== undefined && e.retired === undefined) arc = e;
+  }
+  if (arc === undefined) {
+    arc = {
+      key: allocKey(st, arcBase),
+      type: null,
+      name: plot,
+      aliases: [],
+      tagline: '',
+      data: {},
+      keys: [],
+      content: overview,
+      arc: plot,
+      origin: { kind: 'session' },
+      prov: { created: row.on, lastSeq: row.seq, appended: {}, createdSeq: row.seq },
+    };
+    insert(st, arc);
+  } else if (arc.content !== overview) {
+    arc.content = overview;
+    arc.prov.lastSeq = row.seq;
+  }
+  touch(st, row, op, arc, 'arc', false);
+  return null;
+}
+
+/** The entry an op's ref names, or why not: a key is looked up; C<n> or a name is resolved (D-146). */
+function target(st: FoldState, ref: unknown, prefer: 'live' | 'retired'): CEntry | Skip {
+  if (!isStr(ref)) return skip('invalid');
+  const e = st.entries.get(ref);
+  if (e) return e;
+  // D-147: an overlay row whose library entry is gone (book removed, 'off', entry deleted).
+  if (ref.startsWith('lib:')) return skip('library_entry_missing', ref);
+  if (KEY_SHAPED.test(ref)) return skip('not_found');
+  return resolveRefIn(st.entries, ref, prefer, (x) => namesOf(st, x)) ?? skip('not_found');
+}
+
+const isEntry = (v: CEntry | Skip): v is CEntry => v !== null && 'key' in v && 'prov' in v;
+
+/** D-146: edit any entry. Every field is checked before anything changes, so a skipped edit leaves no trace. */
+function applyEdit(st: FoldState, row: MemEntry, op: number, raw: Rec): Skip {
+  const found = target(st, raw.ref, 'live');
+  if (!isEntry(found)) return found;
+  const e = found;
+  const set = raw.set === undefined ? {} : raw.set;
+  const unset = raw.unset === undefined ? [] : raw.unset;
+  const { keys, featured } = raw;
+  if (!isRec(set) || !isStrArray(unset)) return skip('invalid', e.key);
+  if (keys !== undefined && !isStrArray(keys)) return skip('invalid', e.key);
+  if (featured !== undefined && typeof featured !== 'boolean') return skip('invalid', e.key);
+  const before = nameInputs(e);
+  let dataChanged = false;
+  if (e.type !== null) {
+    const r = editTyped(e, set, unset);
+    if (r !== null) return skip(r, e.key);
+    dataChanged = true;
+  } else if (e.arc !== undefined) {
+    if (unset.some((k) => ARC_FIELDS.has(k)) || set.title !== undefined || set.name !== undefined) return skip('invalid', e.key);
+    const text = set.content !== undefined ? set.content : set.overview;
+    if (text !== undefined && !(isStr(text) && !isBlank(text))) return skip('invalid', e.key);
+    if (isStr(text)) e.content = text;
+    dataChanged = editData(e, set, unset, ARC_FIELDS);
+  } else {
+    // A note (M3): set.title renames, set.content replaces the text, other fields are data's.
+    if (unset.some((k) => NOTE_FIELDS.has(k))) return skip('invalid', e.key);
+    if (set.title !== undefined && !(isStr(set.title) && norm(set.title) !== '')) return skip('invalid', e.key);
+    if (set.content !== undefined && !isStr(set.content)) return skip('invalid', e.key);
+    if (isStr(set.title)) e.name = set.title;
+    if (isStr(set.content)) e.content = set.content;
+    dataChanged = editData(e, set, unset, NOTE_FIELDS);
+  }
+  if (keys !== undefined) e.keys = [...keys];
+  if (featured === true) e.featured = true;
+  else if (featured === false) delete e.featured;
+  e.prov.lastSeq = row.seq;
+  overlay(e);
+  if (!sameInputs(before, nameInputs(e))) reindex(st, e);
+  touch(st, row, op, e, 'edited', dataChanged);
+  return null;
+}
+
+/** `set` fields other than `outside` replace data fields, `unset` deletes; true when data changed. */
+function editData(e: CEntry, set: Rec, unset: readonly string[], outside: ReadonlySet<string>): boolean {
+  let data: Rec | undefined;
+  for (const [k, v] of Object.entries(set)) {
+    if (v === undefined || outside.has(k)) continue;
+    data ??= { ...e.data };
+    put(data, k, v);
+  }
+  for (const k of unset) {
+    if (!Object.hasOwn(data ?? e.data, k)) continue;
+    data ??= { ...e.data };
+    delete data[k];
+  }
+  if (data === undefined) return false;
+  e.data = data;
+  return true;
+}
+
+/**
+ * D-146 on a typed entry: set replaces top-level fields (an array's prov.appended becomes all null),
+ * unset deletes them; the identity field cannot be unset and a new value renames (the key stays, the
+ * old name goes to prov.formerNames); set.aliases replaces the alias list. Returns why it cannot apply.
+ */
+function editTyped(e: CEntry, set: Rec, unset: readonly string[]): string | null {
+  const type = e.type as EntryType;
+  const idf = identityField(type);
+  if (unset.includes(idf)) return 'invalid';
+  const rename = set[idf];
+  if (rename !== undefined && !(isStr(rename) && norm(rename) !== '')) return 'invalid';
+  if (set.aliases !== undefined && !isStrArray(set.aliases)) return 'invalid';
+  const data: Rec = { ...e.data };
+  let appended: Record<string, (string | null)[]> | undefined;
+  const prov = (): Record<string, (string | null)[]> => (appended ??= { ...e.prov.appended });
+  for (const [k, v] of Object.entries(set)) {
+    if (v === undefined) continue;
+    put(data, k, v);
+    if (Array.isArray(v)) put(prov() as Rec, k, v.map(() => null));
+    else if (Object.hasOwn(e.prov.appended, k)) delete prov()[k];
+  }
+  for (const k of unset) {
+    delete data[k];
+    if (Object.hasOwn(e.prov.appended, k)) delete prov()[k];
+  }
+  e.data = data;
+  if (appended !== undefined) e.prov.appended = appended;
+  if (isStr(rename)) {
+    const name = rename.trim();
+    const was = norm(e.name);
+    const now = norm(name);
+    if (now !== was) {
+      const former = (e.prov.formerNames ?? []).filter((f) => norm(f) !== now);
+      if (!former.some((f) => norm(f) === was)) former.push(e.name);
+      e.prov.formerNames = former;
+    }
+    e.name = name;
+  }
+  if (isStrArray(set.aliases)) e.aliases = aliasList(set.aliases, e.name);
+  else if (unset.includes('aliases')) e.aliases = [];
+  else if (isStr(rename)) e.aliases = aliasList(e.aliases, e.name);
+  e.tagline = taglineOf(type, e.data);
+  return null;
+}
+
+/**
+ * Apply one op (§5.8 applyMemOp). Returns why the op was skipped, else null. Every op is checked
+ * whole before it changes anything, so a skipped op leaves no trace.
+ */
+function applyOp(st: FoldState, row: MemEntry, ops: readonly unknown[], i: number, op: Rec): Skip {
   // Rows are read leniently (entries.ts checks only `op`), so every field is checked here.
-  const op = raw as unknown as Rec;
   switch (op.op) {
     case 'note': {
       const keys = op.keys === undefined ? [] : op.keys;
-      if (!isStr(op.title) || !isStr(op.content) || !isStrArray(keys)) return 'invalid';
-      const base = normalizeName(op.title);
-      if (base === '') return 'invalid';
-      const key = allocKey(st, NOTE_KEY_PREFIX + base);
-      st.entries.set(key, newNote(key, op.title, keys, op.content, row));
+      if (!isStr(op.title) || !isStr(op.content) || !isStrArray(keys)) return skip('invalid');
+      const base = norm(op.title);
+      if (base === '') return skip('invalid');
+      const e = newNote(allocKey(st, NOTE_KEY_PREFIX + base), op.title, keys, op.content, row);
+      insert(st, e);
+      touch(st, row, i, e, 'note', false);
       return null;
     }
-    case 'edit': {
-      if (!isStr(op.ref)) return 'invalid';
-      const e = st.entries.get(op.ref);
-      if (!e) return 'not_found';
-      if (e.type !== null || e.origin.kind !== 'session') return 'not_until_m5'; // typed and library entries: M5a
-      const set = op.set === undefined ? {} : op.set;
-      const unset = op.unset === undefined ? [] : op.unset;
-      const { keys, featured } = op;
-      if (!isRec(set) || !isStrArray(unset) || unset.some((k) => NOTE_FIELDS.has(k))) return 'invalid';
-      if (keys !== undefined && !isStrArray(keys)) return 'invalid';
-      if (featured !== undefined && typeof featured !== 'boolean') return 'invalid';
-      if (set.title !== undefined && !(isStr(set.title) && normalizeName(set.title) !== '')) return 'invalid';
-      if (set.content !== undefined && !isStr(set.content)) return 'invalid';
-      // A rename keeps the key (§5.8); the text is replaced whole; other fields are data's.
-      for (const [k, v] of Object.entries(set)) {
-        if (v === undefined) continue;
-        if (k === 'title') e.name = v as string;
-        else if (k === 'content') e.content = v as string;
-        else e.data = { ...e.data, [k]: v };
-      }
-      if (unset.length > 0) {
-        const data = { ...e.data };
-        for (const k of unset) delete data[k];
-        e.data = data;
-      }
-      if (keys !== undefined) e.keys = [...keys];
-      if (featured === true) e.featured = true;
-      else if (featured === false) delete e.featured;
-      e.prov.lastSeq = row.seq;
-      return null;
+    case 'file': {
+      if (!isEntryType(op.type)) return skip('unknown_type');
+      if (!isRec(op.data)) return skip('invalid');
+      if (op.target !== undefined) return filePinned(st, row, i, op.type, op.data, op.target);
+      return op.type === 'summary' ? fileSummary(st, row, ops, i, op.data) : fileEntry(st, row, i, op.type, op.data);
     }
+    case 'arc':
+      return applyArc(st, row, i, op.plot, op.overview);
+    case 'edit':
+      return applyEdit(st, row, i, op);
     case 'retire':
     case 'restore': {
-      if (!isStr(op.ref)) return 'invalid';
-      const e = st.entries.get(op.ref);
-      if (!e) return 'not_found';
-      if (op.op === 'retire') e.retired = { reason: isStr(op.reason) ? op.reason : '' };
-      else delete e.retired;
-      e.prov.lastSeq = row.seq;
+      const found = target(st, op.ref, op.op === 'retire' ? 'live' : 'retired');
+      if (!isEntry(found)) return found;
+      if (op.op === 'retire') found.retired = { reason: isStr(op.reason) ? op.reason : '' };
+      else delete found.retired;
+      found.prov.lastSeq = row.seq;
+      overlay(found);
+      touch(st, row, i, found, op.op === 'retire' ? 'retired' : 'restored', false);
       return null;
     }
-    case 'file':
-    case 'arc':
     case 'revert':
-      return 'not_until_m5';
+      // Consumed by the row filter (newest action per key); nothing to apply.
+      return isStr(op.key) ? null : skip('invalid');
     default:
-      return 'unknown_op';
+      return skip('unknown_op');
   }
 }
+
+// ---- rows -----------------------------------------------------------------------------------------
 
 /** The rows in seq order (the log already keeps them so; anything else is sorted, never mutated). */
 function inSeqOrder(rows: readonly MemEntry[]): readonly MemEntry[] {
@@ -159,40 +717,254 @@ function inSeqOrder(rows: readonly MemEntry[]): readonly MemEntry[] {
   return rows;
 }
 
-/**
- * Which rows the fold reads (§5.8 pipeline): bound to the path (`on` null or on it). M5a adds the
- * staleness filter (D-68.4) and "newest action per non-null key" (D-74) here; human rows (key null)
- * all apply, so in M3 the path is the only filter.
- */
-function rowApplies(row: MemEntry, pathSet: ReadonlySet<string>): boolean {
-  return row.on === null || pathSet.has(row.on);
+const taskKey = (row: MemEntry): string | null => (isStr(row.key) ? row.key : null);
+
+/** A 64-bit FNV-1a of a text, as 16 hex digits (two 32-bit lanes; for change detection, not security). */
+function fnv64(text: string): string {
+  let a = 0x811c9dc5;
+  let b = 0xcbf29ce4;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x0100019d);
+  }
+  return (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
 }
 
 /**
- * Fold the rows that apply to a path, in seq order (§5.8):
- * 1. rows with `on === null` or `pathSet.has(on)`;
- * 2. (M5) not stale; newest action per non-null key — human rows (key null) all apply;
- * 3. each op through applyMemOp.
- * M3 ops: note → a new entry (key 'note:' + normalizeName(title), '#2'… when the key is taken by any
- * entry, retired included; an empty normalized title → issue 'invalid'); edit → set.title renames,
- * set.content replaces the text, keys replaces the keys, unset/featured as §5.8 (an unknown or
- * missing ref → issue 'not_found'); retire / restore set and clear `retired`. file, arc, revert →
- * issue 'not_until_m5'. rev = a short hash of the applied rows' seqs and ops ('' when none).
+ * Per row: a digest of its seq and ops, and each op's JSON length (rows are immutable log entries,
+ * folded again on every view).
+ */
+interface RowFacts {
+  seq: number;
+  digest: string;
+  sizes: number[];
+}
+const ROW_FACTS = new WeakMap<MemEntry, RowFacts>();
+function rowFacts(row: MemEntry, ops: readonly unknown[]): RowFacts {
+  const hit = ROW_FACTS.get(row);
+  if (hit !== undefined && hit.seq === row.seq) return hit;
+  const texts = ops.map((op) => JSON.stringify(op) ?? '');
+  const facts = { seq: row.seq, digest: `${row.seq}:${fnv64(texts.join('\u0000'))}`, sizes: texts.map((t) => t.length) };
+  ROW_FACTS.set(row, facts);
+  return facts;
+}
+
+const opsOf = (row: MemEntry): readonly unknown[] => (Array.isArray(row.ops) ? row.ops : []);
+
+/** An entry copied for a fold or a checkpoint (data is shared: ops replace it, never change it in place). */
+function copyEntry(e: CEntry): CEntry {
+  const prov = { ...e.prov };
+  if (prov.formerNames !== undefined) prov.formerNames = [...prov.formerNames];
+  return { ...e, aliases: [...e.aliases], keys: [...e.keys], prov };
+}
+
+interface Selected {
+  effective: MemEntry[];
+  tasks: Map<string, TaskState>;
+}
+
+/**
+ * D-143 row selection: on the path, not stale, newest action per task key. Human rows (key null) all
+ * pass. `tasks` reports every key seen on the path: 'reverted' when its newest action is a revert,
+ * 'applied' when a fresh row with the key applies, else 'stale'.
+ */
+function selectRows(rows: readonly MemEntry[], opts: FoldOptions): Selected {
+  const onPath = inSeqOrder(rows).filter((r) => r.on === null || opts.pathSet.has(r.on as string));
+  let position: Map<string, number> | undefined;
+  const stale = (r: MemEntry): boolean => {
+    if (opts.path === undefined || r.range === undefined) return false;
+    const range = validRange(r.range);
+    if (range === null) return true;
+    position ??= new Map(opts.path.map((id, i) => [id, i]));
+    const from = position.get(range[0]);
+    const to = position.get(range[1]);
+    if (from === undefined || to === undefined || from > to) return true;
+    if (opts.touched === undefined) return false;
+    for (let p = from; p <= to; p++) {
+      const t = opts.touched.get(opts.path[p]!);
+      if (t !== undefined && t > r.seq) return true;
+    }
+    return false;
+  };
+  const fresh: MemEntry[] = [];
+  const newestAny = new Map<string, MemEntry>();
+  const newestFresh = new Map<string, MemEntry>();
+  const newestRevert = new Map<string, number>();
+  for (const r of onPath) {
+    const key = taskKey(r);
+    if (key !== null) {
+      newestAny.set(key, r);
+      if (stale(r)) continue;
+      newestFresh.set(key, r);
+    }
+    fresh.push(r);
+    for (const op of opsOf(r)) if (isRec(op) && op.op === 'revert' && isStr(op.key)) newestRevert.set(op.key, r.seq);
+  }
+  const effective = fresh.filter((r) => {
+    const key = taskKey(r);
+    if (key === null) return true;
+    const revert = newestRevert.get(key);
+    return newestFresh.get(key) === r && !(revert !== undefined && revert >= r.seq);
+  });
+  const tasks = new Map<string, TaskState>();
+  const state = (key: string): TaskState => {
+    const revert = newestRevert.get(key);
+    const row = newestFresh.get(key);
+    const any = newestAny.get(key);
+    let s: TaskState;
+    let from = any;
+    if (revert !== undefined && (row === undefined || revert >= row.seq)) s = { seq: revert, status: 'reverted' };
+    else if (row !== undefined) {
+      s = { seq: row.seq, status: 'applied' };
+      from = row;
+    } else s = { seq: any!.seq, status: 'stale' };
+    const range = from === undefined ? null : validRange(from.range);
+    return range ? { ...s, range } : s;
+  };
+  for (const key of newestAny.keys()) tasks.set(key, state(key));
+  for (const key of newestRevert.keys()) if (!tasks.has(key)) tasks.set(key, state(key));
+  return { effective, tasks };
+}
+
+/**
+ * Fold the rows that apply to a path onto the library seed (§5.8, D-143):
+ * 1. the seed's entries, in seed order (keys 'lib:…');
+ * 2. rows with `on` null or on the path; agent rows not stale; per task key the newest action;
+ * 3. each op of those rows in seq order (note, file, arc, edit, retire, restore; revert is a no-op).
+ * rev hashes the applied rows and the seed ('' when both are empty); lastSeq is the newest applied
+ * row's seq; issues name skipped ops (and `large_entry`, once per key, at the last op that changed
+ * an entry whose data reached LARGE_ENTRY_CHARS); effects list each applied op's change.
  */
 export function foldCompendium(rows: readonly MemEntry[], opts: FoldOptions): CompendiumView {
-  const st: FoldState = { entries: new Map(), suffix: new Map(), issues: [] };
-  // M5a: the readable books' typed entries seed `st.entries` here, before the rows.
-  const hash = createHash('sha256');
+  const seed = opts.library ?? EMPTY_SEED;
+  const { effective, tasks } = selectRows(rows, opts);
+  const chain = effective.length >= CHECKPOINT_MIN_ROWS ? chainOf(seed, effective[0]!) : undefined;
+  const resumed = chain === undefined ? undefined : bestCheckpoint(chain, effective);
+  const st = resumed === undefined ? freshState(seed) : copyState(resumed.st);
+  const digests: string[] = seed.hash === '' ? [] : [`lib:${seed.hash}`];
   let lastSeq = 0;
-  for (const row of inSeqOrder(rows)) {
-    if (!rowApplies(row, opts.pathSet)) continue;
-    const ops: readonly MemOp[] = Array.isArray(row.ops) ? row.ops : [];
-    hash.update(`${row.seq}\u0000${JSON.stringify(ops)}\n`);
+  effective.forEach((row, r) => {
+    const ops = opsOf(row);
+    const facts = rowFacts(row, ops);
+    digests.push(facts.digest);
     lastSeq = row.seq;
+    if (resumed !== undefined && r < resumed.rows.length) return;
+    st.sizes = facts.sizes;
     ops.forEach((op, i) => {
-      const why = isRec(op) ? applyOp(st, row, op) : 'invalid';
-      if (why !== null) st.issues.push({ seq: row.seq, op: i, why });
+      const why = isRec(op) ? applyOp(st, row, ops, i, op) : skip('invalid');
+      if (why !== null) st.issues.push(why.key === undefined ? { seq: row.seq, op: i, why: why.why } : { seq: row.seq, op: i, why: why.why, key: why.key });
     });
+    if (chain !== undefined && (r + 1) % CHECKPOINT_EVERY === 0 && r + 1 < effective.length) keepCheckpoint(chain, effective.slice(0, r + 1), st);
+  });
+  if (chain !== undefined && (resumed?.rows.length ?? 0) < effective.length) keepCheckpoint(chain, effective, st);
+  let flagged = false;
+  for (const [key, at] of st.changed) {
+    if (st.bound.get(key)! < LARGE_ENTRY_CHARS || JSON.stringify(st.entries.get(key)!.data).length < LARGE_ENTRY_CHARS) continue;
+    st.issues.push({ seq: at.seq, op: at.op, why: 'large_entry', key });
+    flagged = true;
   }
-  return { entries: st.entries, rev: lastSeq === 0 ? '' : hash.digest('hex').slice(0, 16), lastSeq, issues: st.issues };
+  if (flagged) st.issues.sort((a, b) => a.seq - b.seq || a.op - b.op);
+  const rev = digests.length === 0 ? '' : createHash('sha256').update(digests.join('\n')).digest('hex').slice(0, 16);
+  return { entries: st.entries, rev, lastSeq, issues: st.issues, tasks, effects: st.effects };
+}
+
+// ---- checkpoints ----------------------------------------------------------------------------------
+//
+// A session folds the same rows again on every view change (a new message, a row, a swipe's view at
+// U, a verb's dry run), and the state after a prefix of the effective rows depends on that prefix and
+// the seed only. So a long fold keeps copies of its state (every CHECKPOINT_EVERY rows and at the end)
+// and the next fold whose effective rows start with the same row objects resumes from the longest
+// one. The result is the same as a fold from the seed (test/memory/checkpoint.test.ts).
+
+/** Folds of fewer effective rows always start from the seed and keep nothing. */
+const CHECKPOINT_MIN_ROWS = 256;
+const CHECKPOINT_EVERY = 2048;
+/** Checkpoints kept per chain (a seed and a first row); the least recently used goes first. */
+const CHECKPOINT_KEEP = 6;
+
+interface Checkpoint {
+  /** The effective rows applied, in order. */
+  rows: readonly MemEntry[];
+  st: FoldState;
+  used: number;
+}
+
+const CHECKPOINTS = new WeakMap<LibrarySeed, WeakMap<MemEntry, Checkpoint[]>>();
+let checkpointClock = 0;
+
+function chainOf(seed: LibrarySeed, first: MemEntry): Checkpoint[] {
+  let bySeed = CHECKPOINTS.get(seed);
+  if (bySeed === undefined) CHECKPOINTS.set(seed, (bySeed = new WeakMap()));
+  let chain = bySeed.get(first);
+  if (chain === undefined) bySeed.set(first, (chain = []));
+  return chain;
+}
+
+function isPrefix(prefix: readonly MemEntry[], rows: readonly MemEntry[]): boolean {
+  if (prefix.length > rows.length) return false;
+  for (let i = prefix.length - 1; i >= 0; i--) if (prefix[i] !== rows[i]) return false;
+  return true;
+}
+
+function bestCheckpoint(chain: Checkpoint[], rows: readonly MemEntry[]): Checkpoint | undefined {
+  let best: Checkpoint | undefined;
+  for (const cp of chain) if ((best === undefined || cp.rows.length > best.rows.length) && isPrefix(cp.rows, rows)) best = cp;
+  if (best !== undefined) best.used = ++checkpointClock;
+  return best;
+}
+
+function keepCheckpoint(chain: Checkpoint[], rows: readonly MemEntry[], st: FoldState): void {
+  const same = chain.find((cp) => cp.rows.length === rows.length && isPrefix(cp.rows, rows));
+  if (same !== undefined) {
+    same.used = ++checkpointClock;
+    return;
+  }
+  chain.push({ rows, st: copyState(st), used: ++checkpointClock });
+  if (chain.length > CHECKPOINT_KEEP) {
+    let oldest = 0;
+    for (let i = 1; i < chain.length; i++) if (chain[i]!.used < chain[oldest]!.used) oldest = i;
+    chain.splice(oldest, 1);
+  }
+}
+
+function freshState(seed: LibrarySeed): FoldState {
+  const st: FoldState = {
+    entries: new Map(),
+    suffix: new Map(),
+    issues: [],
+    effects: [],
+    seed,
+    seedNames: seedNames(seed),
+    names: new Map(),
+    index: new Map(),
+    ordinal: new Map(),
+    changed: new Map(),
+    bound: new Map(),
+    sizes: [],
+  };
+  for (const e of seed.entries) if (!st.entries.has(e.key)) st.entries.set(e.key, copyEntry(e));
+  return st;
+}
+
+/** A state that shares nothing a fold changes in place with `st`. */
+function copyState(st: FoldState): FoldState {
+  const entries = new Map<string, CEntry>();
+  for (const [key, e] of st.entries) entries.set(key, copyEntry(e));
+  const index = new Map<string, string[]>();
+  for (const [name, keys] of st.index) index.set(name, keys.slice());
+  return {
+    entries,
+    suffix: new Map(st.suffix),
+    issues: st.issues.slice(),
+    effects: st.effects.slice(),
+    seed: st.seed,
+    seedNames: st.seedNames,
+    names: new Map(st.names),
+    index,
+    ordinal: new Map(st.ordinal),
+    changed: new Map(st.changed),
+    bound: new Map(st.bound),
+    sizes: [],
+  };
 }

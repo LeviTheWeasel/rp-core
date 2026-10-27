@@ -3,7 +3,7 @@
 // Copyright (C) 2026 Levi; changes Copyright (C) 2026 the rp-core authors.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// search_lore and read_lore (ARCHITECTURE.md §9.2, D-59). Port sources: Bunraku
+// search_lore and read_lore (ARCHITECTURE.md §9.2, D-59; .notes/m5a-decisions.md D-150, D-156). Port sources: Bunraku
 // src/studio/dramaturg-tools.ts lines ~122–201 (Levi; short handles) and, for reference, RoleCall
 // ai/dm-stream/tools/executors.ts search_lorebook (weights not taken: lexScore ranks instead).
 // CONTRACT FILE (M3): signatures are fixed; the builtins agent implements the bodies.
@@ -15,13 +15,17 @@
 // book order; handles are the turn's HandleTable instead of positions over the books (D-59 as
 // amended: L<n> for book entries by first appearance, the same in every round of the turn; C<n> for
 // notes is the note's /memory handle, stable across turns, resolvable before any search);
-// disabled entries and retired notes never appear (Bunraku listed off entries, flagged); notes are
-// searched once, as Compendium records, never through their lore book; read_lore takes several
-// handles and caps the whole result at 8 000 characters. RoleCall's search_lorebook (title ×3,
-// keys ×2, text ×1 over substrings; git credits it to Chi through the import commit 660a7d67a, so its
-// original author is unknown) and its sentence-based extractSmartSnippet are reference only.
+// disabled entries and retired Compendium entries never appear (Bunraku listed off entries, flagged);
+// notes are searched once, as Compendium records, never through their lore book; read_lore takes
+// several handles and caps the whole result at 8 000 characters. M5a (D-156): every live Compendium
+// entry is searched (notes, typed session and library entries, overlays, arcs) under its C<n>
+// (D-150); a typed entry's snippet is its brief, read_lore gives its full render. RoleCall's
+// search_lorebook (title ×3, keys ×2, text ×1 over substrings; git credits it to Chi through the
+// import commit 660a7d67a, so its original author is unknown) and its sentence-based
+// extractSmartSnippet are reference only.
 
-import { isNote, NOTES_BOOK_KEY } from '../../agents/compendium/notes.ts';
+import { NOTES_BOOK_KEY } from '../../agents/compendium/notes.ts';
+import { renderBrief, renderEntry } from '../../agents/compendium/render.ts';
 import type { CEntry } from '../../agents/compendium/types.ts';
 import type { LoreEntry } from '../../formats/native.ts';
 import { CARD_BOOK_KEY, DEFAULT_LORE_ORDER, PERSONA_BOOK_KEY, type LoreSource } from '../../lore/engine.ts';
@@ -57,19 +61,25 @@ function splitIds(x: string): string[] {
   return x.trim() === '' ? [] : [x];
 }
 
-/** What a note's row says in place of a book name. */
+/** What a note's and an arc's rows say in place of a book name (D-156). */
 const NOTE_LABEL = 'note';
+const ARC_LABEL = 'arc';
 /** A key written '/pattern/flags' (lore/keys.ts): never a title. */
 const REGEX_KEY_RE = /^\/[\s\S]+\/[gimsuy]*$/;
+/** Between the lines of a typed entry's brief on its one search row. */
+const BRIEF_JOIN = ' | ';
 
-/** One searchable record: a book entry or a live note. */
+/** One searchable record: a book entry or a live Compendium entry. */
 interface LoreDoc {
   target: HandleTarget;
   title: string;
-  /** The book's name, or 'note'. */
+  /** The book's name; 'note', 'arc', the entry type, or '<type>, <book name>' for a Compendium entry. */
   label: string;
+  /** The text read_lore returns. */
   content: string;
   lex: LexDoc;
+  /** A Compendium entry: its snippet comes from the entry (a typed entry shows its brief). */
+  entry?: CEntry;
 }
 
 /** Whitespace runs to one space, trimmed: a title or a name stays on its row. */
@@ -93,7 +103,7 @@ function entryTitle(e: LoreEntry): string {
 }
 
 /**
- * The turn's handle table, bound to the turn's Compendium (D-59 amended: a note's C<n> is its /memory
+ * The turn's handle table, bound to the turn's Compendium (D-150: an entry's C<n> is its /memory
  * handle). Binding the same view again is free; a test's empty ctx may carry no entries map.
  */
 function handlesOf(ctx: ToolCtx): ToolCtx['handles'] {
@@ -101,38 +111,64 @@ function handlesOf(ctx: ToolCtx): ToolCtx['handles'] {
   return ctx.handles;
 }
 
-/** The live notes of the turn's Compendium (a test's empty ctx may carry no entries map). */
-function liveNotes(ctx: ToolCtx): CEntry[] {
+/** The live (not retired) entries of the turn's Compendium in handle order (a test's empty ctx may carry no entries map). */
+function liveEntries(ctx: ToolCtx): CEntry[] {
   const out: CEntry[] = [];
   const entries = ctx.compendium?.entries;
   if (entries === undefined) return out;
-  for (const e of entries.values()) if (isNote(e) && e.retired === undefined) out.push(e);
+  for (const e of entries.values()) if (e.retired === undefined) out.push(e);
   return out;
 }
 
-function noteDoc(e: CEntry): LoreDoc {
-  const content = e.content ?? '';
-  return {
-    target: { kind: 'compendium', key: e.key },
-    title: oneLine(e.name) || '(untitled)',
-    label: NOTE_LABEL,
-    content,
-    lex: { title: e.name, keys: e.keys, text: content, rank: e.prov.lastSeq },
-  };
+/** renderEntry of a Compendium entry, cached per entry object (the view's entries are never changed). */
+const FULL = new WeakMap<CEntry, string>();
+function fullText(e: CEntry): string {
+  let text = FULL.get(e);
+  if (text === undefined) {
+    text = renderEntry(e);
+    FULL.set(e, text);
+  }
+  return text;
+}
+
+/** The book name a library entry's row shows: the turn's source of that library id, else the id. */
+function libraryLabel(book: string, ctx: ToolCtx): string {
+  const src = ctx.lore.find((s) => s.key === book);
+  return src === undefined ? book : bookLabel(src);
+}
+
+/** D-156: one live Compendium entry as a searchable record under its C<n>. */
+function compendiumDoc(e: CEntry, ctx: ToolCtx): LoreDoc {
+  const target: HandleTarget = { kind: 'compendium', key: e.key };
+  const title = oneLine(e.name) || '(untitled)';
+  const content = fullText(e);
+  if (e.type === null) {
+    // A note or an arc: its own text is what is searched (the render only frames it).
+    const text = e.content ?? '';
+    const keys = e.arc === undefined ? e.keys : [];
+    return { target, title, label: e.arc === undefined ? NOTE_LABEL : ARC_LABEL, content, entry: e, lex: { title: e.name, keys, text, rank: e.prov.lastSeq } };
+  }
+  const library = e.origin.kind === 'library' ? e.origin : undefined;
+  const label = library === undefined ? e.type : `${e.type}, ${libraryLabel(library.book, ctx)}`;
+  // Every field is searched (the full render); aliases and a library entry's lore keys count as keys.
+  const rank = library === undefined ? e.prov.lastSeq : (e.order ?? DEFAULT_LORE_ORDER);
+  return { target, title, label, content, entry: e, lex: { title: e.name, keys: [...e.aliases, ...e.keys], text: content, rank } };
 }
 
 /**
- * Everything search_lore ranks: the enabled entries of the turn's books (the notes book skipped:
- * its notes come next, as Compendium records), then the live notes, in that order (lexScore's last
- * tie-break).
+ * Everything search_lore ranks: the enabled entries of the turn's books (the notes book skipped: its
+ * notes come as Compendium records; an entry the Compendium holds as 'lib:<book>:<id>' skipped too, as
+ * the engine's routing does), then every live Compendium entry in handle order (lexScore's last
+ * tie-break is this order).
  */
 function loreDocs(ctx: ToolCtx): LoreDoc[] {
   const docs: LoreDoc[] = [];
+  const held = ctx.compendium?.entries;
   for (const src of ctx.lore) {
     if (src.key === NOTES_BOOK_KEY) continue;
     const label = bookLabel(src);
     for (const e of src.book.entries) {
-      if (e.enabled === false) continue;
+      if (e.enabled === false || held?.has(`lib:${src.key}:${e.id}`) === true) continue;
       docs.push({
         target: { kind: 'lore', book: src.key, id: e.id },
         title: entryTitle(e),
@@ -142,15 +178,15 @@ function loreDocs(ctx: ToolCtx): LoreDoc[] {
       });
     }
   }
-  for (const e of liveNotes(ctx)) docs.push(noteDoc(e));
+  for (const e of liveEntries(ctx)) docs.push(compendiumDoc(e, ctx));
   return docs;
 }
 
-/** The record a handle names, as the turn's sources hold it now; undefined when it is gone or off. */
+/** The record a handle names, as the turn's sources hold it now; undefined when it is gone, off or retired. */
 function docOf(target: HandleTarget, ctx: ToolCtx): LoreDoc | undefined {
   if (target.kind === 'compendium') {
     const e = ctx.compendium?.entries?.get(target.key);
-    return e !== undefined && isNote(e) && e.retired === undefined ? noteDoc(e) : undefined;
+    return e !== undefined && e.retired === undefined ? compendiumDoc(e, ctx) : undefined;
   }
   const src = ctx.lore.find((s) => s.key === target.book);
   if (src === undefined || src.key === NOTES_BOOK_KEY) return undefined;
@@ -159,19 +195,49 @@ function docOf(target: HandleTarget, ctx: ToolCtx): LoreDoc | undefined {
   return { target, title: entryTitle(e), label: bookLabel(src), content: e.content, lex: { text: e.content } };
 }
 
+/**
+ * A typed entry's snippet: its brief (D-151) without the `# <name>` line (the row names it), the
+ * lines joined by ' | ', whole lines while they fit LORE_SNIPPET ('…' after the last one that fits).
+ * An entry whose brief is only its name shows the head of its full render instead.
+ */
+function briefSnippet(e: CEntry): string {
+  const lines = renderBrief(e, Number.MAX_SAFE_INTEGER).split('\n').slice(1).map(oneLine).filter((l) => l !== '');
+  if (lines.length === 0) return excerptAround(fullText(e).split('\n').slice(1).join('\n'), null, LORE_SNIPPET);
+  let out = '';
+  for (const line of lines) {
+    const next = out === '' ? line : `${out}${BRIEF_JOIN}${line}`;
+    if (next.length > LORE_SNIPPET) return out === '' ? excerptAround(line, null, LORE_SNIPPET) : `${out}${BRIEF_JOIN}…`;
+    out = next;
+  }
+  return out;
+}
+
+/** A hit's snippet: a typed entry's brief; otherwise the text around the first match (the head when only the title or a key matched). */
+function snippetOf(d: LoreDoc, q: ReturnType<typeof parseQuery>): string {
+  if (d.entry !== undefined && d.entry.type !== null) return briefSnippet(d.entry);
+  const text = d.entry !== undefined ? (d.entry.content ?? '') : d.content;
+  const at = locateQuery(q, wordsOf(text)).reduce<[number, number] | null>((best, x) => (x !== null && (best === null || x[0] < best[0]) ? x : best), null);
+  return excerptAround(text, at, LORE_SNIPPET);
+}
+
 const SEARCH_DESCRIPTION = [
-  'Search the lore of this chat by words: the world and character entries and the memory notes.',
+  'Search the lore of this chat by words: the world and character entries, and the Compendium entries (characters, places, items, events, plots and the other records of the story so far, the memory notes and arcs).',
   'Your context holds only the entries that came up this turn, so search before you say the lore does not cover something.',
   'Entries that match more of your words come first. Nouns, names and adjectives match their other forms, so search by word roots and short forms; put an exact phrase in quotes.',
-  'Each hit has a handle like L3 (an entry) or C2 (a note) and a short snippet: read the whole text with read_lore.',
+  'Each hit has a handle like L3 (a lore entry) or C2 (a Compendium entry) and a short snippet: read the whole text with read_lore.',
 ].join(' ');
 
 /**
  * search_lore {query}: ranked (lexScore) over the enabled entries of ctx.lore (book entries: title,
- * keys, content; rank = order) and the live notes of ctx.compendium (title, keys, content; rank =
- * prov.lastSeq). The notes book key (@notes) in ctx.lore is skipped: notes are listed once, as
- * Compendium records. Retired notes and disabled entries never appear. Top LORE_HITS_MAX, each
- * `<handle> <title> (<book name>): <snippet>` with L<n> for book entries and C<n> for notes.
+ * keys, content; rank = order) and every live entry of ctx.compendium (D-156; title = name; keys =
+ * a note's keys, a typed entry's aliases and library lore keys; text = a note's or an arc's own text,
+ * a typed entry's full render; rank = prov.lastSeq in the session, order for a library entry). The
+ * notes book key (@notes) in ctx.lore is skipped (notes are listed once, as Compendium records), and
+ * so is any book entry the Compendium holds (routed by the engine; checked again here). Retired
+ * Compendium entries and disabled book entries never appear. Top LORE_HITS_MAX, each
+ * `<handle> <title> (<label>): <snippet>`: L<n> and the book name for book entries; C<n> (D-150) and
+ * 'note', 'arc', the type, or '<type>, <book name>' (a library entry) for Compendium entries, whose
+ * typed snippets are their brief (snippetOf).
  */
 export const searchLoreTool: Tool = {
   name: 'search_lore',
@@ -197,10 +263,10 @@ export const searchLoreTool: Tool = {
     }
     const handles = handlesOf(ctx);
     const docs = loreDocs(ctx);
-    if (docs.length === 0) return { text: 'This chat has no lore entries or notes to search.', summary: 'no lore' };
+    if (docs.length === 0) return { text: 'This chat has no lore or Compendium entries to search.', summary: 'no lore' };
     const ranked = lexScore(q, docs.map((d) => d.lex));
     if (ranked.length === 0) {
-      return { text: 'No lore entry or note matches. Try a shorter root, another word or a name before you decide the lore is silent.', summary: 'no hits' };
+      return { text: 'No lore or Compendium entry matches. Try a shorter root, another word or a name before you decide the lore is silent.', summary: 'no hits' };
     }
     // Rows that fit the room (the closing line kept free); a handle is issued only for a row shown.
     const room = outputRoom(ctx, DEFAULT_TOOL_OUTPUT) - 60;
@@ -208,9 +274,7 @@ export const searchLoreTool: Tool = {
     let used = 0;
     for (const r of ranked.slice(0, LORE_HITS_MAX)) {
       const d = docs[r.index] as LoreDoc;
-      // The excerpt shows the first match in the text; a hit only in the title or keys shows the head.
-      const at = locateQuery(q, wordsOf(d.content)).reduce<[number, number] | null>((best, x) => (x !== null && (best === null || x[0] < best[0]) ? x : best), null);
-      const body = `${d.title} (${d.label}): ${excerptAround(d.content, at, LORE_SNIPPET) || '(empty)'}`;
+      const body = `${d.title} (${d.label}): ${snippetOf(d, q) || '(empty)'}`;
       if (lines.length > 0 && used + body.length + 8 > room) break;
       const line = `${handles.handleFor(d.target)} ${body}`;
       lines.push(line);
@@ -234,13 +298,15 @@ const cutNote = (handle: string, rest: number, limit: number): string => `\n[${h
 
 /**
  * read_lore {ids: string[]}: the full text of each handle, in the order asked, as
- * `<handle> <title> (<book name>):\n<content>`; an unknown handle gets one line saying so; at most
+ * `<handle> <title> (<label>):\n<content>` (a Compendium entry's content is its renderEntry: the full
+ * render, a note's noteText, an arc's overview; no freshness filter, D-156); an unknown or retired
+ * handle gets one line saying so; at most
  * READ_LORE_MAX characters in all, fewer in a small room (outputRoom); an entry that passes the
  * limit is cut with a note saying how much is left, and the handles after it are named as not shown.
  */
 export const readLoreTool: Tool = {
   name: 'read_lore',
-  description: `Read lore entries and notes whole, by the handles search_lore gave (like L3 or C2), in the order you list them. At most ${READ_LORE_MAX} characters in all: read fewer at a time when entries are long.`,
+  description: `Read lore entries and Compendium entries whole, by the handles search_lore gave (like L3 or C2) or a C handle named in your context, in the order you list them. At most ${READ_LORE_MAX} characters in all: read fewer at a time when entries are long.`,
   schema: {
     type: 'object',
     properties: {

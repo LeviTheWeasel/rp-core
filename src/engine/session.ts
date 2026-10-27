@@ -8,23 +8,62 @@
 // runs the same admission and request.ts buildRequest, and writes nothing. M4 (D-106): a preview never
 // calls the Director; it shows the directive the turn would carry when that is known (a swipe that
 // reuses the plan, a past answer's stored one), else a stub.
+//
+// M5a (.notes/m5a-decisions.md D-141, D-159): the session loads its library books once per (book ids,
+// the Compendium's on/off and books table, each book file's mtime and size) and folds every view with
+// the Compendium's seed made from them, so /memory, the tools, the block and the Director's snapshot
+// read one Compendium with one numbering. The memory verbs write one human row each, after folding
+// the rows with it as a dry run: an issue on that row refuses it in words and nothing is written.
+// After the review (the lead's rulings, D-168): a `file` row stores the key its dry run produced
+// (op.target), so it keeps addressing that entry whatever books come later; a dry run that changes
+// nothing writes nothing (changed:false); the verbs return the Compendium's untold notices instead of
+// publishing them, and the export returns what its file could not keep. After the final check (ruling
+// I): the no-op check is merge.ts's bounded comparison; aliases the entry already shows are no change;
+// one name per live entry of a type holds for renames, new aliases and restores (summaries exempt);
+// an export folds with the readable books' seed even while the Compendium is off.
 
-import { normalizeName } from '../agents/compendium/apply.ts';
+import { statSync, mkdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { entryNames, findMatch, foldCompendium, normalizeName } from '../agents/compendium/apply.ts';
+import {
+  EMPTY_SEED,
+  ENTRY_TYPES,
+  type CEntry,
+  type CompendiumView,
+  type EntryType,
+  type FoldIssue,
+  type LibrarySeed,
+  type MemEntry,
+  type OpEffect,
+  type Rec,
+} from '../agents/compendium/types.ts';
+import { identityField, isEntryType, REQUIRED_FIELDS } from '../agents/compendium/entry-types.ts';
+import { sameData } from '../agents/compendium/merge.ts';
+import { librarySeed } from '../agents/compendium/library.ts';
+import { exportCompendiumRows, exportCoreBook, ExportLimitError, replaceFile, writeCompendiumFile } from '../agents/compendium/export.ts';
+import { isNote, noteRefs } from '../agents/compendium/notes.ts';
+import { COMPENDIUM_LIMITS, resolveCompendium } from '../agents/compendium/profile.ts';
+import { entryRefs, refOf, resolveEntryRef } from '../agents/compendium/refs.ts';
+import { renderBrief, renderEntry } from '../agents/compendium/render.ts';
+import { deriveTree, type TreeNode } from '../agents/compendium/tree.ts';
 import { directiveInsert, reusedRecord, stubInsert, swipeReuses } from '../agents/director/call.ts';
 import { checkRecord } from '../agents/director/state.ts';
-import { noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
-import type { CEntry } from '../agents/compendium/types.ts';
+import { compendiumPatchProblem } from '../config/config.ts';
+import { compendiumWarnings } from '../formats/compendium-v1.ts';
+import { libraryDir, saveToLibrary } from '../formats/library.ts';
+import { canonicalId, type ImportWarning } from '../formats/native.ts';
 import { searchHistory, type HistorySearch } from '../tools/builtin/history.ts';
 import { Refusal } from './api.ts';
-import type { CreateSessionInput, PreviewOptions, PreviewResult, RunTurnOptions, SessionHandle, TurnHandle } from './api.ts';
+import type { CreateSessionInput, MemoryRow, MemoryWrite, PreviewOptions, PreviewResult, RunTurnOptions, SessionHandle, TurnHandle } from './api.ts';
 import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.ts';
 import { effectiveText } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
 import { firstRoundLast, modelRequest, roundFields } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
-import { buildRequest, maxTokensFor } from './request.ts';
+import { buildRequest, compendiumConfigOf, compendiumNotices, loadLibrary, maxTokensFor, type SessionLibrary } from './request.ts';
 import { TurnRun, type EventBody, type TurnHost } from './turn.ts';
 import { traceForSent } from '../prompt/assemble.ts';
+import { loreSources } from '../prompt/assemble/lore.ts';
 import { isInsertSrc, type DepthInsert } from '../prompt/depth.ts';
 import { CONTINUE_CUE_SRC, POST_PROCESSING_PLACEHOLDER_SRC } from '../prompt/shape.ts';
 import { counterOf } from './ema.ts';
@@ -77,7 +116,16 @@ function withDraft(view: PathView, text: string): PathView {
   return { ...view, head: DRAFT_ID, path: [...view.path, draft], pathSet: new Set([...view.pathSet, DRAFT_ID]) };
 }
 
-/** What changed since a past answer's trace: its preset, and the books by key. Empty when nothing did. */
+/** M5a: whether the Compendium the request read (trace.compendium.rev; none when no block input) differs. */
+const compendiumChanged = (past: Trace, now: Trace): boolean => (past.compendium?.rev ?? null) !== (now.compendium?.rev ?? null);
+
+/**
+ * What changed since a past answer's trace: its preset, the books by key, and (M5a) the Compendium:
+ * its rev hashes the rows and the library seed, so a typed entry edited by a verb, a new row or a
+ * block that came or went shows here. The books' hashes are of the books as loaded, before routing
+ * (the lead's ruling I): turning the Compendium on or off names the Compendium, never a book; a typed
+ * entry edited in its book file names both. Empty when nothing did.
+ */
 function inputsChanged(past: Trace, now: Trace): string[] {
   const out: string[] = [];
   if (past.presetHash !== now.presetHash) out.push('the preset');
@@ -88,8 +136,12 @@ function inputsChanged(past: Trace, now: Trace): string[] {
     if (was[k] === is[k]) continue;
     out.push(was[k] === undefined ? `lorebook ${k} (added)` : is[k] === undefined ? `lorebook ${k} (gone)` : `lorebook ${k}`);
   }
+  if (compendiumChanged(past, now)) out.push('the Compendium');
   return out;
 }
+
+/** The Compendium block's row source ('compendium' or 'compendium:block'). */
+const isCompendiumSrc = (src: string): boolean => src.split(':', 1)[0] === 'compendium';
 
 /** Message sources only shaping adds (the post-processing placeholder, the continue cue). */
 const SHAPING_SRCS: ReadonlySet<string> = new Set([POST_PROCESSING_PLACEHOLDER_SRC, CONTINUE_CUE_SRC]);
@@ -103,6 +155,8 @@ interface PastInputs {
   history: boolean;
   /** The preset or a lorebook changed (inputsChanged named it): it explains other blocks' text. */
   presetOrBooks: boolean;
+  /** M5a: the Compendium changed (inputsChanged named it): it explains the block's row. */
+  compendium: boolean;
   presetChanged: boolean;
   /** 'conn:model' of the answer, when its gen recorded the connection; today's. */
   model: { past?: string; now: string };
@@ -130,7 +184,8 @@ function sentChanged(past: Trace, now: Trace, inputs: PastInputs): string[] {
       .flatMap((r) => parts(r.src))
       .filter(keep)
       .join('\u0001');
-  const isInsert = (a: string): boolean => !isHistorySrc(a) && isInsertSrc(a);
+  // A Compendium block that changed with the Compendium is named by inputsChanged, not as an insert.
+  const isInsert = (a: string): boolean => !isHistorySrc(a) && isInsertSrc(a) && !(inputs.compendium && isCompendiumSrc(a));
   const isBlock = (a: string): boolean => !isHistorySrc(a) && !isInsertSrc(a) && !SHAPING_SRCS.has(a);
   const shape = (rows: readonly { src: string; role: string }[]): string => rows.map((r) => `${r.src}\u0000${r.role}`).join('\u0001');
   const sameShape = shape(pastRows) === shape(nowRows);
@@ -169,11 +224,11 @@ function sentChanged(past: Trace, now: Trace, inputs: PastInputs): string[] {
  * The path messages a request up to `leaf` was built from, as of journal seq `seq` and as of now,
  * compared by message id, hidden state and content (an edit, a hide or an unhide since then).
  */
-function historyChangedSince(entries: readonly Entry[], tree: TreeIndex, header: SessionHeader, leaf: string, seq: number): boolean {
+function historyChangedSince(entries: readonly Entry[], tree: TreeIndex, header: SessionHeader, leaf: string, seq: number, seed: LibrarySeed): boolean {
   const key = (v: PathView): string => v.path.map((m) => `${m.id}\u0000${m.hidden ? 1 : 0}\u0000${JSON.stringify(m.blocks)}`).join('\u0001');
   const then = buildTree(entries.filter((e) => e.seq <= seq));
   if (!then.msgs.has(leaf)) return true;
-  return key(foldViewAt(header, then, leaf)) !== key(foldViewAt(header, tree, leaf));
+  return key(foldViewAt(header, then, leaf, { library: seed })) !== key(foldViewAt(header, tree, leaf, { library: seed }));
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -236,6 +291,167 @@ function noteKeys(v: unknown): string[] | undefined {
   return keys;
 }
 
+// ---- M5a: the Compendium's helpers -----------------------------------------------------------------
+
+/** A library id that names a file directly (formats/library.ts refuses the others). */
+const safeId = (id: unknown): id is string => typeof id === 'string' && id !== '' && !id.startsWith('.') && !/[/\\\0]/.test(id);
+
+/**
+ * D-141: what the session's books depend on: their ids, the Compendium's on/off and books table, and
+ * each book file's mtime and size. The same key → the same books and the same seed object.
+ */
+function libraryKey(home: string, config: SessionConfig): string {
+  const dir = libraryDir(home, 'lorebooks');
+  const ids = config.lorebooks ?? [];
+  const cfg = resolveCompendium(config.compendium);
+  const files = ids.map((id) => {
+    if (!safeId(id)) return '!';
+    try {
+      const st = statSync(join(dir, `${id}.json`));
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return '-';
+    }
+  });
+  return JSON.stringify([ids, cfg.enabled, cfg.books, files]);
+}
+
+/** An entry's kind in /memory and the memory event: its type, 'note' or 'arc'. */
+export const entryKind = (e: CEntry): EntryType | 'note' | 'arc' => e.type ?? (e.arc !== undefined ? 'arc' : 'note');
+
+function memoryRow(ref: string, e: CEntry): MemoryRow {
+  return {
+    ref,
+    key: e.key,
+    type: entryKind(e),
+    name: e.name,
+    aliases: [...e.aliases],
+    tagline: e.tagline,
+    origin: e.origin.kind === 'library' ? { book: e.origin.book, id: e.origin.id } : 'session',
+    ...(e.retired ? { retired: { reason: e.retired.reason } } : {}),
+    // A note's or an arc's size is its text (the overview), whose data is {} (the lead's ruling on D-161).
+    size: e.type === null && typeof e.content === 'string' ? e.content.length : JSON.stringify(e.data).length,
+    ...(e.featured === true ? { featured: true as const } : {}),
+    ...(e.origin.kind === 'library' && e.origin.overlay ? { overlay: true as const } : {}),
+  };
+}
+
+const isBlank = (v: unknown): boolean => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+
+/** A copy of a verb's JSON input (no undefined, no shared objects with the caller). */
+const jsonCopy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
+/** D-159: why the fold refused the verb's row, in words. */
+function refusalWords(issue: FoldIssue, op: MemOp, c: CompendiumView, seed: LibrarySeed): string {
+  const label = (key: string | undefined): string => {
+    if (key === undefined) return 'the entry';
+    const e = c.entries.get(key);
+    const ref = refOf(c, key);
+    return e ? `${JSON.stringify(e.name)}${ref ? ` (${ref})` : ''}` : key;
+  };
+  switch (issue.why) {
+    case 'unknown_type':
+      return `unknown entry type; one of ${ENTRY_TYPES.join(', ')}`;
+    case 'missing_required': {
+      if (op.op !== 'file' || !isEntryType(op.type)) return 'a required field is missing';
+      const missing = REQUIRED_FIELDS[op.type].filter((f) => isBlank(op.data[f]));
+      return `a ${op.type} needs ${(missing.length > 0 ? missing : REQUIRED_FIELDS[op.type]).join(', ')}`;
+    }
+    case 'classic_conflict': {
+      const book = issue.key?.split(':')[1];
+      const name = book !== undefined ? (seed.books.get(book) ?? book) : 'a library book';
+      return `that name is already a plain (untyped) entry of the book ${JSON.stringify(name)} (${issue.key}); file it under another name or change the book`;
+    }
+    case 'not_found':
+      return op.op === 'file' ? 'no entry matches' : `no entry matches ${JSON.stringify('ref' in op ? op.ref : '')}`;
+    case 'library_entry_missing':
+      return `the library entry ${issue.key ?? ''} is not read any more (its book was removed or set off, or the entry is gone)`;
+    case 'invalid':
+      if (op.op === 'file' && isEntryType(op.type)) return `the ${identityField(op.type)} needs at least one letter or digit`;
+      if (op.op === 'note') return 'a note title needs at least one letter or digit';
+      return `this change cannot apply to ${label(issue.key)}`;
+    default:
+      return `the Compendium cannot apply this change (${issue.why})`;
+  }
+}
+
+/**
+ * What a verb can change in an entry besides its data, provenance bookkeeping (lastSeq, appended) and
+ * the overlay flag aside.
+ */
+const entryState = (e: CEntry): unknown[] => [
+  e.type,
+  e.name,
+  e.aliases,
+  e.tagline,
+  e.keys,
+  e.content,
+  e.retired,
+  e.featured === true,
+  e.arc,
+  e.prov.formerNames ?? [],
+];
+
+/**
+ * Equal before and after the dry run → the verb would change nothing (the lead's rulings H and I).
+ * Compared with the merge's bounded comparison (merge.ts sameData: no recursion past its depth bound,
+ * whatever the depth of the data); the data on its own, so the bound falls where the merge's does.
+ */
+export const sameEntry = (a: CEntry | undefined, b: CEntry | undefined): boolean =>
+  a !== undefined && b !== undefined && sameData(a.data, b.data) && sameData(entryState(a), entryState(b));
+
+/** An alias list as the fold keeps it beside `name` (apply.ts aliasList): trimmed; blanks, repeats and the name itself dropped. */
+function aliasesBeside(list: readonly string[], name: string): string[] {
+  const seen = new Set([normalizeName(name)]);
+  const out: string[] = [];
+  for (const a of list) {
+    const n = normalizeName(a);
+    if (n === '' || seen.has(n)) continue;
+    seen.add(n);
+    out.push(a.trim());
+  }
+  return out;
+}
+
+const sameStrings = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/** The spelling of `e`'s name, title, topic, alias or former name whose normalized form is `n` (entryNames' order). */
+function spelling(e: CEntry, n: string): string {
+  for (const v of [e.name, e.data.title, e.data.topic, ...e.aliases, ...(e.prov.formerNames ?? [])]) {
+    if (typeof v === 'string' && normalizeName(v) === n) return v.trim();
+  }
+  return n;
+}
+
+/**
+ * The lead's rulings (H, I): one name per live entry of a type. The first live entry of `e`'s type
+ * other than `e` answering to one of `names` (normalized), with that name; null when none. Summaries
+ * never merge by name, so their titles are free (null).
+ */
+function nameTaken(c: CompendiumView, e: CEntry, names: readonly string[]): { other: CEntry; name: string } | null {
+  if (e.type === null || e.type === 'summary' || names.length === 0) return null;
+  for (const other of c.entries.values()) {
+    if (other.key === e.key || other.retired || other.type !== e.type) continue;
+    const theirs = entryNames(other);
+    const name = names.find((n) => theirs.includes(n));
+    if (name !== undefined) return { other, name };
+  }
+  return null;
+}
+
+/** The names `after` answers to that `before` did not (normalized). */
+const newNames = (before: CEntry, after: CEntry): string[] => {
+  const had = entryNames(before);
+  return entryNames(after).filter((n) => !had.includes(n));
+};
+
+/** The entry and change the row at `seq` made (its op 0; an arc that creates its plot: `created`, then `arc`). */
+function rowEffect(c: CompendiumView, seq: number): { effect: OpEffect; entry: CEntry } | null {
+  const effect = c.effects.filter((x) => x.seq === seq && x.op === 0).at(-1);
+  const entry = effect ? c.entries.get(effect.key) : undefined;
+  return effect && entry ? { effect, entry } : null;
+}
+
 /**
  * A new session's first entries: the card greetings (identity macros expanded; blank ones skipped,
  * there is nothing to show) as sibling roots, then a `head` back on greeting 0, since each msg moves
@@ -285,7 +501,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   /** seq of the newest mem row: mem rows change the Compendium but not the version (§5.8 "Стоимость"). */
   private memSeq: number;
   private treeCache: { version: number; memSeq: number; idx: TreeIndex } | null = null;
-  private viewCache: { version: number; memSeq: number; view: PathView } | null = null;
+  private viewCache: { version: number; memSeq: number; seed: LibrarySeed; view: PathView } | null = null;
+  /** D-141: the books as last loaded, with the key they were loaded under (libraryKey). */
+  private libCache: { key: string; lib: SessionLibrary; categories?: ReadonlyMap<string, string> } | null = null;
   private config: SessionConfig;
   private running: TurnRun | null = null;
   /** Turns left open with a `held` answer (M6 decides them); new turns are refused meanwhile. */
@@ -428,6 +646,17 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     return idx;
   }
 
+  /**
+   * D-141: config.lorebooks loaded, and the Compendium's seed made from them; loaded again only when
+   * the ids, the Compendium's on/off or books table, or a book file (mtime, size) changed, so the seed
+   * object stays the same while nothing did (the fold caches on it).
+   */
+  library(): SessionLibrary {
+    const key = libraryKey(this.ctx.home, this.config);
+    if (this.libCache?.key !== key) this.libCache = { key, lib: loadLibrary(this.ctx.home, this.config, this.log.header.cast) };
+    return this.libCache.lib;
+  }
+
   firstNotice(code: string): boolean {
     if (this.noticed.has(code)) return false;
     this.noticed.add(code);
@@ -449,11 +678,13 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   }
 
   view(): PathView {
-    // Cached like the tree: a mem row (a note) changes view().compendium without a new version.
+    // Cached like the tree: a mem row (a note) changes view().compendium without a new version, and
+    // so does a change of the library's books (a new seed, D-141).
+    const seed = this.library().seed;
     const c = this.viewCache;
-    if (c?.version === this.ver && c.memSeq === this.memSeq) return c.view;
-    const view = foldView(this.log.header, this.log.entries(), this.tree());
-    this.viewCache = { version: this.ver, memSeq: this.memSeq, view };
+    if (c?.version === this.ver && c.memSeq === this.memSeq && c.seed === seed) return c.view;
+    const view = foldView(this.log.header, this.log.entries(), this.tree(), { library: seed });
+    this.viewCache = { version: this.ver, memSeq: this.memSeq, seed, view };
     return view;
   }
 
@@ -627,6 +858,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
 
     const header = this.log.header;
     const tree = this.tree();
+    const library = this.library();
     const current = this.view();
     let view = current;
     // The kind admission checks, and the kind the request is built as (a past swipe is admitted as
@@ -652,7 +884,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       past = entry.trace;
       seed = past.seed;
       now = past.now;
-      view = foldViewAt(header, tree, m.parent);
+      view = foldViewAt(header, tree, m.parent, { library: library.seed });
       admitKind = 'reply';
       kind = m.swipe.index > 0 ? 'swipe' : 'reply';
       // A guided re-roll is rebuilt with its direction (gen.guidance) and, when today's config shows
@@ -695,6 +927,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       counter: this.ctx.counter,
       // M4 (D-106): the Director is never called by a preview.
       placements,
+      library,
       ...(explain ? { explain: true } : {}),
       ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
     });
@@ -720,8 +953,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       const changed = [
         ...named,
         ...sentChanged(past, sent, {
-          history: historyChangedSince(this.log.entries(), tree, header, answer.parent!, answer.seq),
+          history: historyChangedSince(this.log.entries(), tree, header, answer.parent!, answer.seq, library.seed),
           presetOrBooks: named.length > 0,
+          compendium: compendiumChanged(past, built.asm.trace),
           presetChanged: past.presetHash !== built.asm.trace.presetHash,
           model: {
             ...(was?.connection !== undefined ? { past: `${was.connection}:${was.model ?? '?'}` } : {}),
@@ -814,6 +1048,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     this.assertOpen();
     if (this.running) throw new Refusal('session_busy', 'a turn is running');
     if (!isObject(patch)) throw new Refusal('invalid_params', 'configure needs an object');
+    // The header reads `compendium` leniently (an old header must open), so what is written is checked here.
+    const problem = Object.hasOwn(patch, 'compendium') ? compendiumPatchProblem(patch.compendium) : null;
+    if (problem !== null) throw new Refusal('invalid_params', `invalid config: ${problem}`);
     const next = mergePatch<SessionConfig>(this.config, patch);
     // A patch that would make the config unreadable is refused before it reaches the journal.
     const checked = checkHeader(JSON.parse(JSON.stringify({ ...this.log.header, config: next })) as unknown);
@@ -927,67 +1164,308 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     return noteRefs(this.view().compendium).map((r) => r.entry);
   }
 
-  memoryAdd(input: { title: string; keys?: string[]; content: string }): { key: string } {
+  memoryAdd(input: { title: string; keys?: string[]; content: string }): MemoryWrite {
     this.guardMemory();
     if (!isObject(input)) throw new Refusal('invalid_params', 'memoryAdd needs {title, content}');
     const title = noteTitle(input.title);
     const content = noteContent(input.content);
     const keys = noteKeys(input.keys) ?? [];
-    const row = this.memAppend({ op: 'note', title, keys: keys.length > 0 ? keys : [title], content });
+    const op: MemOp = { op: 'note', title, keys: keys.length > 0 ? keys : [title], content };
+    this.dryRun(op);
     // The fold names the note (its key may carry '#2' when the title's key is taken).
-    let note: CEntry | undefined;
-    for (const e of this.view().compendium.entries.values()) if (e.prov.createdSeq === row.seq) note = e;
-    if (!note) throw new Error(`the note written at seq ${row.seq} did not fold`);
-    this.publishMemory('note', note);
-    return { key: note.key };
+    const { entry } = this.memWrite(op);
+    this.publishMemory('note', entry);
+    return { key: entry.key, changed: true, ...this.untold() };
   }
 
-  memoryEdit(input: { ref: string; title?: string; keys?: string[]; content?: string }): { key: string } {
+  memoryFile(input: { type: EntryType; data: Rec }): MemoryWrite & { ref: string; change: 'created' | 'merged' } {
+    this.guardMemory();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryFile needs {type, data}');
+    if (!isEntryType(input.type)) throw new Refusal('invalid_params', `unknown entry type ${JSON.stringify(input.type)}; one of ${ENTRY_TYPES.join(', ')}`);
+    if (!isObject(input.data)) throw new Refusal('invalid_params', 'data must be an object');
+    const data = jsonCopy(input.data);
+    // While the Compendium is off the books seed nothing, so a name a readable book already has would
+    // make a second entry that shares it once the Compendium is on again (the lead's ruling I).
+    if (compendiumConfigOf(this.config).enabled === false) {
+      const names = [data[identityField(input.type)], ...(Array.isArray(data.aliases) ? data.aliases : [])].filter((n): n is string => typeof n === 'string');
+      const hit = findMatch(this.readableSeed().entries, input.type, names);
+      if (hit && hit.origin.kind === 'library') {
+        throw new Refusal(
+          'invalid_params',
+          `${JSON.stringify(hit.name)} is an entry of the book ${hit.origin.book}, which the Compendium reads when it is on; turn it on (/memory on) and edit that entry instead`,
+        );
+      }
+    }
+    // D-168: the name decides once, here (matching, classic_conflict, required fields); the row then
+    // names the key it produced, and the pinned row is what the dry run checks and the log keeps.
+    const ts = this.now();
+    const named = this.dryRun({ op: 'file', type: input.type, data }, ts);
+    const target = named.effect.key;
+    const op: MemOp = { op: 'file', type: input.type, data, target };
+    const pinned = this.dryRun(op, ts);
+    if (pinned.effect.key !== target) throw new Error(`the pinned file op went to ${pinned.effect.key}, not to ${target}`);
+    const how = pinned.effect.change === 'merged' ? 'merged' : 'created';
+    const before = this.view().compendium;
+    const was = before.entries.get(target);
+    if (how === 'merged' && sameEntry(was, pinned.entry)) {
+      return { key: target, ref: refOf(before, target) ?? target, change: 'merged', changed: false, ...this.untold() };
+    }
+    // The lead's ruling (I): a merge that gives the entry a name (an alias) another live entry of the type answers to is refused.
+    const taken = how === 'merged' && was ? nameTaken(before, was, newNames(was, pinned.entry)) : null;
+    if (taken && was) {
+      throw new Refusal(
+        'invalid_params',
+        `${this.label(before, taken.other)} already answers to the name ${JSON.stringify(spelling(pinned.entry, taken.name))}; filing it into ${this.label(before, was)} would give a ${input.type} a name another ${input.type} has`,
+      );
+    }
+    const { entry, c } = this.memWrite(op);
+    this.publishMemory(how, entry);
+    return { key: entry.key, ref: refOf(c, entry.key) ?? entry.key, change: how, changed: true, ...this.untold() };
+  }
+
+  memoryEdit(input: { ref: string; title?: string; keys?: string[]; content?: string; set?: Rec; unset?: string[]; featured?: boolean }): MemoryWrite {
     this.guardMemory();
     if (!isObject(input)) throw new Refusal('invalid_params', 'memoryEdit needs {ref}');
-    const title = input.title === undefined ? undefined : noteTitle(input.title);
-    const content = input.content === undefined ? undefined : noteContent(input.content);
+    if (input.featured !== undefined && typeof input.featured !== 'boolean') throw new Refusal('invalid_params', 'featured must be true or false');
     const keys = noteKeys(input.keys);
-    if (title === undefined && content === undefined && keys === undefined) {
-      throw new Refusal('invalid_params', 'nothing to change: give a title, keys or content');
+    const featured = input.featured === undefined ? {} : { featured: input.featured };
+    const e = this.findEntry(input.ref, 'live');
+    const c = this.view().compendium;
+    const ref = this.label(c, e);
+
+    if (isNote(e)) {
+      if (input.set !== undefined || input.unset !== undefined) throw new Refusal('invalid_params', `${ref} is a note: change its title, keys or content`);
+      const title = input.title === undefined ? undefined : noteTitle(input.title);
+      const content = input.content === undefined ? undefined : noteContent(input.content);
+      if (title === undefined && content === undefined && keys === undefined && input.featured === undefined) {
+        throw new Refusal('invalid_params', 'nothing to change: give a title, keys, content or featured');
+      }
+      const set: Record<string, unknown> = {};
+      if (title !== undefined) set.title = title;
+      if (content !== undefined) set.content = content;
+      // A rename without keys moves the key a keyless add derived from the title (stored keys exactly
+      // [old title]) to the new title, so the note fires on its new name; keys the user wrote stay.
+      const autoKey = keys === undefined && title !== undefined && title !== e.name && e.keys.length === 1 && e.keys[0] === e.name;
+      return this.editWith(e, {
+        op: 'edit',
+        ref: e.key,
+        ...(Object.keys(set).length > 0 ? { set } : {}),
+        // Keys emptied by the trim fall back to the title, as on add.
+        ...(keys !== undefined ? { keys: keys.length > 0 ? keys : [title ?? e.name] } : autoKey ? { keys: [title] } : {}),
+        ...featured,
+      });
     }
-    const note = this.findNote(input.ref, 'live');
-    const set: Record<string, unknown> = {};
-    if (title !== undefined) set.title = title;
-    if (content !== undefined) set.content = content;
-    // A rename without keys moves the key a keyless add derived from the title (stored keys exactly
-    // [old title]) to the new title, so the note fires on its new name; keys the user wrote stay.
-    const autoKey = keys === undefined && title !== undefined && title !== note.name && note.keys.length === 1 && note.keys[0] === note.name;
-    this.memAppend({
+
+    // A typed entry, a library entry (an overlay from now on) or an arc: set / unset / keys / featured.
+    if (input.title !== undefined || input.content !== undefined) {
+      throw new Refusal('invalid_params', `${ref} is a ${entryKind(e)}: change it with set and unset (title and content are a note's)`);
+    }
+    if (input.set !== undefined && !isObject(input.set)) throw new Refusal('invalid_params', 'set must be an object of fields');
+    if (input.unset !== undefined && !(Array.isArray(input.unset) && input.unset.every((k) => typeof k === 'string'))) {
+      throw new Refusal('invalid_params', 'unset must be an array of field names');
+    }
+    const set = input.set === undefined ? undefined : jsonCopy(input.set);
+    const unset = input.unset === undefined ? undefined : [...new Set(input.unset)];
+    if ((set === undefined || Object.keys(set).length === 0) && (unset === undefined || unset.length === 0) && keys === undefined && input.featured === undefined) {
+      throw new Refusal('invalid_params', 'nothing to change: give set, unset, keys or featured');
+    }
+    if (e.type !== null) {
+      const idf = identityField(e.type);
+      if (unset?.includes(idf)) throw new Refusal('invalid_params', `the ${idf} of a ${e.type} cannot be removed; rename it with set.${idf}`);
+      const rename = set?.[idf];
+      if (rename !== undefined && !(typeof rename === 'string' && normalizeName(rename) !== '')) {
+        throw new Refusal('invalid_params', `a new ${idf} needs at least one letter or digit`);
+      }
+      if (set?.aliases !== undefined && !(Array.isArray(set.aliases) && set.aliases.every((a) => typeof a === 'string'))) {
+        throw new Refusal('invalid_params', 'aliases must be a list of strings');
+      }
+      // The lead's ruling (I): the aliases the entry already shows (beside its name after this edit) are no change.
+      if (set !== undefined && Array.isArray(set.aliases)) {
+        const name = typeof rename === 'string' ? rename.trim() : e.name;
+        if (sameStrings(aliasesBeside(set.aliases as string[], name), aliasesBeside(e.aliases, name))) delete set.aliases;
+      }
+      // The lead's ruling: a rename never takes a name another live entry of the type answers to
+      // (its name, an alias, a former name): filing by that name would then find one of the two.
+      if (typeof rename === 'string' && normalizeName(rename) !== normalizeName(e.name)) {
+        const taken = nameTaken(c, e, [normalizeName(rename)]);
+        if (taken) {
+          throw new Refusal('invalid_params', `${this.label(c, taken.other)} already answers to the name ${JSON.stringify(rename.trim())}; a ${e.type} cannot be renamed to a name another ${e.type} has`);
+        }
+      }
+    } else {
+      if (set?.title !== undefined || set?.name !== undefined) throw new Refusal('invalid_params', `${ref} is an arc: its plot name cannot change`);
+      const text = set?.content !== undefined ? set.content : set?.overview;
+      if (text !== undefined && isBlank(text)) throw new Refusal('invalid_params', "an arc's overview cannot be blank");
+      if (unset?.some((k) => k === 'content' || k === 'overview')) throw new Refusal('invalid_params', "an arc's overview cannot be removed");
+    }
+    if ((set === undefined || Object.keys(set).length === 0) && (unset === undefined || unset.length === 0) && keys === undefined && input.featured === undefined) {
+      return { key: e.key, changed: false, ...this.untold() };
+    }
+    const op: MemOp = {
       op: 'edit',
-      ref: note.key,
-      ...(Object.keys(set).length > 0 ? { set } : {}),
-      // Keys emptied by the trim fall back to the title, as on add.
-      ...(keys !== undefined ? { keys: keys.length > 0 ? keys : [title ?? note.name] } : autoKey ? { keys: [title] } : {}),
+      ref: e.key,
+      ...(set !== undefined && Object.keys(set).length > 0 ? { set } : {}),
+      ...(unset !== undefined && unset.length > 0 ? { unset } : {}),
+      ...(keys !== undefined ? { keys } : {}),
+      ...featured,
+    };
+    // The lead's ruling (I): a name the edit gives the entry (an alias, a title or topic field) that
+    // another live entry of the type answers to is refused as a rename onto it is.
+    return this.editWith(e, op, (after) => {
+      const taken = nameTaken(c, e, newNames(e, after));
+      if (taken) throw new Refusal('invalid_params', `${this.label(c, taken.other)} already answers to the name ${JSON.stringify(spelling(after, taken.name))}; a ${e.type} cannot take a name another ${e.type} has`);
     });
-    this.publishMemory('edited', this.view().compendium.entries.get(note.key) ?? note);
-    return { key: note.key };
   }
 
-  memoryRetire(input: { ref: string; reason?: string }): { key: string } {
+  memoryRetire(input: { ref: string; reason?: string }): MemoryWrite {
     this.guardMemory();
     if (!isObject(input)) throw new Refusal('invalid_params', 'memoryRetire needs {ref}');
     if (input.reason !== undefined && typeof input.reason !== 'string') throw new Refusal('invalid_params', 'reason must be a string');
-    const note = this.findNote(input.ref, 'live');
-    if (note.retired) throw new Refusal('invalid_params', `the note ${JSON.stringify(note.name)} is already retired`);
-    this.memAppend({ op: 'retire', ref: note.key, reason: (input.reason ?? '').trim() });
-    this.publishMemory('retired', note);
-    return { key: note.key };
+    const e = this.findEntry(input.ref, 'live');
+    if (e.retired) throw new Refusal('invalid_params', `${JSON.stringify(e.name)} is already retired`);
+    const op: MemOp = { op: 'retire', ref: e.key, reason: (input.reason ?? '').trim() };
+    this.dryRun(op);
+    const { entry } = this.memWrite(op);
+    this.publishMemory('retired', entry);
+    return { key: e.key, changed: true, ...this.untold() };
   }
 
-  memoryRestore(input: { ref: string }): { key: string } {
+  memoryRestore(input: { ref: string }): MemoryWrite {
     this.guardMemory();
     if (!isObject(input)) throw new Refusal('invalid_params', 'memoryRestore needs {ref}');
-    const note = this.findNote(input.ref, 'retired');
-    if (!note.retired) throw new Refusal('invalid_params', `the note ${JSON.stringify(note.name)} is not retired`);
-    this.memAppend({ op: 'restore', ref: note.key });
-    this.publishMemory('restored', note);
-    return { key: note.key };
+    const e = this.findEntry(input.ref, 'retired');
+    // The lead's ruling: a live entry is already what a restore makes; nothing is written.
+    if (!e.retired) return { key: e.key, changed: false, ...this.untold() };
+    // The lead's ruling (I): one name per live entry: not while another live entry of the type answers
+    // to one of its names (name, alias, former name; a rename keeps the old name as a former one, so
+    // only retiring the other one clears it).
+    const c = this.view().compendium;
+    const taken = nameTaken(c, e, entryNames(e));
+    if (taken) {
+      throw new Refusal(
+        'invalid_params',
+        `${this.label(c, taken.other)} already answers to the name ${JSON.stringify(spelling(e, taken.name))}; ${this.label(c, e)} cannot be restored while another ${e.type} answers to one of its names`,
+      );
+    }
+    const op: MemOp = { op: 'restore', ref: e.key };
+    this.dryRun(op);
+    const { entry } = this.memWrite(op);
+    this.publishMemory('restored', entry);
+    return { key: e.key, changed: true, ...this.untold() };
+  }
+
+  memoryList(input?: { type?: EntryType | 'note' | 'arc'; includeRetired?: boolean }): MemoryRow[] {
+    this.assertOpen();
+    const opts = input ?? {};
+    if (!isObject(opts)) throw new Refusal('invalid_params', 'memoryList takes {type?, includeRetired?}');
+    const { type, includeRetired } = opts;
+    if (type !== undefined && type !== 'note' && type !== 'arc' && !isEntryType(type)) {
+      throw new Refusal('invalid_params', `type must be note, arc or an entry type (${ENTRY_TYPES.join(', ')})`);
+    }
+    if (includeRetired !== undefined && typeof includeRetired !== 'boolean') throw new Refusal('invalid_params', 'includeRetired must be true or false');
+    const rows: MemoryRow[] = [];
+    for (const { ref, entry } of entryRefs(this.view().compendium)) {
+      if (entry.retired && includeRetired !== true) continue;
+      if (type !== undefined && entryKind(entry) !== type) continue;
+      rows.push(memoryRow(ref, entry));
+    }
+    return rows;
+  }
+
+  memoryGet(input: { ref: string }): { ref: string; entry: CEntry; render: string; brief: string } {
+    this.assertOpen();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryGet needs {ref}');
+    const c = this.view().compendium;
+    const entry = this.findEntry(input.ref, 'live');
+    return { ref: refOf(c, entry.key) ?? entry.key, entry, render: renderEntry(entry), brief: renderBrief(entry, COMPENDIUM_LIMITS.full.briefChars) };
+  }
+
+  memoryTree(input?: { book?: string }): TreeNode[] {
+    this.assertOpen();
+    const opts = input ?? {};
+    if (!isObject(opts) || (opts.book !== undefined && typeof opts.book !== 'string')) throw new Refusal('invalid_params', 'memoryTree takes {book?}');
+    const lib = this.library();
+    const all = [...this.view().compendium.entries.values()];
+    const trees: TreeNode[] = [];
+    if (opts.book === undefined) trees.push(deriveTree(all.filter((e) => e.origin.kind === 'session')));
+    const categories = this.categories();
+    const categoryOf = (e: CEntry): string | undefined => (e.origin.kind === 'library' ? categories.get(`${e.origin.book}\u0000${e.origin.id}`) : undefined);
+    for (const [id, name] of lib.seed.books) {
+      if (opts.book !== undefined && opts.book !== id) continue;
+      trees.push(deriveTree(all.filter((e) => e.origin.kind === 'library' && e.origin.book === id), { rootLabel: name, categoryOf }));
+    }
+    if (opts.book !== undefined && trees.length === 0) throw new Refusal('not_found', `the Compendium reads no book ${JSON.stringify(opts.book)}`);
+    return trees;
+  }
+
+  memoryExport(input: { name: string; format: 'core' | 'compendium'; force?: boolean }): { path: string; id: string; entries: number; warnings?: ImportWarning[] } {
+    this.guardMemory();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryExport needs {name, format}');
+    if (typeof input.name !== 'string' || normalizeName(input.name) === '') throw new Refusal('invalid_params', 'the export needs a name with at least one letter or digit');
+    const format = input.format ?? 'core';
+    if (format !== 'core' && format !== 'compendium') throw new Refusal('invalid_params', 'format must be core or compendium');
+    if (input.force !== undefined && typeof input.force !== 'boolean') throw new Refusal('invalid_params', 'force must be true or false');
+    const name = input.name.trim();
+    const id = canonicalId(name);
+    const view = this.exportView();
+    const taken = (path: string, what: string): void => {
+      if (input.force !== true && existsSync(path)) throw new Refusal('invalid_params', `${what} already exists (${path}); export with force to overwrite it`);
+    };
+    if (format === 'core') {
+      // The lead's ruling: force never writes over a book this session reads (it would become the session's part of it).
+      if ((this.config.lorebooks ?? []).includes(id)) {
+        throw new Refusal('invalid_params', `the library lorebook ${JSON.stringify(id)} is one of this session's books: exporting over it would replace it with this session's part of it; choose another name`);
+      }
+      const book = exportCoreBook(view, name);
+      const path = join(libraryDir(this.ctx.home, 'lorebooks'), `${id}.json`);
+      taken(path, `the library lorebook ${JSON.stringify(id)}`);
+      if (existsSync(path)) replaceFile(path, `${JSON.stringify(book, null, 2)}\n`);
+      else {
+        const saved = saveToLibrary(this.ctx.home, 'lorebooks', name, book);
+        return { path: saved.path, id: saved.id, entries: book.entries.length };
+      }
+      return { path, id, entries: book.entries.length };
+    }
+    const dir = join(this.ctx.home, 'exports');
+    const path = join(dir, `${id}.compendium.json`);
+    taken(path, `the export ${JSON.stringify(`${id}.compendium.json`)}`);
+    const rows = exportCompendiumRows(view);
+    // What the file cannot keep (a second featured entry of a type…), for the caller to show.
+    const warnings = compendiumWarnings(rows);
+    mkdirSync(dir, { recursive: true });
+    try {
+      writeCompendiumFile(path, { name, exportDate: this.now() }, rows);
+    } catch (e) {
+      // Past what RoleCall imports (RC_LIMITS): refused, nothing left on disk.
+      if (e instanceof ExportLimitError) throw new Refusal('invalid_params', e.message);
+      throw e;
+    }
+    return { path, id, entries: rows.length, ...(warnings.length > 0 ? { warnings } : {}) };
+  }
+
+  compendium(): CompendiumView {
+    this.assertOpen();
+    return this.view().compendium;
+  }
+
+  /**
+   * The view an export reads (the lead's ruling I): folded with the readable books' seed even while
+   * the Compendium is off, since exporting is a data operation, so the session's changes to library
+   * entries (overlays) are never dropped. The head view itself while the Compendium is on.
+   */
+  private exportView(): PathView {
+    const cfg = compendiumConfigOf(this.config);
+    if (cfg.enabled !== false) return this.view();
+    const seed = this.readableSeed();
+    if (seed === EMPTY_SEED) return this.view();
+    return foldView(this.log.header, this.log.entries(), this.tree(), { library: seed });
+  }
+
+  /** The readable books' seed as if the Compendium were on (the session's own seed while it is). */
+  private readableSeed(): LibrarySeed {
+    const cfg = compendiumConfigOf(this.config);
+    if (cfg.enabled !== false) return this.library().seed;
+    return librarySeed(loreSources(this.log.header.cast, this.library().sources), { ...cfg, enabled: true });
   }
 
   /** The memory verbs' preconditions: an open session and no running turn. */
@@ -996,20 +1474,93 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     if (this.running) throw new Refusal('session_busy', 'a turn is running');
   }
 
-  /** The note a ref names on the current path (C<n>, key or title, see resolveNoteRef), else not_found. */
-  private findNote(ref: unknown, prefer: 'live' | 'retired'): CEntry {
-    if (typeof ref !== 'string' || ref.trim() === '') throw new Refusal('invalid_params', 'ref must be a note handle (C<n>), key or title');
-    const note = resolveNoteRef(this.view().compendium, ref, prefer);
-    if (!note) throw new Refusal('not_found', `no single note matches ${JSON.stringify(ref)} (use its C<n> handle or key)`);
-    return note;
+  /** The entry a ref names on the current path (C<n>, key or a unique name, see resolveEntryRef), else not_found. */
+  private findEntry(ref: unknown, prefer: 'live' | 'retired'): CEntry {
+    if (typeof ref !== 'string' || ref.trim() === '') throw new Refusal('invalid_params', 'ref must be an entry handle (C<n>), key or name');
+    const e = resolveEntryRef(this.view().compendium, ref.trim(), prefer);
+    if (!e) throw new Refusal('not_found', `no single entry matches ${JSON.stringify(ref)} (use its C<n> handle or key)`);
+    return e;
   }
 
-  /** One durable human mem row with one op (§5.8, decision F1); the version does not move. */
-  private memAppend(op: MemOp): { seq: number } {
-    return this.verbAppend({ t: 'mem', ts: this.now(), key: null, on: null, by: 'user', ops: [op] });
+  /** (library id, entry id) → the book entry's category (extras.category), for the books' trees (D-165). */
+  private categories(): ReadonlyMap<string, string> {
+    this.library();
+    const cache = this.libCache!;
+    if (cache.categories) return cache.categories;
+    const out = new Map<string, string>();
+    for (const src of cache.lib.sources) {
+      for (const e of src.book.entries) {
+        const cat = e.extras?.category;
+        if (typeof cat === 'string' && cat.trim() !== '') out.set(`${src.key}\u0000${e.id}`, cat);
+      }
+    }
+    cache.categories = out;
+    return out;
   }
 
-  private publishMemory(change: 'note' | 'edited' | 'retired' | 'restored', note: CEntry): void {
-    this.publish({ type: 'memory', change, ref: note.key, kind: 'note', name: note.name, by: 'user' });
+  /** An entry as the refusals name it: `"Мира" (C1)`. */
+  private label(c: CompendiumView, e: CEntry): string {
+    return `${JSON.stringify(e.name)} (${refOf(c, e.key) ?? e.key})`;
+  }
+
+  /**
+   * D-159 dry run: the current rows plus one human row with `op` (the next seq) folded; an issue on it
+   * (a large_entry flag aside) refuses it with the reason in words. Returns that fold, the entry the
+   * row changed and its effect. Writes nothing.
+   */
+  private dryRun(op: MemOp, ts: string = this.now()): { c: CompendiumView; effect: OpEffect; entry: CEntry } {
+    const tree = this.tree();
+    const view = this.view();
+    const seed = this.library().seed;
+    const seq = this.log.lastSeq() + 1;
+    const row: MemEntry = { t: 'mem', seq, ts, key: null, on: null, by: 'user', ops: [op] };
+    const c = foldCompendium([...tree.mems, row], { pathSet: view.pathSet, path: view.path.map((m) => m.id), touched: tree.touched, library: seed });
+    const issue = c.issues.find((i) => i.seq === seq && i.why !== 'large_entry');
+    if (issue) throw new Refusal('invalid_params', refusalWords(issue, op, c, seed));
+    const made = rowEffect(c, seq);
+    if (!made) throw new Error(`the memory row tried at seq ${seq} did not fold`);
+    return { c, ...made };
+  }
+
+  /**
+   * One durable human mem row with one op (§5.8, decision F1), the one a dry run accepted. The version
+   * does not move. Returns the entry the row changed and the fold after the write.
+   */
+  private memWrite(op: MemOp): { entry: CEntry; change: OpEffect['change']; c: CompendiumView } {
+    const written = this.verbAppend({ t: 'mem', ts: this.now(), key: null, on: null, by: 'user', ops: [op] });
+    const c = this.view().compendium;
+    const made = rowEffect(c, written.seq);
+    if (!made) throw new Error(`the memory row written at seq ${written.seq} did not fold`);
+    return { entry: made.entry, change: made.effect.change, c };
+  }
+
+  /**
+   * An edit op of `e`: dry run; nothing written when it would change nothing (changed:false); else
+   * `check` sees the entry as the edit leaves it (it refuses by throwing), then the row and its event.
+   */
+  private editWith(e: CEntry, op: MemOp, check?: (after: CEntry) => void): MemoryWrite {
+    const trial = this.dryRun(op);
+    const after = trial.c.entries.get(e.key);
+    if (sameEntry(e, after)) return { key: e.key, changed: false, ...this.untold() };
+    if (check && after) check(after);
+    const { entry } = this.memWrite(op);
+    this.publishMemory('edited', entry);
+    return { key: e.key, changed: true, ...this.untold() };
+  }
+
+  /**
+   * The Compendium's notices (large entry, missing library entry; D-144.6, D-147) of the current fold
+   * not yet told in this open session, marked told: the verb returns them and the caller shows them.
+   * None while the Compendium is disabled (every overlay would read as missing).
+   */
+  private untold(): { notices?: Notice[] } {
+    if (!resolveCompendium(this.config.compendium).enabled) return {};
+    const out: Notice[] = [];
+    for (const n of compendiumNotices(this.view().compendium)) if (this.firstNotice(n.key)) out.push(n.notice);
+    return out.length > 0 ? { notices: out } : {};
+  }
+
+  private publishMemory(change: 'note' | 'created' | 'merged' | 'edited' | 'retired' | 'restored', e: CEntry): void {
+    this.publish({ type: 'memory', change, ref: e.key, kind: entryKind(e), name: e.name, by: 'user' });
   }
 }

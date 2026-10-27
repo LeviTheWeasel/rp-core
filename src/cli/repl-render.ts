@@ -9,20 +9,23 @@
 // small state machines (the prose styler and the turn printer); nothing here touches a session.
 
 import type { Event } from '../protocol/events.ts';
-import type { PreviewResult, RefusalCode } from '../engine/api.ts';
+import type { MemoryRow, PreviewResult, RefusalCode } from '../engine/api.ts';
 import type { ImportWarning } from '../formats/native.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import { entryLabel } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg } from '../providers/types.ts';
-import type { CEntry } from '../agents/compendium/types.ts';
+import { ENTRY_TYPE_INFO } from '../agents/compendium/entry-types.ts';
+import { entryCountOf, type TreeNode } from '../agents/compendium/tree.ts';
+import { ENTRY_TYPES, type CEntry, type EntryType } from '../agents/compendium/types.ts';
 import { NOTES_SCAN_DEPTH, noteText } from '../agents/compendium/notes.ts';
+import { COMPENDIUM_LIMITS } from '../agents/compendium/profile.ts';
 import { MOMENTUM } from '../agents/director/momentum.ts';
 import { renderDirective } from '../agents/director/render.ts';
 import { ageOf, isFinishedArc, isFinishedHidden } from '../agents/director/state.ts';
 import { SURFACE_TURNS, type DirectorRecord, type DirectorState, type Horizon, type NarratorDirective } from '../agents/director/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import { estimateMessage } from '../prompt/tokens.ts';
-import type { Generation, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
+import type { CompendiumTrace, Generation, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { markers, messageText, toolLine } from './render.ts';
 import type { BookRow } from './refs.ts';
@@ -229,6 +232,18 @@ const brief = (v: unknown, max = 40): string => {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 };
 
+/** A memory event's change as its side line says it, after the kind and the name (`character "Мира" merged`). */
+const MEMORY_CHANGE: Readonly<Record<string, string>> = {
+  created: 'created',
+  merged: 'merged',
+  arc: 'overview written',
+  note: 'added',
+  edited: 'edited',
+  retired: 'retired',
+  restored: 'restored',
+  reverted: 'reverted',
+};
+
 /** The one dim line a tool, agent, director, memory or retry event deserves (null: nothing to say). */
 export function sideLine(ev: Event): string | null {
   switch (ev.type) {
@@ -244,7 +259,7 @@ export function sideLine(ev: Event): string | null {
       return `⋯ ${ev.agent}: ${ev.status}${n}${ev.code ? ` [${ev.code}]` : ''}`;
     }
     case 'memory':
-      return `⋯ memory: ${ev.change} ${ev.kind} "${ev.name}"`;
+      return `⋯ memory: ${ev.kind} "${ev.name}" ${MEMORY_CHANGE[ev.change] ?? ev.change}${ev.by === 'user' ? '' : ` by ${ev.by}`}`;
     case 'retry':
       return `⋯ retrying in ${(ev.delayMs / 1000).toFixed(1)} s (${ev.code}${ev.status !== undefined ? `, HTTP ${ev.status}` : ''})`;
     default:
@@ -252,7 +267,7 @@ export function sideLine(ev: Event): string | null {
   }
 }
 
-/** A notice as one line (the caller prints it yellow, once per code per session). */
+/** A notice as one line (the caller prints it yellow, once per code and message per session). */
 export function noticeText(n: { level: string; code: string; message: string }): string {
   return `! ${n.message} (${n.code})`;
 }
@@ -266,7 +281,7 @@ export interface TurnPrinterOptions {
   label: string;
   /** Read when a reasoning segment starts: true shows it dimmed, false folds it to one line. */
   showReasoning: () => boolean;
-  /** Print a notice (the REPL dedupes by code per session). */
+  /** Print a notice (the REPL dedupes by code and message per session). */
   notice: (n: { level: 'info' | 'warn'; code: string; message: string }) => void;
   /** Continue: the answer's text before the turn, so the addition is shown after its last words. */
   continueFrom?: string;
@@ -595,13 +610,15 @@ export function loreTraceLines(tr: Trace, titles?: ReadonlyMap<string, string>):
 
 /**
  * /trace: a summary of the newest trace of the last answer. `after` goes right after the stored
- * lore lines: the recomputed misses and the notice that the inputs changed (repl.ts).
+ * lore lines: the recomputed misses and the notice that the inputs changed (repl.ts). M5a: the
+ * Compendium line follows when the request had Compendium input; `names` maps entry keys to names.
  */
 export function renderTrace(
   id: string,
   t: { trace: Trace; gen?: Generation; continued: boolean },
   titles?: ReadonlyMap<string, string>,
   after: readonly string[] = [],
+  names?: ReadonlyMap<string, string>,
 ): string {
   const tr = t.trace;
   const tok = `prompt ~${tr.tokens.estimated} tok${tr.tokens.reported !== undefined ? ` (server: ${tr.tokens.reported})` : ''}`;
@@ -612,6 +629,7 @@ export function renderTrace(
     `  unknown macros: ${tr.macros.unknown.length > 0 ? tr.macros.unknown.join(', ') : 'none'}`,
   ];
   lines.push(...loreTraceLines(tr, titles), ...after);
+  if (tr.compendium) lines.push(compendiumTraceLine(tr.compendium, names));
   if (tr.calls.length > 0) lines.push(`  calls: ${tr.calls.map((c) => `${c.agent} ${c.model} ${(c.ms / 1000).toFixed(1)}s`).join(', ')}`);
   lines.push(...toolTraceLines(tr));
   if (tr.partial) lines.push('  (partial: recovered after an interruption)');
@@ -991,22 +1009,200 @@ const noteKeys = (e: CEntry): string[] => {
   return keys.length > 0 ? keys : [e.name];
 };
 
+/** An entry's data size as /memory lists it: 312, 2.1k (D-161). */
+export const sizeText = (n: number): string => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`);
+
+/** An entry's display name: an arc reads `[Arc] <plot>` (D-145). */
+const shownName = (type: MemoryRow['type'], name: string): string => (type === 'arc' ? `[Arc] ${name}` : name);
+
 /**
- * /memory (decision F6): the notes of this path in creation order, each with its handle:
- * "C1  Brother — Mira's brother Yan sails the north road · keys: Yan, brother"; a retired one dimmed.
+ * One /memory line (D-161): `C12 Мира Ванс (aka Фонарщица) — <tagline> [lib: lantern] [2.1k]`. A note
+ * shows the start of its text and its keys, an arc the start of its overview; an overlay reads
+ * `[lib: <book>, edited]`, a retired entry `[retired: <reason>]`. `e`: the entry itself (notes, arcs).
  */
-export function renderNoteList(rows: readonly { ref: string; entry: CEntry }[], style: Style): string {
-  if (rows.length === 0) return 'no notes on this path yet: /memory add <title> | <keys> | <text> writes one';
-  const width = Math.max(...rows.map((r) => r.ref.length));
-  const live = rows.filter((r) => !r.entry.retired).length;
-  const lines = [`notes on this path: ${live} live${rows.length > live ? `, ${rows.length - live} retired` : ''} (/memory show <ref> prints one)`];
-  for (const { ref, entry: e } of rows) {
-    const parts = [`${e.name} — ${gist(e.content ?? '')}`, `keys: ${noteKeys(e).join(', ')}`];
-    if (e.retired) parts.push(`retired${e.retired.reason ? ` (${e.retired.reason})` : ''}`);
-    const line = `  ${ref.padEnd(width)}  ${parts.join(' · ')}`;
-    lines.push(e.retired ? style.dim(line) : line);
+export function memoryRowText(row: MemoryRow, e?: CEntry): string {
+  let line = shownName(row.type, row.name);
+  if (row.aliases.length > 0) line += ` (aka ${row.aliases.join(', ')})`;
+  const about = row.tagline !== '' ? row.tagline : row.type === 'note' || row.type === 'arc' ? gist(e?.content ?? '') : '';
+  if (about !== '') line += ` — ${about}`;
+  if (row.type === 'note' && e) line += ` · keys: ${noteKeys(e).join(', ')}`;
+  const tags: string[] = [];
+  if (row.origin !== 'session') tags.push(`[lib: ${row.origin.book}${row.overlay ? ', edited' : ''}]`);
+  if (row.featured) tags.push('[featured]');
+  if (row.retired) tags.push(row.retired.reason !== '' ? `[retired: ${row.retired.reason}]` : '[retired]');
+  // A note's or an arc's size is its text's length (the lead's ruling on D-161), whatever the row says.
+  const size = (row.type === 'note' || row.type === 'arc') && typeof e?.content === 'string' ? e.content.length : row.size;
+  tags.push(`[${sizeText(size)}]`);
+  return `${line} ${tags.join(' ')}`;
+}
+
+/** The /memory groups in order: the tree buckets of the entry types, then arcs, then notes. */
+const MEMORY_GROUPS: readonly { label: string; has: (t: MemoryRow['type']) => boolean }[] = [
+  ...ENTRY_TYPES.map((t) => ({ label: ENTRY_TYPE_INFO[t].bucket, has: (x: MemoryRow['type']) => x === t })),
+  { label: 'Arcs', has: (x) => x === 'arc' },
+  { label: 'Notes', has: (x) => x === 'note' },
+];
+
+/** What a /memory listing is of: the whole Compendium, one entry type, the notes or the arcs. */
+const listWhat = (type: EntryType | 'note' | 'arc' | undefined): string =>
+  type === undefined ? 'the Compendium of this path' : type === 'note' ? 'notes on this path' : type === 'arc' ? 'arcs on this path' : `${type} entries on this path`;
+
+/**
+ * /memory and /memory list [type|note|arc] [--retired] (D-161): the entries (memoryList, retired ones
+ * included: they are counted, and shown with `retired`) grouped by tree bucket, one line each, with
+ * the handles the engine gives them; a retired one dimmed. `entryOf`: a note's or an arc's entry (its
+ * text, its keys).
+ */
+export function renderMemoryList(
+  rows: readonly MemoryRow[],
+  opts: { type?: EntryType | 'note' | 'arc'; retired?: boolean },
+  style: Style,
+  entryOf: (key: string) => CEntry | undefined = () => undefined,
+): string {
+  const live = rows.filter((r) => !r.retired).length;
+  const retired = rows.length - live;
+  if (rows.length === 0) {
+    return opts.type === undefined
+      ? 'nothing in the Compendium on this path yet: /memory new <type> [name] files an entry, /memory add <title> | <keys> | <text> writes a note'
+      : `no ${listWhat(opts.type)}`;
+  }
+  const shown = opts.retired ? rows : rows.filter((r) => !r.retired);
+  const more = retired === 0 ? '' : opts.retired ? `, ${retired} retired` : `, ${retired} retired (/memory list${opts.type ? ` ${opts.type}` : ''} --retired shows them)`;
+  const what = listWhat(opts.type);
+  const lines = [`${what[0]!.toUpperCase()}${what.slice(1)}: ${live} live${more}${shown.length > 0 ? ' · /memory show <ref> prints one' : ''}`];
+  const width = Math.max(0, ...shown.map((r) => r.ref.length));
+  for (const g of MEMORY_GROUPS) {
+    const mine = shown.filter((r) => g.has(r.type));
+    if (mine.length === 0) continue;
+    lines.push(`${g.label} (${mine.length})`);
+    for (const r of mine) {
+      const line = `  ${r.ref.padEnd(width)} ${memoryRowText(r, entryOf(r.key))}`;
+      lines.push(r.retired ? style.dim(line) : line);
+    }
   }
   return lines.join('\n');
+}
+
+/**
+ * /memory show <ref> of a typed entry or an arc (D-161): who it is, where it came from (origin, the
+ * row that created it, the last row that changed it, the overlay, a retirement, former names), then
+ * its full render as read_lore gives it.
+ */
+export function renderEntryCard(ref: string, e: CEntry, render: string): string {
+  const kind = e.type ?? (e.arc !== undefined ? 'arc' : 'note');
+  const lines = [`${ref} ${shownName(kind, e.name)} · ${kind} · ${e.key}`];
+  if (e.aliases.length > 0) lines.push(`  aka: ${e.aliases.join(', ')}`);
+  if (e.origin.kind === 'library') {
+    const overlay = e.origin.overlay ? '; changed in this session (an overlay: the book file stays as it is)' : '';
+    lines.push(`  origin: the library book ${e.origin.book}, entry ${e.origin.id}${overlay}`);
+    if (e.prov.lastSeq > 0) lines.push(`  last changed at journal row ${e.prov.lastSeq}`);
+  } else {
+    const how = e.prov.created === null ? `written by you at journal row ${e.prov.createdSeq}` : `filed on message ${e.prov.created} at journal row ${e.prov.createdSeq}`;
+    lines.push(`  origin: this session, ${how}${e.prov.lastSeq !== e.prov.createdSeq ? `; last changed at row ${e.prov.lastSeq}` : ''}`);
+  }
+  if (e.range) lines.push(`  covers messages ${e.range[0]} … ${e.range[1]}`);
+  if (e.keys.length > 0) lines.push(`  keys: ${e.keys.join(', ')}`);
+  if (e.prov.formerNames && e.prov.formerNames.length > 0) lines.push(`  former names: ${e.prov.formerNames.join(', ')}`);
+  if (e.featured) lines.push('  featured');
+  if (e.retired) lines.push(`  retired${e.retired.reason ? `: ${e.retired.reason}` : ''} (out of the story; /memory restore ${ref} brings it back)`);
+  lines.push('');
+  for (const l of render.split('\n')) lines.push(l === '' ? '' : `  ${l}`);
+  return lines.join('\n');
+}
+
+/** At most this many entries are named on one /memory tree line; the rest are counted. */
+const TREE_NAMED = 8;
+
+/**
+ * /memory tree (D-165): each tree indented, every node with the count of entries on it and below and
+ * the handles and names of its own entries; a node that is one entry (a place with its sub-places)
+ * is that entry. `sessionFirst`: the first tree is the session's (no book was asked for).
+ */
+export function renderMemoryTree(trees: readonly TreeNode[], rows: readonly MemoryRow[], sessionFirst: boolean): string {
+  if (trees.every((t) => entryCountOf(t) === 0) && (sessionFirst ? trees.length <= 1 : trees.length === 0)) {
+    return 'nothing in the Compendium on this path yet: /memory new <type> [name] files an entry';
+  }
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const named = (r: MemoryRow): string => `${r.ref} ${shownName(r.type, r.name)}`;
+  const lines: string[] = [];
+  const walk = (node: TreeNode, depth: number): void => {
+    const indent = '  '.repeat(depth);
+    const own = node.entryIds.flatMap((k) => (byKey.has(k) ? [byKey.get(k)!] : []));
+    const count = entryCountOf(node);
+    if (own.length === 1 && node.entryIds.length === 1 && own[0]!.name === node.label) {
+      lines.push(`${indent}${named(own[0]!)}${count > 1 ? ` · ${count}` : ''}`);
+    } else {
+      const list = own.slice(0, TREE_NAMED).map(named).join(', ') + (own.length > TREE_NAMED ? `, … ${own.length - TREE_NAMED} more` : '');
+      lines.push(`${indent}${node.label} · ${count}${list !== '' ? `: ${list}` : ''}`);
+    }
+    for (const c of node.children) walk(c, depth + 1);
+  };
+  trees.forEach((root, i) => {
+    let where = '';
+    if (sessionFirst && i === 0) where = ' (this session)';
+    else {
+      const first = [...allKeys(root)].map((k) => byKey.get(k)).find((r) => r !== undefined && r.origin !== 'session');
+      if (first && first.origin !== 'session') where = ` (lib: ${first.origin.book})`;
+    }
+    lines.push(`${root.label}${where} · ${entryCountOf(root)}`);
+    for (const c of root.children) walk(c, 1);
+  });
+  return lines.join('\n');
+}
+
+/** Every entry key of a tree. */
+function* allKeys(node: TreeNode): Generator<string> {
+  yield* node.entryIds;
+  for (const c of node.children) yield* allKeys(c);
+}
+
+/**
+ * The trace's cut rows split by why (placeBlock keeps one list): a candidate that came after the block
+ * already held the profile's maxEntries is over the entry limit, any other did not fit the budget. The
+ * picks are the candidates in placeBlock's order, so the injected count before each cut row tells.
+ */
+export function splitCompendiumCut(c: CompendiumTrace): { limit: number; overLimit: CompendiumTrace['cut']; budget: CompendiumTrace['cut'] } {
+  const limit = COMPENDIUM_LIMITS[c.profile].maxEntries;
+  const injected = new Set(c.injected.map((x) => x.ref));
+  const cutOf = new Map(c.cut.map((x) => [x.ref, x]));
+  const overLimit: CompendiumTrace['cut'] = [];
+  const seen = new Set<string>();
+  let placed = 0;
+  for (const p of c.picks) {
+    if (seen.has(p.ref)) continue;
+    seen.add(p.ref);
+    if (injected.has(p.ref)) placed++;
+    else if (placed >= limit && cutOf.has(p.ref)) overLimit.push(cutOf.get(p.ref)!);
+  }
+  const over = new Set(overLimit.map((x) => x.ref));
+  return { limit, overLimit, budget: c.cut.filter((x) => !over.has(x.ref)) };
+}
+
+/**
+ * /trace (D-155, D-161): what the Compendium block did, on one line — the profile, the picks with
+ * their tier, what went in (full or brief, tokens), what the entry limit and what the budget cut, what
+ * was already in the prompt, what freshness hid. `names`: entry key → its name now (the trace keeps no texts).
+ */
+export function compendiumTraceLine(c: CompendiumTrace, names?: ReadonlyMap<string, string>): string {
+  const keyOf = new Map(c.picks.map((p) => [p.ref, p.key]));
+  const who = (ref: string, key = keyOf.get(ref)): string => {
+    const n = key !== undefined ? names?.get(key) : undefined;
+    return n !== undefined ? `${ref} "${n}"` : ref;
+  };
+  const parts: string[] = [c.profile];
+  if (c.picks.length === 0) parts.push('nothing picked');
+  else {
+    parts.push(`picked ${c.picks.length}: ${c.picks.map((p) => `${who(p.ref, p.key)} (${p.via})`).join(', ')}`);
+    parts.push(c.injected.length === 0 ? 'nothing injected' : `injected ${c.injected.length}: ${c.injected.map((x) => `${who(x.ref)} ${x.mode} ${x.tok} tok`).join(', ')}`);
+  }
+  const cut = splitCompendiumCut(c);
+  const rows = (xs: CompendiumTrace['cut']): string => xs.map((x) => `${who(x.ref)} ${x.tok} tok`).join(', ');
+  if (cut.overLimit.length > 0) parts.push(`over the entry limit (${c.profile}: ${cut.limit}) ${cut.overLimit.length}: ${rows(cut.overLimit)}`);
+  if (cut.budget.length > 0) parts.push(`cut by the budget ${cut.budget.length}: ${rows(cut.budget)}`);
+  if (c.repeated.length > 0) parts.push(`already in the prompt ${c.repeated.length}`);
+  if (c.hidden > 0) parts.push(`${c.hidden} hidden by freshness`);
+  if (c.injected.length > 0) parts.push(`block ${c.budget.block} tok`);
+  return `  compendium: ${parts.join(' · ')}`;
 }
 
 /** /memory show <ref>: the note, its keys, where it came from, and the text a turn sends when it fires. */

@@ -41,16 +41,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
-import { Refusal, type EngineHandle, type PreviewOptions, type SessionHandle, type TurnHandle, type TurnOutcome } from '../engine/api.ts';
+import { Refusal, type EngineHandle, type MemoryRow, type MemoryWrite, type PreviewOptions, type SessionHandle, type TurnHandle, type TurnOutcome } from '../engine/api.ts';
 import { ConfigError, type RpConfig } from '../config/config.ts';
 import { listLibrary } from '../formats/library.ts';
 import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
-import { NOTES_BOOK_KEY, noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
+import { entryNames, normalizeName } from '../agents/compendium/apply.ts';
+import { isNote, NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
+import { resolveEntryRef } from '../agents/compendium/refs.ts';
+import { resolveCompendium } from '../agents/compendium/profile.ts';
 import { directorAt } from '../agents/director/state.ts';
 import type { NarratorDirective } from '../agents/director/types.ts';
-import type { CEntry } from '../agents/compendium/types.ts';
+import type { CEntry, EntryType, Rec } from '../agents/compendium/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
-import type { Event } from '../protocol/events.ts';
+import type { ImportWarning } from '../formats/native.ts';
+import type { Event, Notice } from '../protocol/events.ts';
 import { ACTIVE_PROBE_MAX_CALLS, ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS } from '../providers/probe-active.ts';
 import type { ModelCaps } from '../providers/types.ts';
 import type { DeepPartial, Roles, SessionConfig, Trace } from '../session/entries.ts';
@@ -95,9 +99,11 @@ import {
   renderDirector,
   renderImported,
   renderLoreBooks,
+  renderEntryCard,
+  renderMemoryList,
+  renderMemoryTree,
   renderNote,
   renderNoteCard,
-  renderNoteList,
   renderNumberedPath,
   renderSearch,
   presetCapText,
@@ -112,6 +118,7 @@ import {
   renderWire,
   type Style,
 } from './repl-render.ts';
+import { diffEntry, editEntryText, namesOf, newEntryText, parseEntryText } from './repl-memory.ts';
 import { LineView, type BannerInfo, type ReplView, type ReplViewContext, type TurnView } from './repl-view.ts';
 
 export interface ReplDeps {
@@ -467,6 +474,15 @@ function editorRunner(source: LineSource, env: Record<string, string | undefined
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** /memory new … and /memory edit with nothing after it: the forms that open the editor, as typed. */
+const EDITOR_FORM = /^\s*\/memory\s+(?:new(?:\s|$)|edit\s*$)/i;
+
+/** What a /memory confirmation says instead of "from the next turn" while compendium.enabled is false. */
+export const COMPENDIUM_OFF = 'the Compendium is off for this session: entries are kept but not sent (/memory on)';
+
+/** What /memory list and /memory off say instead while the path has live notes: those are still sent. */
+export const COMPENDIUM_OFF_NOTES = 'the Compendium is off for this session: typed entries are kept but not sent; notes still are (/memory on)';
+
 /**
  * /director show of a record that sent no directive (a failed plan, reply `from`): the last directive
  * the narrator got before it, the nearest record on the path above `from` that planned one.
@@ -498,7 +514,7 @@ class Repl {
   private readonly exitWindowMs: number;
   private names: { char: string; user: string; width: number } = labels('');
   private showReasoning = false;
-  /** Notice codes already shown in this session (§12.4: each once). */
+  /** Notices already shown in this session, by code and message (§12.4: each once). */
   private noticed = new Set<string>();
   private queue: Item[] = [];
   private wake: (() => void) | null = null;
@@ -524,6 +540,8 @@ class Repl {
   private readonly env: Record<string, string | undefined>;
   /** ReplOptions.command: what the hints call this chat's command. */
   private readonly commandName: 'chat' | 'tui';
+  /** The text is edited outside the input line: a named $VISUAL / $EDITOR, or the host's editText. */
+  private readonly ownEditor: boolean;
 
   constructor(
     private readonly deps: ReplDeps,
@@ -549,7 +567,8 @@ class Repl {
     // /e: an editor only when the person named one ($VISUAL / $EDITOR); otherwise the message is
     // edited in place in the input line. A terminal editor started from inside the REPL depends on
     // the terminal handing it the keyboard, which some terminals (Warp) do not do.
-    this.editText = deps.editText ?? (namedEditor(env) ? editorRunner(this.source, env) : (initial) => this.inlineEdit(initial));
+    this.ownEditor = deps.editText !== undefined || namedEditor(env) !== null;
+    this.editText = deps.editText ?? (this.ownEditor ? editorRunner(this.source, env) : (initial) => this.inlineEdit(initial));
     this.exitWindowMs = opts.exitWindowMs ?? 2000;
   }
 
@@ -701,8 +720,11 @@ class Repl {
     // A TTY already shows what was typed, except a line typed mid-answer that is only now sent.
     if (!this.source.echoes || item.during) this.echo(item.line);
     try {
-      if (parsed.kind === 'error') this.say(this.style.red(parsed.message));
-      else if (parsed.kind === 'text') await this.submit(parsed.text);
+      if (parsed.kind === 'error') {
+        this.say(this.style.red(parsed.message));
+        // A /memory new or /memory edit <ref> refused as typed still takes its editor's line.
+        if (EDITOR_FORM.test(item.line)) await this.skipEditorLine();
+      } else if (parsed.kind === 'text') await this.submit(parsed.text);
       else await this.command(parsed.command);
     } catch (e) {
       this.report(e);
@@ -781,10 +803,17 @@ class Repl {
     this.view.echo(line.trim());
   }
 
+  /**
+   * A notice, once per code and message (section I): the engine keys some codes per book or entry
+   * (lorebook_missing, lore_regex_invalid, compendium_large_entry…), so the code alone would hide the
+   * second book's or entry's.
+   */
   private notice(n: { level: string; code: string; message: string }): void {
-    if (this.noticed.has(n.code)) return;
-    this.noticed.add(n.code);
-    this.say(this.style.yellow(noticeText({ ...n, message: this.redact(n.message) })));
+    const message = this.redact(n.message);
+    const seen = `${n.code}\u0000${message}`;
+    if (this.noticed.has(seen)) return;
+    this.noticed.add(seen);
+    this.say(this.style.yellow(noticeText({ ...n, message })));
   }
 
   /** deps.redact (scrub of known secrets), or the text as is. */
@@ -1118,7 +1147,8 @@ class Repl {
     const multiline = this.source.multiline === true;
     if (!multiline && initial.includes(INLINE_BREAK)) {
       this.say(this.style.yellow(`this message contains ${INLINE_BREAK} itself; set $EDITOR to edit it in an editor`));
-      return Promise.resolve(null);
+      // Piped input: the script's next line was this edit's text; it is not a message either.
+      return this.skipEditorLine().then(() => null);
     }
     this.say(
       this.style.dim(
@@ -1132,12 +1162,44 @@ class Repl {
         this.editing = null;
         resolve(line === null ? null : multiline ? line : line.split(INLINE_BREAK).join('\n'));
       };
-      // Piped input: the next line is the new text. A source with an input line gets it prefilled.
+      // Piped input: the next line is the new text, also when it is already queued (a script's lines
+      // arrive before the commands ahead of them have run); a queued end of input cancels.
+      const next = this.source.interactive ? undefined : this.queue[0];
+      if (next?.t === 'line') {
+        this.queue.shift();
+        return this.editing(next.line);
+      }
+      if (next !== undefined) return this.editing(null);
+      // A source with an input line gets it prefilled.
       if (!this.source.echoes && !this.source.inline) return;
       this.view.cursor?.newline();
       this.source.prompt(prefix('edit', this.style), 'edit');
       this.source.prefill(multiline ? initial : initial.replace(/\r?\n/g, INLINE_BREAK));
     });
+  }
+
+  /**
+   * Piped input with in-place editing (section I): a /memory new|edit refused before its editor opens
+   * (a taken name, an unknown ref, a typo in the command) still takes the line the script wrote for
+   * that editor, so it never runs as a story message. An interactive input or an editor of its own
+   * (a named $VISUAL / $EDITOR, the host's) takes no line: there the script has none to give.
+   */
+  private async skipEditorLine(): Promise<void> {
+    if (this.source.interactive || this.ownEditor) return;
+    const line = await new Promise<string | null>((resolve) => {
+      this.editing = (l) => {
+        this.editing = null;
+        resolve(l);
+      };
+      // The line is often queued already (a script's lines arrive before the commands ahead of them run).
+      const next = this.queue[0];
+      if (next?.t === 'line') {
+        this.queue.shift();
+        return this.editing(next.line);
+      }
+      if (next !== undefined) return this.editing(null);
+    });
+    if (line !== null) this.say(this.style.dim('(the next line, meant for the editor, was skipped)'));
   }
 
   /** /e [n] (§5.5: an edit entry; the raw text stays in the journal). */
@@ -1329,7 +1391,8 @@ class Repl {
       const t = latestTrace(j, m.id);
       if (!t) continue;
       const titles = this.titles();
-      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles))));
+      const names = t.trace.compendium ? new Map(this.entryRows().map((r) => [r.key, r.name])) : undefined;
+      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles), names)));
     }
     this.say(this.style.dim('no answer with a trace on this path yet (greetings have none)'));
   }
@@ -1348,7 +1411,8 @@ class Repl {
   /** Entry titles of every book a turn scans now (M3: the notes too), for /trace, /lore test and /preview. */
   private titles(): Map<string, string> {
     const titles = entryTitles(this.deps.home, this.session.header().cast, configOf(this.journal()).lorebooks);
-    for (const { entry } of this.noteRows()) titles.set(entryLabel(NOTES_BOOK_KEY, entry.key), entry.name);
+    // The engine's own view (its library seed included), so a note is named as /memory names it.
+    for (const r of this.session.memoryList({ type: 'note', includeRetired: true })) titles.set(entryLabel(NOTES_BOOK_KEY, r.key), r.name);
     return titles;
   }
 
@@ -1414,17 +1478,19 @@ class Repl {
         if (current.includes(r.id)) return this.say(this.style.dim(`lorebook ${r.id} is already in this session`));
         // A world is read once by name: a changed copy of a world (harbor-2 "Harbor") replaces it.
         const next = addLoreId(home, current, r.id, r.value.name);
+        const before = this.entryRows();
         this.session.configure({ lorebooks: next.ids });
+        const joining = this.bookJoins(r.id, before, next.replaced);
         const n = r.value.entries.length;
         const entries = `${n} entr${n === 1 ? 'y' : 'ies'}`;
         if (next.replaced !== undefined) {
           return this.say(
             this.style.dim(
-              `lorebook ${r.id} "${r.value.name}" replaces ${next.replaced}: same name, and a world is read once by name (${entries}, from the next turn; /lore add ${next.replaced} brings the old one back)`,
+              `lorebook ${r.id} "${r.value.name}" replaces ${next.replaced}: same name, and a world is read once by name (${entries}, from the next turn; /lore add ${next.replaced} brings the old one back)${joining}`,
             ),
           );
         }
-        return this.say(this.style.dim(`lorebook ${r.id} "${r.value.name}" added: ${entries} (from the next turn)`));
+        return this.say(this.style.dim(`lorebook ${r.id} "${r.value.name}" added: ${entries} (from the next turn)${joining}`));
       }
       case 'rm': {
         if (c.id === CARD_BOOK_KEY || c.id === PERSONA_BOOK_KEY) {
@@ -1434,8 +1500,9 @@ class Repl {
           const has = current.length > 0 ? `it has: ${current.join(', ')}` : 'it has none';
           return this.say(this.style.red(`/lore rm: ${c.id} is not a lorebook of this session (${has})`));
         }
+        const leaving = this.bookLeaves(c.id);
         this.session.configure({ lorebooks: current.filter((id) => id !== c.id) });
-        return this.say(this.style.dim(`lorebook ${c.id} removed (from the next turn; it stays in the library)`));
+        return this.say(this.style.dim(`lorebook ${c.id} removed (from the next turn; it stays in the library)${leaving}`));
       }
       case 'test': {
         // The reply to `text`, as if it were sent: the engine recomputes the verdicts [D-45].
@@ -1447,6 +1514,55 @@ class Repl {
         return this.say([`lore test: a reply to your text (nothing is sent)`, renderVerdicts(r.verdicts ?? [], r.trace.lore, this.style, this.titles(), 40, r.loreUse), ...notes].join('\n'));
       }
     }
+  }
+
+  /**
+   * What /lore rm of `id` does to /memory, said before the book goes (D-147, D-150): the book's
+   * Compendium entries leave the list at once, the handles after them move up, and this session's
+   * changes to them stay in the journal, applied again if the book comes back. '' when the
+   * Compendium reads nothing of it (off, the book 'off', or no typed entries).
+   */
+  private bookLeaves(id: string): string {
+    const rows = this.entryRows();
+    const first = rows.findIndex((r) => r.origin !== 'session' && r.origin.book === id);
+    if (first < 0) return '';
+    const own = rows.filter((r) => r.origin !== 'session' && r.origin.book === id);
+    const n = own.length;
+    const shift = rows.some((r, i) => i > first && (r.origin === 'session' || r.origin.book !== id)) ? ', and the C<n> of the entries after them change' : '';
+    const changed = own.filter((r) => r.overlay === true).length;
+    const kept =
+      changed > 0
+        ? `; this session's changes to ${changed} of them are kept and come back if the book returns (/lore add ${id})`
+        : '';
+    return `; its ${n} Compendium entr${n === 1 ? 'y leaves' : 'ies leave'} /memory now${shift}${kept}`;
+  }
+
+  /**
+   * What /lore add of `id` did to /memory (section I; bookLeaves is its mirror): the book's Compendium
+   * entries join the list at once, the handles of the entries after them change, and this session's
+   * changes to them apply again; a book it replaced takes its entries with it. `before` is the list
+   * before the add. '' when the Compendium reads nothing of either (off, 'off', or no typed entries).
+   */
+  private bookJoins(id: string, before: readonly MemoryRow[], replaced: string | undefined): string {
+    const ofBook = (rows: readonly MemoryRow[], book: string | undefined): MemoryRow[] =>
+      book === undefined ? [] : rows.filter((r) => r.origin !== 'session' && r.origin.book === book);
+    const rows = this.entryRows();
+    const joined = ofBook(rows, id);
+    const left = ofBook(before, replaced).length;
+    if (joined.length === 0 && left === 0) return '';
+    const was = new Map(before.map((r) => [r.key, r.ref]));
+    const moved = rows.some((r) => was.has(r.key) && was.get(r.key) !== r.ref);
+    const count = (k: number, verb: string): string => `${k} Compendium entr${k === 1 ? `y ${verb}s` : `ies ${verb}`}`;
+    const what =
+      left === 0
+        ? `its ${count(joined.length, 'join')} /memory now`
+        : joined.length === 0
+          ? `${replaced}'s ${count(left, 'leave')} /memory now`
+          : `${replaced}'s ${count(left, 'leave')} /memory and ${id}'s ${joined.length} join it now`;
+    const shift = moved ? ', and the C<n> of the entries after them change' : '';
+    const changed = joined.filter((r) => r.overlay === true).length;
+    const again = changed > 0 ? `; this session's changes to ${changed} of them apply again` : '';
+    return `; ${what}${shift}${again}`;
   }
 
   /** The answer /preview n|id names (an answer on the active path), or null after saying why not. */
@@ -1514,84 +1630,405 @@ class Repl {
     this.say(this.redact([renderPreview(r, this.style, titles, transport), ...verdicts].join('\n')));
   }
 
-  // ---- notes, search, active probes (M3) ------------------------------------------------------------
+  // ---- the Compendium (M3 notes, M5a), search, active probes (M3) -----------------------------------
 
-  /** The notes of the current path with their C<n> handles (creation order, live and retired). */
-  private noteRows(): { ref: string; entry: CEntry }[] {
-    return noteRefs(this.session.view().compendium);
+  /** Every entry of the current path's Compendium with its C<n> handle (the engine's: library seed first), live and retired. */
+  private entryRows(): MemoryRow[] {
+    return this.session.memoryList({ includeRetired: true });
   }
 
-  /** A note's handle as /memory lists it now ('C?' when it is not on this path). */
+  /** An entry's row as /memory lists it now (undefined when it is not on this path). */
+  private rowOf(key: string): MemoryRow | undefined {
+    return this.entryRows().find((r) => r.key === key);
+  }
+
+  /** An entry's handle as /memory lists it now ('C?' when it is not on this path). */
   private refOf(key: string): string {
-    return this.noteRows().find((r) => r.entry.key === key)?.ref ?? 'C?';
+    return this.rowOf(key)?.ref ?? 'C?';
   }
 
-  /** A note's handle and its current title, as a confirmation names it: `C2 "Old lighthouse"`. */
-  private named(key: string): string {
-    const row = this.noteRows().find((r) => r.entry.key === key);
-    return row ? `${row.ref} ${JSON.stringify(row.entry.name)}` : 'C?';
+  /** An entry as a confirmation names it, its kind, handle and current name: `note C2 "Old lighthouse"`. */
+  private described(key: string): string {
+    const row = this.rowOf(key);
+    return row ? `${row.type} ${row.ref} ${JSON.stringify(row.name)}` : 'C?';
   }
 
-  /** /memory, /memory show|add|edit|retire|restore (decision F6). A refusal is one red line. */
-  private memory(c: Extract<Command, { name: 'memory' }>): void {
+  /** The off line of /memory list and /memory off: COMPENDIUM_OFF, or COMPENDIUM_OFF_NOTES when the path has live notes. */
+  private offText(): string {
+    return this.session.memoryList({ type: 'note' }).length > 0 ? COMPENDIUM_OFF_NOTES : COMPENDIUM_OFF;
+  }
+
+  /** compendium.enabled of this session now (a header written before M5a stored false). */
+  private compendiumOn(): boolean {
+    return resolveCompendium(configOf(this.journal()).compendium).enabled;
+  }
+
+  /**
+   * A confirmation's tail for a typed entry or an arc: `(from the next turn<extra>)`, or, while the
+   * Compendium is off, `; <COMPENDIUM_OFF>` (it reaches no prompt). Notes are sent either way.
+   */
+  private whenSent(note: boolean, extra = ''): string {
+    return note || this.compendiumOn() ? ` (from the next turn${extra})` : `; ${COMPENDIUM_OFF}`;
+  }
+
+  /**
+   * The Compendium's notices a memory verb returned (the engine tells each once): one line each,
+   * printed on every path, a verb that changed nothing too (it marked them told all the same).
+   */
+  private verbNotices(notices: readonly Notice[] | undefined): void {
+    for (const n of notices ?? []) this.notice(n);
+  }
+
+  /** An export's warnings (compendiumWarnings: an entry written unfeatured…): one line each. */
+  private exportWarnings(warnings: readonly ImportWarning[] | undefined): void {
+    for (const w of warnings ?? []) this.say(this.style.yellow(`  ! ${this.redact(w.message)}${w.path ? ` (${w.path})` : ''}`));
+  }
+
+  /**
+   * After a JSON error or a refusal the editor opens again only where a person can fix the text: an
+   * interactive input or an editor of its own. A piped script's next line is not a fix (in-place
+   * editing would take it as the text), so there the error is said and nothing is written.
+   */
+  private reopens(): boolean {
+    return this.source.interactive || this.ownEditor;
+  }
+
+  /**
+   * /memory (D-161): list, show, tree; new and edit through the editor (D-160); add, the one-line
+   * edit of a note, retire, restore (M3, any entry since M5a); export. Every refusal is one red line
+   * and writes nothing.
+   */
+  private async memory(c: Extract<Command, { name: 'memory' }>): Promise<void> {
     const fail = (e: unknown): void => {
       if (e instanceof Refusal) return this.say(this.style.red(`/memory ${c.action}: ${this.redact(e.message)}`));
       throw e;
     };
     switch (c.action) {
-      case 'list':
-        return this.say(renderNoteList(this.noteRows(), this.style));
-      case 'show': {
-        const note = resolveNoteRef(this.session.view().compendium, c.ref);
-        if (!note) return this.say(this.style.red(`/memory show: no single note matches ${JSON.stringify(c.ref)} (use its C<n> as /memory lists it, or its key)`));
-        return this.say(renderNoteCard(this.refOf(note.key), note));
-      }
-      case 'add': {
-        let key: string;
+      case 'list': {
+        let rows: MemoryRow[];
         try {
-          key = this.session.memoryAdd({ title: c.title, keys: c.keys, content: c.content }).key;
+          rows = this.session.memoryList({ ...(c.type !== undefined ? { type: c.type } : {}), includeRetired: true });
         } catch (e) {
           return fail(e);
         }
-        const ref = this.refOf(key);
+        const entries = this.session.compendium().entries;
+        // Off: a list of notes alone gets no line (they are sent either way); a whole list names them.
+        if (!this.compendiumOn() && c.type !== 'note') this.say(this.style.yellow(c.type === undefined ? this.offText() : COMPENDIUM_OFF));
+        return this.say(renderMemoryList(rows, { ...(c.type !== undefined ? { type: c.type } : {}), retired: c.retired === true }, this.style, (k) => entries.get(k)));
+      }
+      case 'on':
+      case 'off':
+        return this.compendiumSwitch(c.action === 'on');
+      case 'show': {
+        let got: ReturnType<SessionHandle['memoryGet']>;
+        try {
+          got = this.session.memoryGet({ ref: c.ref });
+        } catch (e) {
+          return fail(e);
+        }
+        return this.say(isNote(got.entry) ? renderNoteCard(got.ref, got.entry) : renderEntryCard(got.ref, got.entry, got.render));
+      }
+      case 'tree': {
+        let trees: ReturnType<SessionHandle['memoryTree']>;
+        try {
+          trees = this.session.memoryTree(c.book !== undefined ? { book: c.book } : {});
+        } catch (e) {
+          return fail(e);
+        }
+        return this.say(renderMemoryTree(trees, this.entryRows(), c.book === undefined));
+      }
+      case 'new':
+        return this.memoryNew(c.type, c.entryName);
+      case 'add': {
+        let w: MemoryWrite;
+        try {
+          w = this.session.memoryAdd({ title: c.title, keys: c.keys, content: c.content });
+        } catch (e) {
+          return fail(e);
+        }
+        const ref = this.refOf(w.key);
         const keys = c.keys.length > 0 ? c.keys : [c.title];
         const when = keys.length > 1 ? `${keys.slice(0, -1).join(', ')} or ${keys.at(-1)}` : keys[0];
-        return this.say(this.style.dim(`note ${ref} "${c.title}" added (${key}): from the next turn it is sent when ${when} comes up`));
+        this.say(this.style.dim(`note ${ref} "${c.title}" added (${w.key}): from the next turn it is sent when ${when} comes up`));
+        return this.verbNotices(w.notices);
       }
       case 'edit': {
-        let key: string;
+        if (c.title === undefined && c.keys === undefined && c.content === undefined) return this.memoryEditor(c.ref);
+        let got: ReturnType<SessionHandle['memoryGet']>;
+        let w: MemoryWrite;
         try {
-          key = this.session.memoryEdit({
-            ref: c.ref,
+          got = this.session.memoryGet({ ref: c.ref });
+          if (!isNote(got.entry)) {
+            const what = `${got.ref} ${JSON.stringify(got.entry.name)} is ${got.entry.type === null ? 'an arc' : `a ${got.entry.type}`}`;
+            return this.say(this.style.red(`/memory edit: ${what}; /memory edit ${got.ref} opens it in the editor (the one-line form is a note's)`));
+          }
+          w = this.session.memoryEdit({
+            ref: got.entry.key,
             ...(c.title !== undefined ? { title: c.title } : {}),
             ...(c.keys !== undefined ? { keys: c.keys } : {}),
             ...(c.content !== undefined ? { content: c.content } : {}),
-          }).key;
+          });
         } catch (e) {
           return fail(e);
+        }
+        if (!w.changed) {
+          this.say(this.style.dim('/memory edit: nothing changed, nothing written'));
+          return this.verbNotices(w.notices);
         }
         const what = [c.title !== undefined ? 'title' : '', c.keys !== undefined ? 'keys' : '', c.content !== undefined ? 'text' : ''].filter(Boolean).join(', ');
-        return this.say(this.style.dim(`note ${this.named(key)} changed: ${what} (from the next turn)`));
+        this.say(this.style.dim(`${this.described(w.key)} changed: ${what} (from the next turn)`));
+        return this.verbNotices(w.notices);
       }
       case 'retire': {
-        let key: string;
+        let w: MemoryWrite;
+        const { ref, reason } = this.retireTarget(c.ref, c.reason);
         try {
-          key = this.session.memoryRetire({ ref: c.ref, ...(c.reason !== undefined ? { reason: c.reason } : {}) }).key;
+          w = this.session.memoryRetire({ ref, ...(reason !== undefined ? { reason } : {}) });
         } catch (e) {
           return fail(e);
         }
-        return this.say(this.style.dim(`note ${this.named(key)} retired: it no longer fires (/memory restore ${this.refOf(key)} brings it back)`));
+        const note = this.rowOf(w.key)?.type === 'note';
+        const back = `(/memory restore ${this.refOf(w.key)} brings it back)`;
+        if (note || this.compendiumOn()) {
+          this.say(this.style.dim(`${this.described(w.key)} retired: ${note ? 'it no longer fires' : 'it leaves the story: no block, no lore tools'} ${back}`));
+        } else {
+          this.say(this.style.dim(`${this.described(w.key)} retired ${back}; ${COMPENDIUM_OFF}`));
+        }
+        return this.verbNotices(w.notices);
       }
       case 'restore': {
-        let key: string;
+        let w: MemoryWrite;
         try {
-          key = this.session.memoryRestore({ ref: c.ref }).key;
+          w = this.session.memoryRestore({ ref: c.ref });
         } catch (e) {
           return fail(e);
         }
-        return this.say(this.style.dim(`note ${this.named(key)} restored: it fires again from the next turn`));
+        const row = this.rowOf(w.key);
+        if (!w.changed) {
+          this.say(this.style.dim(`/memory restore: ${JSON.stringify(row?.name ?? c.ref)} is not retired; nothing changed`));
+          return this.verbNotices(w.notices);
+        }
+        const note = row?.type === 'note';
+        if (note || this.compendiumOn()) {
+          this.say(this.style.dim(`${this.described(w.key)} restored: ${note ? 'it fires again from the next turn' : 'it is back in the story from the next turn'}`));
+        } else {
+          this.say(this.style.dim(`${this.described(w.key)} restored; ${COMPENDIUM_OFF}`));
+        }
+        return this.verbNotices(w.notices);
+      }
+      case 'export': {
+        const format = c.format ?? 'core';
+        let r: ReturnType<SessionHandle['memoryExport']>;
+        try {
+          r = this.session.memoryExport({ name: c.exportName, format, ...(c.force ? { force: true } : {}) });
+        } catch (e) {
+          // The engine says "export with force"; here that is the --force flag.
+          if (e instanceof Refusal && !c.force && /already exists/.test(e.message)) {
+            return this.say(this.style.red(`/memory export: ${this.redact(e.message)} (/memory export ${c.exportName} --format ${format} --force)`));
+          }
+          return fail(e);
+        }
+        const n = `${r.entries} entr${r.entries === 1 ? 'y' : 'ies'}`;
+        this.say(
+          this.style.dim(
+            format === 'core'
+              ? `exported ${n} as the library lorebook ${r.id}: ${r.path}`
+              : `exported ${n} as a RoleCall Compendium file (compendium-v1.0.0): ${r.path}`,
+          ),
+        );
+        return this.exportWarnings(r.warnings);
       }
     }
+  }
+
+  /**
+   * A live entry of `type` that one of `names` names, by the fold's own matching (D-144: names,
+   * aliases, former names), with the name that matched; null when none does.
+   */
+  /**
+   * /memory retire <ref> [reason] with an unquoted name of several words («Арсений Кеттер устарел»):
+   * the longest run of leading words that names a live entry is the ref, the rest the reason. A C<n>
+   * handle, or words that name nothing longer, keep the parser's split.
+   */
+  private retireTarget(ref: string, reason: string | undefined): { ref: string; reason?: string } {
+    const keep = { ref, ...(reason !== undefined ? { reason } : {}) };
+    if (reason === undefined || /^[CcСс]\d+$/u.test(ref)) return keep;
+    const words = [ref, ...reason.split(/\s+/u).filter((w) => w !== '')];
+    const view = this.session.compendium();
+    for (let k = words.length; k > 1; k--) {
+      const name = words.slice(0, k).join(' ');
+      if (resolveEntryRef(view, name, 'live')) {
+        const rest = words.slice(k).join(' ');
+        return { ref: name, ...(rest !== '' ? { reason: rest } : {}) };
+      }
+    }
+    return keep;
+  }
+
+  private liveMatch(type: EntryType, names: readonly string[]): { ref: string; name: string; by: string } | null {
+    const entries = this.session.compendium().entries;
+    for (const row of this.session.memoryList({ type })) {
+      const e = entries.get(row.key);
+      if (!e) continue;
+      const own = entryNames(e);
+      const by = names.find((n) => normalizeName(n) !== '' && own.includes(normalizeName(n)));
+      if (by !== undefined) return { ref: row.ref, name: row.name, by };
+    }
+    return null;
+  }
+
+  /** The /memory new refusal for a name a live entry of the type already has (D-160). */
+  private takenText(taken: { ref: string; name: string; by: string }): string {
+    const who = normalizeName(taken.by) === normalizeName(taken.name) ? taken.ref : `${taken.ref} (${taken.name})`;
+    return `/memory new: ${JSON.stringify(taken.by)} is already ${who}; use /memory edit ${taken.ref}`;
+  }
+
+  /**
+   * /memory new <type> [name] (D-160): the type's template in the editor, then memoryFile. A JSON error,
+   * a name that is taken, or a refusal is said in one line and the editor opens again with the same
+   * text (where a person can fix it: reopens()); an empty or unchanged text (or a cancelled editor),
+   * or a file that adds nothing to the entry it lands on, writes nothing.
+   */
+  private async memoryNew(type: EntryType, name: string | undefined): Promise<void> {
+    if (name !== undefined) {
+      const taken = this.liveMatch(type, [name]);
+      if (taken) {
+        this.say(this.style.red(this.takenText(taken)));
+        return this.skipEditorLine();
+      }
+    }
+    const again = (why: string): boolean => {
+      const reopen = this.reopens();
+      this.say(this.style.red(`${why}; ${reopen ? 'the editor opens again' : 'nothing written'}`));
+      return reopen;
+    };
+    let text = newEntryText(type, name);
+    for (;;) {
+      const edited = await this.editText(text);
+      if (edited === null) return this.say(this.style.dim('/memory new cancelled: nothing written'));
+      if (edited.trim() === '' || edited === text) return this.say(this.style.dim('/memory new: nothing changed, nothing written'));
+      text = edited;
+      const parsed = parseEntryText(edited);
+      if (!parsed.ok) {
+        if (again(`/memory new: ${parsed.message}`)) continue;
+        return;
+      }
+      const data: Rec = parsed.data;
+      const taken = this.liveMatch(type, namesOf(type, data));
+      if (taken) {
+        if (again(this.takenText(taken))) continue;
+        return;
+      }
+      let r: ReturnType<SessionHandle['memoryFile']>;
+      try {
+        r = this.session.memoryFile({ type, data });
+      } catch (e) {
+        if (!(e instanceof Refusal)) throw e;
+        if (again(`/memory new: ${this.redact(e.message)}`)) continue;
+        return;
+      }
+      const what = this.described(r.key);
+      if (!r.changed) {
+        this.say(this.style.dim(`/memory new: nothing changed, nothing written (${what} already holds all of it)`));
+        return this.verbNotices(r.notices);
+      }
+      const when = this.whenSent(false);
+      this.say(this.style.dim(r.change === 'created' ? `${what} filed${when}` : `merged into ${what}${when}`));
+      return this.verbNotices(r.notices);
+    }
+  }
+
+  /**
+   * /memory edit <ref> alone (D-160): a typed entry or an arc as JSON in the editor (its data and the
+   * help key); on save the difference is memoryEdit's set and unset, and an unchanged entry writes
+   * nothing. A note opens its text. A JSON error or a refusal re-opens the editor with the same text
+   * (where a person can fix it: reopens()).
+   */
+  private async memoryEditor(ref: string): Promise<void> {
+    let got: ReturnType<SessionHandle['memoryGet']>;
+    try {
+      got = this.session.memoryGet({ ref });
+    } catch (e) {
+      if (!(e instanceof Refusal)) throw e;
+      this.say(this.style.red(`/memory edit: ${this.redact(e.message)}`));
+      return this.skipEditorLine();
+    }
+    const e = got.entry;
+    if (isNote(e)) return this.noteEditor(e);
+    const again = (why: string): boolean => {
+      const reopen = this.reopens();
+      this.say(this.style.red(`/memory edit: ${why}; ${reopen ? 'the editor opens again' : 'nothing written'}`));
+      return reopen;
+    };
+    let text = editEntryText(e);
+    for (;;) {
+      const edited = await this.editText(text);
+      if (edited === null) return this.say(this.style.dim('/memory edit cancelled: nothing written'));
+      if (edited.trim() === '' || edited === text) return this.say(this.style.dim('/memory edit: nothing changed, nothing written'));
+      text = edited;
+      const parsed = parseEntryText(edited);
+      if (!parsed.ok) {
+        if (again(parsed.message)) continue;
+        return;
+      }
+      const { set, unset } = diffEntry(e, parsed.data);
+      const fields = [...Object.keys(set), ...unset];
+      if (fields.length === 0) return this.say(this.style.dim('/memory edit: nothing changed, nothing written'));
+      let w: MemoryWrite;
+      try {
+        w = this.session.memoryEdit({ ref: e.key, ...(Object.keys(set).length > 0 ? { set } : {}), ...(unset.length > 0 ? { unset } : {}) });
+      } catch (err) {
+        if (!(err instanceof Refusal)) throw err;
+        if (again(this.redact(err.message))) continue;
+        return;
+      }
+      if (!w.changed) {
+        this.say(this.style.dim('/memory edit: nothing changed, nothing written'));
+        return this.verbNotices(w.notices);
+      }
+      // The fields as the editor showed them: an arc's overview, which memoryEdit calls content.
+      const shown = Object.keys(set).map((k) => (e.type === null && k === 'content' ? 'overview' : k));
+      const parts = [shown.length > 0 ? `set ${shown.join(', ')}` : '', unset.length > 0 ? `removed ${unset.join(', ')}` : ''].filter(Boolean);
+      const overlay = e.origin.kind === 'library' ? '; the book file stays as it is' : '';
+      this.say(this.style.dim(`${this.described(e.key)} changed: ${parts.join('; ')}${this.whenSent(false, overlay)}`));
+      return this.verbNotices(w.notices);
+    }
+  }
+
+  /** /memory edit <ref> of a note with nothing after the ref: its text in the editor. */
+  private async noteEditor(e: CEntry): Promise<void> {
+    const initial = e.content ?? '';
+    const edited = await this.editText(initial);
+    if (edited === null) return this.say(this.style.dim('/memory edit cancelled: nothing written'));
+    if (edited.trim() === '' || edited === initial) return this.say(this.style.dim('/memory edit: nothing changed, nothing written'));
+    let w: MemoryWrite;
+    try {
+      w = this.session.memoryEdit({ ref: e.key, content: edited });
+    } catch (err) {
+      if (err instanceof Refusal) return this.say(this.style.red(`/memory edit: ${this.redact(err.message)}`));
+      throw err;
+    }
+    if (!w.changed) this.say(this.style.dim('/memory edit: nothing changed, nothing written'));
+    else this.say(this.style.dim(`${this.described(e.key)} changed: text (from the next turn)`));
+    this.verbNotices(w.notices);
+  }
+
+  /**
+   * /memory on|off (the lead's ruling after the review): compendium.enabled of this session through
+   * configure, at once for /memory and from the next turn for the prompt. Off keeps every entry; the
+   * books' typed entries are then sent as plain lore.
+   */
+  private compendiumSwitch(on: boolean): void {
+    if (this.compendiumOn() === on) {
+      return this.say(this.style.dim(on ? 'the Compendium is already on for this session' : 'the Compendium is already off for this session (/memory on)'));
+    }
+    this.session.configure({ compendium: { enabled: on } });
+    if (!on) {
+      const books = configOf(this.journal()).lorebooks.length > 0 ? "; the books' typed entries are sent as plain lore" : '';
+      return this.say(this.style.dim(`${this.offText()}${books}`));
+    }
+    const n = this.session.memoryList({}).length;
+    this.say(this.style.dim(`the Compendium is on for this session: ${n} live entr${n === 1 ? 'y' : 'ies'} on this path, sent as they come up from the next turn (/memory lists them)`));
   }
 
   /** /search <query> [before=n] (§7.5): the narrator's search_history over this path; read-only. */

@@ -5,10 +5,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // `rp-core import` and `new --card` (ARCHITECTURE.md D-72). Fixed detection order: PNG card, JSON
-// card, ST preset, ST world info with an entries object, bare character_book, else refuse with a
-// reason. Reading tries the file as-is, then as double-encoded JSON, then as an export envelope.
-// M1a imported cards only; M2 adds ST chat-completion presets (st-preset.ts), ST world info files
-// and bare character_book files (st-worldinfo.ts), saved to library/presets and library/lorebooks.
+// card, ST preset, RoleCall Compendium export, ST world info with an entries object, bare
+// character_book, else refuse with a reason. Reading tries the file as-is, then as double-encoded
+// JSON, then as an export envelope. M1a imported cards only; M2 adds ST chat-completion presets
+// (st-preset.ts), ST world info files and bare character_book files (st-worldinfo.ts), saved to
+// library/presets and library/lorebooks; M5a adds `compendium-v1.0.0` (compendium-v1.ts, D-162),
+// a library lorebook named after `lorebook.name`.
 // CONTRACT FILE: signatures are fixed; the formats agent implements the bodies.
 //
 // Bunraku's registry of 29 scoring adapters is deliberately not ported: one fixed order is enough.
@@ -16,8 +18,10 @@
 import { readFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { CardFormatError, isCardObject, isPng, pngCardChunkKeywords, readCard } from './card.ts';
+import { looksLikeCompendium, readCompendium } from './compendium-v1.ts';
 import {
   foreignKindReason,
+  hasCompendiumTag,
   looksLikeCharacterBook,
   looksLikeSettingsExport,
   looksLikeWorldInfo,
@@ -38,7 +42,7 @@ import {
 import { stPresetToPreset } from './st-preset.ts';
 import { characterBookToLoreBook, worldInfoToLoreBook } from './st-worldinfo.ts';
 
-export type DetectedKind = 'png_card' | 'json_card' | 'st_preset' | 'st_worldinfo' | 'character_book' | 'unknown';
+export type DetectedKind = 'png_card' | 'json_card' | 'st_preset' | 'compendium' | 'st_worldinfo' | 'character_book' | 'unknown';
 
 /** What an import produces, and the library folder it lands in (characters, presets, lorebooks). */
 export type ImportedKind = 'character' | 'preset' | 'lorebook';
@@ -95,6 +99,8 @@ function detectFull(bytes: Uint8Array): Detection {
       if (refused) return { kind: 'unknown', reason: refused };
       return found('st_preset');
     }
+    // Before the ST books: a Compendium's rows carry `content` like a character_book's (D-162).
+    if (looksLikeCompendium(reading)) return found('compendium');
     if (looksLikeWorldInfo(reading)) return found('st_worldinfo');
     if (looksLikeCharacterBook(reading)) return found('character_book');
   }
@@ -102,6 +108,9 @@ function detectFull(bytes: Uint8Array): Detection {
   for (const reading of readings) {
     const foreign = foreignKindReason(reading);
     if (foreign) return { kind: 'unknown', reason: foreign };
+    if (hasCompendiumTag(reading)) {
+      return { kind: 'unknown', reason: 'a RoleCall Compendium export without a lorebook object and an entries list; nothing to import' };
+    }
   }
   return { kind: 'unknown', reason: 'JSON that is not a character card, SillyTavern preset, world info or character_book' };
 }
@@ -122,6 +131,7 @@ const PRODUCES: Record<Exclude<DetectedKind, 'unknown'>, ImportedKind> = {
   png_card: 'character',
   json_card: 'character',
   st_preset: 'preset',
+  compendium: 'lorebook',
   st_worldinfo: 'lorebook',
   character_book: 'lorebook',
 };
@@ -130,6 +140,7 @@ const KIND_LABEL: Record<Exclude<DetectedKind, 'unknown'>, string> = {
   png_card: 'a PNG character card',
   json_card: 'a character card',
   st_preset: 'a SillyTavern preset',
+  compendium: 'a RoleCall Compendium export',
   st_worldinfo: 'a SillyTavern world info file',
   character_book: 'a character_book lorebook',
 };
@@ -222,6 +233,13 @@ export function importFile(home: string, file: string, opts?: { as?: string; exp
       const r = stPresetToPreset(d.reading, stem);
       selfCheck(file, 'preset maps to an invalid preset', validatePreset(r.value));
       return save(home, 'preset', as ?? r.value.name, r.value, [...pre, ...r.warnings]);
+    }
+    case 'compendium': {
+      // Named after `--as`, else `lorebook.name`, else the stem without RoleCall's `.compendium` (D-162).
+      const r = readCompendium(d.reading, { fallbackName: stem.replace(/\.compendium$/iu, '').trim() || stem, ...(as !== undefined ? { name: as } : {}) });
+      if (r.refused !== undefined) throw new ImportError('unreadable', `${base}: ${r.refused}`);
+      selfCheck(file, 'compendium maps to an invalid lorebook', validateLoreBook(r.value));
+      return save(home, 'lorebook', r.value.name, r.value, [...pre, ...r.warnings]);
     }
     case 'st_worldinfo':
     case 'character_book': {

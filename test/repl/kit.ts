@@ -118,6 +118,8 @@ export interface ReplRigOptions {
   rpConfig?: RpConfig;
   /** M3: the caps of the scripted connections (default SCRIPT_CAPS, tools 'none'); the REPL sees them through capsOf. */
   caps?: ModelCaps;
+  /** ReplOptions.env ($VISUAL / $EDITOR / NO_COLOR); default process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Promise<ReplRig> {
@@ -167,7 +169,7 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
       ...(o.windowOf ? { windowOf: o.windowOf } : {}),
       ...o.deps,
     },
-    { interactive: o.interactive ?? false },
+    { interactive: o.interactive ?? false, ...(o.env ? { env: o.env } : {}) },
   );
   const count = (s: string, sub: string): number => s.split(sub).length - 1;
   return {

@@ -15,6 +15,12 @@ import type { TreeIndex } from './tree.ts';
 import { buildTree, effectiveMessage, pathTo, swipeSiblings, tails } from './tree.ts';
 import type { MessageView, PathView } from './view.ts';
 import { foldCompendium } from '../agents/compendium/apply.ts';
+import type { LibrarySeed } from '../agents/compendium/types.ts';
+
+/** What a fold needs from outside the log (D-141): the session's library seed, loaded once per session. */
+export interface FoldViewOptions {
+  library?: LibrarySeed;
+}
 
 /** Apply one diff in place: null deletes, anything else sets. */
 function applyVars(into: Record<string, string | number>, diff: VarsDiff | undefined): void {
@@ -102,8 +108,11 @@ function messageView(idx: TreeIndex, id: string): MessageView {
   return view;
 }
 
-/** Build the PathView at the current head. Pass `idx` when the caller already built it. */
-export function foldView(header: SessionHeader, entries: readonly Entry[], idx?: TreeIndex): PathView {
+/**
+ * Build the PathView at the current head. Pass `idx` when the caller already built it, and the
+ * library seed in `opts` (without it the Compendium holds the session's own rows only).
+ */
+export function foldView(header: SessionHeader, entries: readonly Entry[], idx?: TreeIndex, opts?: FoldViewOptions): PathView {
   const tree = idx ?? buildTree(entries);
   const pathIds = pathTo(tree, tree.head);
   const pathSet = new Set(pathIds);
@@ -119,9 +128,10 @@ export function foldView(header: SessionHeader, entries: readonly Entry[], idx?:
     fires,
     ...(continued.size > 0 ? { continued } : {}),
     castNames: castNamesOf(header),
-    // §5.8: the mem rows bound to this path (or to none), from the index, so a view folded at
-    // another leaf (foldViewAt) sees the same notes.
-    compendium: foldCompendium(tree.mems, { pathSet }),
+    // §5.8: the library seed, then the mem rows bound to this path (or to none), from the index, so a
+    // view folded at another leaf (foldViewAt) sees the same entries; staleness reads the path's
+    // positions and the touched seqs (D-143).
+    compendium: foldCompendium(tree.mems, { pathSet, path: pathIds, touched: tree.touched, library: opts?.library }),
   };
 }
 
@@ -130,8 +140,8 @@ export function foldView(header: SessionHeader, entries: readonly Entry[], idx?:
  * when that is not the head (a swipe starts at U, before the answer it replaces, §6.3). Vars,
  * fires and the Compendium are folded along the path to `leaf` only.
  */
-export function foldViewAt(header: SessionHeader, idx: TreeIndex, leaf: string): PathView {
-  return foldView(header, [], { ...idx, head: leaf });
+export function foldViewAt(header: SessionHeader, idx: TreeIndex, leaf: string, opts?: FoldViewOptions): PathView {
+  return foldView(header, [], { ...idx, head: leaf }, opts);
 }
 
 // ---- configuration fold ----------------------------------------------------------------------------

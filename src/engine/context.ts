@@ -37,6 +37,8 @@ export interface EngineCtx {
   hooks?: HostHooks;
   /** EngineOptions.onProviderError: the host's debug tap for raw provider failures (§13). */
   onProviderError?: EngineOptions['onProviderError'];
+  /** EngineOptions.keepRequests (M5a, D-164): turns keep every provider request as JSON. */
+  keepRequests?: boolean;
   /**
    * M2: how every prompt of this engine is counted (assemble's budgets, trace.tokens, the EMA's
    * samples, D-50). defaultCounter() unless a test pins another (engine.ts EngineSeams).

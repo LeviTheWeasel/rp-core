@@ -158,9 +158,21 @@ export function notChatCompletionReason(o: unknown): string | null {
   return 'this has samplers but no prompts, prompt_order or chat-completion settings, so it is not a SillyTavern chat-completion preset; it is not imported';
 }
 
+/**
+ * Tagged as a RoleCall Compendium export (`format: 'rolecall-compendium'` or a `compendium-*`
+ * schemaVersion), whatever its shape. No book reader but formats/compendium-v1.ts may claim such a
+ * file: its rows carry `content` like a character_book, and reading it as one would lose the types.
+ */
+export function hasCompendiumTag(o: unknown): boolean {
+  return (
+    isRecord(o) &&
+    (o.format === 'rolecall-compendium' || (typeof o.schemaVersion === 'string' && o.schemaVersion.startsWith('compendium-')))
+  );
+}
+
 /** ST world info file: `entries` is a keyed OBJECT of ST-shaped entries (an array would be a character_book). */
 export function looksLikeWorldInfo(o: unknown): boolean {
-  if (!isRecord(o) || !isRecord(o.entries)) return false;
+  if (!isRecord(o) || !isRecord(o.entries) || hasCompendiumTag(o)) return false;
   const values = Object.values(o.entries);
   if (values.length === 0) return true; // an empty ST book is still a book
   const first = values[0];
@@ -173,11 +185,11 @@ export function looksLikeWorldInfo(o: unknown): boolean {
 /**
  * Standalone CCv2/CCv3 character_book (Chub lorebook download, `lorebook_v3` export, card-extracted
  * book): `entries` is an array of objects with `keys` or `content`. Agnai MemoryBooks
- * (`keywords` + `entry`) are not this.
+ * (`keywords` + `entry`) and RoleCall Compendium exports (hasCompendiumTag) are not this.
  */
 export function looksLikeCharacterBook(o: unknown): boolean {
   const book = unwrapLorebookV3(o);
-  if (!isRecord(book) || !Array.isArray(book.entries)) return false;
+  if (!isRecord(book) || !Array.isArray(book.entries) || hasCompendiumTag(book)) return false;
   const first: unknown = book.entries[0];
   if (first === undefined) return 'scan_depth' in book || 'token_budget' in book || 'name' in book;
   if (!isRecord(first)) return false;
