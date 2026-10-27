@@ -104,11 +104,12 @@ describe('parseLine: commands', () => {
     expect(cmd('/show')).toEqual({ name: 'show' });
     expect(cmd('/usage')).toEqual({ name: 'usage' });
     expect(cmd('/trace')).toEqual({ name: 'trace' });
-    expect(cmd('/probe local')).toEqual({ name: 'probe' });
+    expect(cmd('/probe')).toEqual({ name: 'probe' });
+    expect(error('/probe local')).toContain('it takes --active [--write]');
   });
 
   test('later milestones are named, unknown commands get a hint', () => {
-    expect(cmd('/memory list')).toMatchObject({ name: 'later', command: 'memory' });
+    expect(cmd('/memory recall')).toMatchObject({ name: 'later', command: 'memory recall', when: 'M5 (Compendium)' });
     expect(cmd('/director on')).toMatchObject({ name: 'later', command: 'director' });
     expect(error('/me waves')).toContain('/help');
     expect(error('/me waves')).toContain('//');

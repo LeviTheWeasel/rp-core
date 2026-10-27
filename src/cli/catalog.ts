@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 the rp-core authors
 //
-// `rp-core probe [conn[:model]]` and `rp-core models <conn>` (ARCHITECTURE.md §8.2 source 3/4, §15 M1b:
-// the catalog half of probe). A probe only ADVISES [D-84]: it prints what the server says (kind,
-// models, windows, slots) and the caps a model would get with that knowledge; --write stores the
-// catalog rows in <home>/caps-cache.json, where new turns pick them up as the probe source.
+// `rp-core probe [conn[:model]] [--active]` and `rp-core models <conn>` (ARCHITECTURE.md §8.2 source
+// 3/4, §15 M1b catalog, M3 active probes). A probe only ADVISES [D-84]: it prints what the server
+// says (kind, models, windows, slots) and the caps a model would get with that knowledge; --write
+// stores the catalog rows in <home>/caps-cache.json, where new turns pick them up as the catalog
+// source. --active (one conn:model) also calls the model (providers/probe-active.ts: a tiny reply,
+// one tool offered with tool_choice auto, a json_schema reply); its facts go to the row's probe part
+// (the probe source) only with --write, and a later catalog refresh keeps them.
 //
 // The keys of config.toml are used when present (OpenRouter lists models without one, so a missing
 // key is a note, not a failure). Requests go through providers/probe.ts (guardedFetch, same origin,
 // short per-request timeouts); nothing here retries.
 
+import type { DelayTimers } from '../engine/abort.ts';
 import type { Connection } from '../engine/api.ts';
 import { fetchCatalog, listModels, readCapsCache, writeCapsCache, capsCachePath, type CapsCacheRow, type CatalogInfo } from '../providers/probe.ts';
+import { PROBE_NOT_RUN, runActiveProbes, toolsRefusedHint, type ProbeObservation, type ProbeVerdict } from '../providers/probe-active.ts';
 import { ProviderError, type ModelCaps } from '../providers/types.ts';
 import { UsageError } from './args.ts';
 import { CliError } from './commands.ts';
@@ -29,6 +34,27 @@ export interface CatalogArgs {
   clock: () => Date;
   /** Per-request timeout of the probe (default PROBE_TIMEOUT_MS). */
   timeoutMs?: number;
+  /** --active: timers and per-call timeouts of the model calls (tests; default the real ones, narrate's values). */
+  timers?: DelayTimers;
+  activeTimeouts?: { firstByteMs: number; idleMs: number };
+  /**
+   * The caller's stop (the REPL's Ctrl+C during /probe --active): the catalog requests and the model
+   * calls end, the abort is rethrown and nothing is stored or printed. Default: never.
+   */
+  signal?: AbortSignal;
+}
+
+/** What --active did for one model. */
+export interface ActiveProbeReport {
+  /** Each probe call's outcome, in order. */
+  observations: ProbeObservation[];
+  /** The facts the probes saw evidence for (what --write stores as the row's probe part). */
+  facts: Partial<ModelCaps>;
+  calls: number;
+  /** True when --write stored the facts. */
+  written: boolean;
+  /** Fixed hints (a server that refused the tools field). */
+  notes: string[];
 }
 
 /** One probed connection, as --json prints it. */
@@ -50,11 +76,23 @@ export interface ProbeResult {
   written: boolean;
   /** --write was given but nothing of this connection was stored: why. */
   notStored?: string;
+  /** --active: the model calls and what they showed. */
+  active?: ActiveProbeReport;
 }
 
-/** A cache row that says something: a known server kind or at least one caps fact. */
+const hasFacts = (c: Partial<ModelCaps> | undefined): boolean => c !== undefined && Object.keys(c).length > 0;
+
+/** A cache row that says something: a known server kind or at least one caps fact (catalog or probe). */
 function rowSaysSomething(row: CapsCacheRow): boolean {
-  return row.server !== 'unknown' || Object.keys(row.caps).length > 0;
+  return (row.server !== undefined && row.server !== 'unknown') || hasFacts(row.catalog) || hasFacts(row.probe);
+}
+
+/** The cache without the probe part of one row: the caps a turn uses before this probe's facts. */
+function withoutProbe(cache: Record<string, CapsCacheRow>, key: string): Record<string, CapsCacheRow> {
+  const row = cache[key];
+  if (!row?.probe) return cache;
+  const { probe: _, ...rest } = row;
+  return { ...cache, [key]: rest };
 }
 
 /** `conn` or `conn:model` (split at the first ':'), optionally a second positional model. */
@@ -89,13 +127,32 @@ async function keyFor(c: Connection, notes: string[]): Promise<string | null> {
 
 const errText = (e: unknown): string => (e instanceof ProviderError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
 
+export type ProbeArgs = CatalogArgs & { target?: string; model?: string; write: boolean; active?: boolean };
+
 /**
- * `rp-core probe [conn[:model]] [--write] [--json]`: ask each named (else every) connection's server
- * for its catalog. Exit 0 when every server answered, 1 otherwise.
+ * `rp-core probe [conn[:model]] [--active] [--write] [--json]`: ask each named (else every)
+ * connection's server for its catalog; with `active` (one conn:model only) also run the active
+ * probes against the model. Exit 0 when every server answered, 1 otherwise.
  */
-export async function cmdProbe(a: CatalogArgs & { target?: string; model?: string; write: boolean }): Promise<number> {
+export async function cmdProbe(a: ProbeArgs): Promise<number> {
+  return (await runProbe(a)).code;
+}
+
+/**
+ * cmdProbe with what it found: the exit code and one result per connection (`written` says what
+ * --write stored). The caller's abort (a.signal) is rethrown; nothing is stored or printed then.
+ */
+export async function runProbe(a: ProbeArgs): Promise<{ code: number; results: ProbeResult[] }> {
   const { rt } = a;
+  const signal = a.signal ?? new AbortController().signal;
   const wanted: { conn: Connection; model?: string }[] = [];
+  if (a.active === true) {
+    // Active probes cost model calls (money, on a paid API): one named model, never a whole connection.
+    const t = a.target !== undefined ? parseProbeTarget(a.target, a.model) : undefined;
+    if (t?.model === undefined) {
+      throw new UsageError('--active probes one model: rp-core probe <connection>:<model> --active', 'probe');
+    }
+  }
   if (a.target !== undefined) {
     const t = parseProbeTarget(a.target, a.model);
     wanted.push({ conn: connectionOf(rt, t.conn, 'probe'), ...(t.model !== undefined ? { model: t.model } : {}) });
@@ -122,11 +179,12 @@ export async function cmdProbe(a: CatalogArgs & { target?: string; model?: strin
       info = await fetchCatalog(c.baseUrl!, {
         fetch: doFetch,
         key,
-        signal: new AbortController().signal,
+        signal,
         ...(w.model !== undefined ? { model: w.model } : {}),
         ...(a.timeoutMs !== undefined ? { timeoutMs: a.timeoutMs } : {}),
       });
     } catch (e) {
+      if (signal.aborted) throw signal.reason;
       // Messages are fixed sentences at their source; scrubbed all the same before printing (§13).
       results.push({ connection: c.id, baseUrl: c.baseUrl!, ok: false, error: redactor(rt)(errText(e)), notes, written: false });
       continue;
@@ -156,10 +214,14 @@ export async function cmdProbe(a: CatalogArgs & { target?: string; model?: strin
     const listed = new Set(info.models.map((m) => m.id));
     const anyName = info.server === 'llama.cpp' || info.server === 'koboldcpp';
     const ids = w.model !== undefined ? (info.models.length === 0 || anyName || listed.has(w.model) ? [w.model] : []) : info.models.map((m) => m.id);
+    // A catalog refresh keeps what an earlier --active run stored for the same model.
     const fresh: Record<string, CapsCacheRow> = {};
     for (const id of ids) {
-      const row: CapsCacheRow = { as_of: asOf, server: info.server, caps: info.caps[id] ?? {} };
-      if (rowSaysSomething(row)) fresh[`${c.id}:${id}`] = row;
+      const key = `${c.id}:${id}`;
+      const row: CapsCacheRow = { as_of: asOf, server: info.server, catalog: info.caps[id] ?? {} };
+      const kept = cache[key]?.probe;
+      if (kept) row.probe = kept;
+      if (rowSaysSomething(row)) fresh[key] = row;
     }
     const stored = Object.keys(fresh).length;
     const replaceAll = w.model === undefined && stored > 0;
@@ -174,6 +236,44 @@ export async function cmdProbe(a: CatalogArgs & { target?: string; model?: strin
         w.model !== undefined && ids.length === 0 ? `${w.model} is not in the server's model list` : 'the server told nothing worth keeping (kind unknown, no limits)';
     }
     if (info.slots !== undefined) r.slots = info.slots;
+
+    // --active: the model itself, with the caps a turn would use now (the fresh catalog, without the
+    // facts an earlier active run stored for it).
+    if (a.active === true && w.model !== undefined) {
+      const rowKey = `${c.id}:${w.model}`;
+      const before = connectionsWith(rt, withoutProbe(next, rowKey))[c.id];
+      const run = await runActiveProbes({
+        provider: c.provider,
+        connection: c.id,
+        model: w.model,
+        caps: before?.capsFor ? before.capsFor(w.model) : (before?.caps ?? c.caps),
+        local: c.local,
+        fetch: doFetch,
+        key,
+        signal,
+        clock: a.clock,
+        ...(a.timers ? { timers: a.timers } : {}),
+        ...(a.activeTimeouts ? { timeouts: a.activeTimeouts } : {}),
+        ...(info.server !== undefined ? { server: info.server } : {}),
+      });
+      const store = a.write && hasFacts(run.facts);
+      const report: ActiveProbeReport = { observations: run.observations, facts: run.facts, calls: run.calls, written: store, notes: [] };
+      if (run.observations.some((o) => o.probe === 'tools' && o.verdict === 'no' && o.detail.startsWith('refused:'))) report.notes.push(toolsRefusedHint(info.server));
+      // A model the server does not list (a typo, a model not pulled): say where the list is.
+      if (run.observations[0]?.verdict === 'no' && ids.length === 0) report.notes.push(`${w.model} is not in the server's model list: rp-core models ${c.id} lists what it has`);
+      if (hasFacts(run.facts)) {
+        // The new facts over the ones an earlier run stored (a probe that was inconclusive this time
+        // erases nothing); the catalog part of the row stays as this run's catalog half left it.
+        const row: CapsCacheRow = next[rowKey] ?? { as_of: asOf, server: info.server };
+        next[rowKey] = { ...row, as_of: asOf, probe: { ...(cache[rowKey]?.probe ?? {}), ...run.facts } };
+      }
+      if (store) {
+        r.written = true;
+        delete r.notStored;
+      }
+      r.active = report;
+    }
+
     if (model !== undefined) {
       r.model = model;
       const probed = connectionsWith(rt, next)[c.id];
@@ -183,11 +283,13 @@ export async function cmdProbe(a: CatalogArgs & { target?: string; model?: strin
     results.push(r);
   }
 
+  // Stopped after the last call (the abort raced its end): still nothing stored.
+  if (signal.aborted) throw signal.reason;
   if (results.some((r) => r.written)) writeCapsCache(rt.home, cache);
 
   if (a.json) a.io.out.write(`${JSON.stringify(results)}\n`);
   else for (const r of results) a.io.out.write(renderProbe(r, capsCachePath(rt.home)));
-  return results.every((r) => r.ok) ? EXIT.done : EXIT.error;
+  return { code: results.every((r) => r.ok) ? EXIT.done : EXIT.error, results };
 }
 
 /** `rp-core models <conn> [--json]`: the server's model ids, one per line. */
@@ -200,10 +302,11 @@ export async function cmdModels(a: CatalogArgs & { conn: string }): Promise<numb
     out = await listModels(c.baseUrl!, {
       fetch: a.fetch ?? fetch,
       key,
-      signal: new AbortController().signal,
+      signal: a.signal ?? new AbortController().signal,
       ...(a.timeoutMs !== undefined ? { timeoutMs: a.timeoutMs } : {}),
     });
   } catch (e) {
+    if (a.signal?.aborted) throw a.signal.reason;
     throw new CliError(`models ${c.id}: ${redactor(a.rt)(errText(e))}`);
   }
   for (const n of [...notes, ...out.notes]) a.io.err.write(`rp-core: note: ${n}\n`);
@@ -256,12 +359,55 @@ export function renderProbe(r: ProbeResult, cachePath: string): string {
     out.push('  notes:');
     for (const n of r.notes) out.push(`    - ${n}`);
   }
+  if (r.active) out.push(...renderActive(r.active, `${r.connection}:${r.model ?? ''}`));
   if (r.model !== undefined && r.caps) {
     out.push(`  caps of ${r.connection}:${r.model}${r.written ? '' : ' (with this probe stored)'}:`);
     for (const l of capsSummary(r.caps)) out.push(`    ${l}`);
   } else if (models.length > 1) {
     out.push(`  caps: name a model to see them (rp-core probe ${r.connection}:<model>)`);
   }
-  out.push(r.written ? `  stored in ${cachePath}` : r.notStored !== undefined ? `  not stored: ${r.notStored}` : '  not stored: --write keeps this catalog for new turns');
+  const what = r.active ? 'this catalog and the probe facts' : 'this catalog';
+  out.push(r.written ? `  stored in ${cachePath}` : r.notStored !== undefined ? `  not stored: ${r.notStored}` : `  not stored: --write keeps ${what} for new turns`);
   return `${out.join('\n')}\n\n`;
+}
+
+/** The facts of an active run in one line ("tools native · usage stream_options · ..."). */
+export function factsSummary(f: Partial<ModelCaps>): string {
+  const parts: string[] = [];
+  if (f.tools !== undefined) parts.push(`tools ${f.tools}`);
+  if (f.streamUsage !== undefined) parts.push(`usage ${f.streamUsage}`);
+  if (f.reasoning?.output !== undefined) parts.push(`reasoning ${f.reasoning.output === 'tags' ? 'in inline tags' : `field ${f.reasoning.output}`}`);
+  if (f.structuredOutput !== undefined) {
+    parts.push(`structured ${f.structuredOutput.mode}${f.structuredOutput.confirmedBy ? ` (confirmed by ${f.structuredOutput.confirmedBy})` : ''}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : 'none (nothing conclusive)';
+}
+
+/** The [caps."conn:model"] lines that keep the tool and structured-output facts by hand. */
+function tomlOf(target: string, f: Partial<ModelCaps>): string[] {
+  const lines: string[] = [];
+  if (f.tools !== undefined) lines.push(`tools = "${f.tools}"`);
+  if (f.streamUsage !== undefined) lines.push(`stream_usage = "${f.streamUsage}"`);
+  if (f.structuredOutput !== undefined) lines.push(`structured_output = "${f.structuredOutput.mode}"`);
+  return lines.length > 0 ? [`[caps.${JSON.stringify(target)}]`, ...lines] : [];
+}
+
+/** How a verdict reads in the report. */
+const VERDICT_WORD: Readonly<Record<ProbeVerdict, string>> = { ok: 'ok', no: 'not ok', inconclusive: 'inconclusive' };
+
+function renderActive(a: ActiveProbeReport, target: string): string[] {
+  const out = [`  active probes (${a.calls} call${a.calls === 1 ? '' : 's'}):`];
+  const width = Math.max(...a.observations.map((o) => o.probe.length), 0);
+  const words = a.observations.map((o) => VERDICT_WORD[o.verdict]);
+  // At least 'not ok' wide, so a report without an inconclusive probe keeps the M3 columns.
+  const wordWidth = Math.max(...words.map((w) => w.length), VERDICT_WORD.no.length);
+  // A probe the run had no call left for made no call: no time to show.
+  a.observations.forEach((o, i) => out.push(`    ${o.probe.padEnd(width)}  ${words[i]!.padEnd(wordWidth)}  ${o.detail}${o.detail === PROBE_NOT_RUN ? '' : ` (${o.ms} ms)`}`));
+  for (const n of a.notes) out.push(`    note: ${n}`);
+  out.push(`  probe facts: ${factsSummary(a.facts)}`);
+  if (!a.written && hasFacts(a.facts)) {
+    const toml = tomlOf(target, a.facts);
+    if (toml.length > 0) out.push('  to keep them in config.toml instead (the user wins over any probe):', ...toml.map((l) => `    ${l}`));
+  }
+  return out;
 }

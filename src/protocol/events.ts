@@ -34,6 +34,8 @@ export type EventBody =
       turnId: string;
       callId: string;
       name: string;
+      /** M3: the loop round the call came from (0-based). */
+      round?: number;
       phase: 'start' | 'done';
       args?: unknown;
       ok?: boolean;

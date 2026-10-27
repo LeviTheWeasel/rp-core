@@ -27,6 +27,7 @@ import {
 import type { Event, EventBody } from '../../src/protocol/events.ts';
 import type { Trace } from '../../src/session/entries.ts';
 import type { MessageView, PathView } from '../../src/session/view.ts';
+import { EMPTY_COMPENDIUM } from '../../src/agents/compendium/types.ts';
 
 const plain = makeStyle(false);
 const ansi = makeStyle(true);
@@ -303,6 +304,7 @@ describe('reports', () => {
       vars: {},
       fires: [],
       castNames: [],
+      compendium: EMPTY_COMPENDIUM,
     };
     expect(renderNumberedPath(view, { id: 's_1', title: 'Mira' }, names, plain)).toBe(
       [

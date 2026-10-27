@@ -26,7 +26,7 @@ export interface Journal {
 
 export interface CommitPlan {
   turn: TurnEntry;
-  /** reply/swipe: the blocks of the answer (reasoning first, then text). */
+  /** reply/swipe: the blocks of the answer (reasoning first, then text; tool rounds interleaved, §5.6). */
   blocks: Block[];
   /** continue: the streamed text as it came (an echo of the base is stripped here). */
   addition: string;
@@ -82,6 +82,29 @@ function bodyFields(body: CommitPlan['body']): Partial<CommitBody> {
   return out;
 }
 
+/**
+ * A continued message's blocks, its text now `full` (the old text and the addition). Without tool
+ * blocks: the other blocks, then one text block (M1). M3 (B16): with tool rounds the block order
+ * stays and the addition goes to the LAST text block, the earlier text blocks unchanged (when `full`
+ * still starts with them; else the M1 layout, so the text is right whatever the order).
+ */
+export function continuedBlocks(blocks: readonly Block[], full: string): Block[] {
+  const plain = (): Block[] => [...blocks.filter((b) => b.k !== 'text'), { k: 'text', text: full }];
+  if (!blocks.some((b) => b.k === 'tool_call' || b.k === 'tool_result')) return plain();
+  let lastText = -1;
+  blocks.forEach((b, i) => {
+    if (b.k === 'text') lastText = i;
+  });
+  if (lastText < 0) return plain();
+  let before = '';
+  for (let i = 0; i < lastText; i++) {
+    const b = blocks[i]!;
+    if (b.k === 'text') before += b.text;
+  }
+  if (!full.startsWith(before)) return plain();
+  return blocks.map((b, i) => (i === lastText ? { k: 'text', text: full.slice(before.length) } : b));
+}
+
 function end(j: Journal, turn: TurnEntry, outcome: EndEntry['outcome'], code?: string): Placed {
   const entry = j.append({ t: 'end', ts: j.now(), turn: turn.turn, outcome, ...(code ? { code } : {}) });
   return { kind: 'end', entry };
@@ -101,14 +124,13 @@ export function placeCommit(j: Journal, plan: CommitPlan): Placed {
       return end(j, turn, plan.continueConflict);
     }
     const full = continuationResult(cont.base, plan.addition, cont.mode).full;
-    const keep = effectiveMessage(idx, target).blocks.filter((b) => b.k !== 'text');
     const entry = j.append({
       t: 'edit',
       ts: j.now(),
       target,
       reason: 'continue',
       turn: turn.turn,
-      blocks: [...keep, { k: 'text', text: full }],
+      blocks: continuedBlocks(effectiveMessage(idx, target).blocks, full),
       ...bodyFields(plan.body),
     });
     return { kind: 'edit', entry };

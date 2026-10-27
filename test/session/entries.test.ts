@@ -29,7 +29,7 @@ const VALID: Record<string, unknown>[] = [
   { t: 'held', seq: 10, turn: 't_1', body: { blocks: [{ k: 'text', text: 'held' }] } },
   { t: 'end', seq: 11, ts: TS, turn: 't_1', outcome: 'failed', code: 'timeout' },
   { t: 'job', seq: 12, ts: TS, job: 'j1', key: 'file:x', task: 'file', on: 'aaaa0001', state: 'begin', attempt: 1 },
-  { t: 'mem', seq: 13, ts: TS, key: null, on: null, payload: { free: 'form' } },
+  { t: 'mem', seq: 13, ts: TS, key: null, on: null, by: 'user', ops: [{ op: 'note', title: 'T', keys: [], content: 'c' }], payload: { free: 'form' } },
 ];
 
 describe('parseEntry', () => {
@@ -71,6 +71,10 @@ describe('parseEntry', () => {
       [{ ...VALID[9], body: {} }, 'held.body.blocks'],
       [{ ...VALID[10], outcome: 'ok' }, 'end.outcome'],
       [{ ...VALID[12], on: 3 }, 'mem.on'],
+      [{ ...VALID[12], by: undefined }, 'mem.by'],
+      [{ ...VALID[12], by: 'model' }, 'mem.by'],
+      [{ ...VALID[12], ops: undefined }, 'mem.ops'],
+      [{ ...VALID[12], ops: [{ title: 'no op' }] }, 'mem.ops[0].op'],
     ];
     for (const [v, path] of cases) {
       const r = parseEntry(JSON.stringify(v));

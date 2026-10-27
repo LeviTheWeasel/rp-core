@@ -160,10 +160,12 @@ describe('buildConnections', () => {
     }
   });
 
-  test('caps: model "" for the connection, capsFor(model) with the cache row as probe, user overrides, memoised', () => {
+  test('caps: model "" for the connection, capsFor(model) with the cache row in the catalog/probe slots, user overrides, memoised', () => {
     const { impl, capsCalls } = stubs();
     const capsCache = {
-      'ollama:qwen3:14b': { server: 'ollama', caps: { contextLength: 40960 } },
+      // M3: catalog facts → catalog slot, active-probe facts → probe slot.
+      'ollama:qwen3:14b': { server: 'ollama', catalog: { contextLength: 40960 }, probe: { streamUsage: 'stream_options' as const } },
+      // A row written by M1b/M2 (`caps` only) holds catalog facts.
       'ollama:other': { caps: { tools: 'none' as const } },
     };
     const { connections } = buildConnectionsWith(
@@ -187,13 +189,14 @@ describe('buildConnections', () => {
       local: true,
       model: 'qwen3:14b',
       server: 'ollama',
-      probe: { contextLength: 40960 },
+      catalog: { contextLength: 40960 },
+      probe: { streamUsage: 'stream_options' },
       user: { tools: 'native' },
     });
     expect(ollama.capsFor!('qwen3:14b')).toBe(c1);
     expect(capsCalls.length).toBe(before + 1);
     // A model with its own cache row but no server: the connection's known server is used.
-    expect((ollama.capsFor!('other') as unknown as { input: CapsInput }).input).toMatchObject({ server: 'ollama', probe: { tools: 'none' } });
+    expect((ollama.capsFor!('other') as unknown as { input: CapsInput }).input).toMatchObject({ server: 'ollama', catalog: { tools: 'none' } });
     // An explicit max_in_flight reaches the resolver; no cache row, no server.
     expect((connections.box!.capsFor!('m') as unknown as { input: CapsInput }).input).toEqual({
       dialect: 'openai-chat',

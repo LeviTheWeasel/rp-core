@@ -5,13 +5,17 @@
 // never stored, recomputed for every turn from what is already in the log. Pure.
 //
 // A sample is one model call on the path whose commit carries both the estimate of what was sent
-// (trace.tokens.estimated) and the prompt tokens the provider reported (gen.usage.inputTotal, also
-// copied to trace.tokens.reported). An answer contributes its `msg` line, and every continue `edit`
+// (trace.tokens.estimated) and the prompt tokens the provider reported (trace.tokens.reported, also
+// in gen.usage.inputTotal when the answer took one call). An answer contributes its `msg` line, and every continue `edit`
 // of it contributes its own call. Samples are ordered by seq (oldest → newest) so the EMA weighs the
 // newest calls most. prompt/tokens.ts emaFactor folds them.
 //
 // M2: only calls counted the way the next prompt is counted are samples (trace.tokens.counter; an
 // absent counter is M1's 'chars'). A ratio learned against chars/3 says nothing about o200k.
+//
+// M3 (B13): an answer with tool rounds made several calls and gen.usage is their sum, while the
+// estimate is round 0's request. So the reported side is trace.tokens.reported (round 0's prompt)
+// first; gen.usage.inputTotal only stands in for a trace without it (the two are equal for one call).
 
 import { defaultCounter, EMA_DISCARD_BELOW, emaFactor, type TokenCounter } from '../prompt/tokens.ts';
 import type { Generation, Trace } from '../session/entries.ts';
@@ -37,7 +41,8 @@ function sampleOf(gen: Generation | undefined, trace: Trace | undefined, model: 
   // A recovered (partial) answer has no usage of its own; skip it explicitly all the same.
   if (trace.partial) return null;
   if (counterOf(trace) !== counter) return null;
-  const reported = gen.usage?.inputTotal ?? trace.tokens?.reported;
+  // Round 0's prompt; a sum over rounds never feeds the EMA.
+  const reported = trace.tokens?.reported ?? gen.usage?.inputTotal;
   const estimated = trace.tokens?.estimated;
   if (typeof reported !== 'number' || typeof estimated !== 'number') return null;
   return { estimated, reported };

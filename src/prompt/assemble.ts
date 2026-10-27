@@ -9,7 +9,12 @@
 // in it, placed by lore/place.ts) → every enabled block expanded once, in preset order (card
 // overrides and formats applied first, structural slots kept out of the macro engine, lore filling
 // its slots) → card depth note, author's note (with AN-positioned lore), guidance → the prefill
-// rule [D-28] → the chat area → the budget [D-49] → depth inserts → the trace. Taken from Bunraku:
+// rule [D-28] → the chat area → the budget [D-49] → depth inserts → the trace. M3, only when tools
+// survive the prefill rule: the core block (§8.3) at the end of the leading system run, counted in
+// the fixed part with the native declarations, and the tool room [D-93] kept free by trimming more
+// history; with the history tools and a cut history, the gap note at the trim point and the
+// reminder at depth 0 [D-96; prompted: the variant that shows the call], reserved in the fixed part
+// at their widest; without tools the request is exactly M2's. Taken from Bunraku:
 // the step order, the history block split around its marker, one trace row per sent message, loud
 // preset errors. Not taken: RoleCall's several macro passes, stripping of unknown macros, macro
 // expansion of history, the character prompt reserve that is never sent, the 60 % pre-trim (§19.3
@@ -25,7 +30,7 @@ import type { PathView } from '../session/view.ts';
 import type { Notice } from '../protocol/events.ts';
 import type { DepthInsert } from './depth.ts';
 import { injectAtDepth } from './depth.ts';
-import { loreBudget, trimHistory } from './budget.ts';
+import { loreBudget, toolRoom, trimHistory } from './budget.ts';
 import { createMacroRun, type MacroEnv, type MacroRun } from './macros.ts';
 import {
   counterById,
@@ -34,12 +39,15 @@ import {
   estimateMessage,
   estimateMessages,
   estimateTokens,
+  estimateToolSpecs,
   MESSAGE_OVERHEAD_TOKENS,
   type TokenCounter,
 } from './tokens.ts';
-import { chatArea, HISTORY_SRC } from './assemble/chat.ts';
-import { CONTINUE_CUE, POST_PROCESSING_PLACEHOLDER } from './shape.ts';
+import { chatArea, HISTORY_SRC, type ChatArea } from './assemble/chat.ts';
+import { CONTINUE_CUE, messageText, POST_PROCESSING_PLACEHOLDER } from './shape.ts';
+import { renderCoreBlock } from '../tools/prompted.ts';
 import { guidanceText } from './assemble/guidance.ts';
+import { gapMsg, offersHistoryTools, remindMsg, widestGapMsgs } from './assemble/gap.ts';
 import { presetHash } from './assemble/hash.ts';
 import {
   DEFAULT_NOTE_DEPTH,
@@ -67,6 +75,7 @@ import {
 export { presetHash, loreBookHash } from './assemble/hash.ts';
 export { HISTORY_SRC } from './assemble/chat.ts';
 export { guidanceText, REJECTED_DRAFT_LABEL } from './assemble/guidance.ts';
+export { GAP_SRC, gapText, REMIND_CALL, REMIND_SRC, REMIND_TEXT, REMIND_TEXT_PROMPTED, remindText } from './assemble/gap.ts';
 
 export interface AssembleInput {
   sessionId: string;
@@ -100,9 +109,26 @@ export interface AssembleInput {
   seed: number;
   now: string;
   timeZone: string;
-  /** Narrator tools offered this turn ([] in M1a). */
+  /**
+   * Narrator tools offered this turn ([] in M1a, and whenever the request builder offers none).
+   * M3: when the list is not empty after the prefill rule [D-28], assemble adds the core block (one
+   * system message, placement 'head', src CORE_TOOLS_SRC, right after the last system message of the
+   * leading run: tools/prompted.ts renderCoreBlock(tools, caps.tools)), counts it and — for native
+   * tools — the schemas in the fixed part, and keeps the tool room free (toolRoom). D-96: when the
+   * list holds the history tools (search_history and read_history) and the history sent leaves out a
+   * run of messages, the gap note (src GAP_SRC, right before the first chat message after the run)
+   * and the reminder (src REMIND_SRC, after every depth-0 insert; its text per transport: remindText)
+   * come too, both in the fixed part.
+   * With [] nothing of this exists and the request is exactly the M2 one.
+   */
   tools: ToolSpec[];
   prefillVsTools: 'prefill' | 'tools';
+  /**
+   * M3 (§8.4, DeepSeek): keep the raw reasoning blocks of the history's assistant messages generated
+   * by this connection and model (gen.connection, gen.model), so the adapter can echo them. Absent:
+   * history is text only [D-16].
+   */
+  echoReasoning?: { connection: string; model: string };
   /**
    * M1b [D-50]: EMA correction of the token estimate for this model, derived from the path
    * (reported prompt tokens / estimated). Every budget estimate is multiplied by it. Default 1.
@@ -134,8 +160,18 @@ export type AssembleResult =
        * once-per-entry notices on it.
        */
       loreRegexErrors?: LoreRunResult['regexErrors'];
+      /**
+       * M3: budget tokens kept free for the tool rounds (prompt/budget.ts toolRoom(window, reserve));
+       * 0 when no tools are offered. The history was trimmed to leave it.
+       */
+      toolRoom: number;
+      /** M3 (D-56 inContext): ids of the path messages whose text the history sent, in path order. */
+      kept: string[];
     }
   | { ok: false; code: 'context_length_exceeded' | 'preset_invalid'; message: string };
+
+/** M3: the src of the core block (§8.3): the tool protocol and, in prompted mode, the catalog. */
+export const CORE_TOOLS_SRC = 'core:tools';
 
 // ---- preset plan --------------------------------------------------------------------------------
 
@@ -335,22 +371,22 @@ interface PrefillDecision {
   notices: Notice[];
 }
 
-function decidePrefill(input: AssembleInput, run: MacroRun): PrefillDecision {
+function decidePrefill(input: AssembleInput, run: MacroRun, tools: ToolSpec[]): PrefillDecision {
   // continue: the target's own text is the prefill (shape.ts), never the preset's; no tools either (§6.4).
   if (input.kind === 'continue') return { prefill: null, tools: [], trace: null, notices: [] };
   const raw = input.preset.prefill;
   const text = raw === undefined || raw === '' ? '' : run.block(raw, 'prefill');
-  if (text.trim() === '') return { prefill: null, tools: input.tools, trace: null, notices: [] };
+  if (text.trim() === '') return { prefill: null, tools, trace: null, notices: [] };
 
   if (input.caps.prefill === 'none') {
     return {
       prefill: null,
-      tools: input.tools,
+      tools,
       trace: 'unsupported',
       notices: [{ level: 'warn', code: 'prefill_unsupported', message: 'The preset prefill was not sent: this model takes no assistant prefill.' }],
     };
   }
-  if (input.tools.length > 0 && input.prefillVsTools === 'prefill') {
+  if (tools.length > 0 && input.prefillVsTools === 'prefill') {
     return {
       prefill: text,
       tools: [],
@@ -360,17 +396,71 @@ function decidePrefill(input: AssembleInput, run: MacroRun): PrefillDecision {
       ],
     };
   }
-  if (input.tools.length > 0) {
+  if (tools.length > 0) {
     return {
       prefill: null,
-      tools: input.tools,
+      tools,
       trace: 'skipped_for_tools',
       notices: [
         { level: 'info', code: 'prefill_skipped_for_tools', message: "The preset prefill was skipped so the narrator's tools stay on (narrator.prefillVsTools = 'tools')." },
       ],
     };
   }
-  return { prefill: text, tools: input.tools, trace: 'sent', notices: [] };
+  return { prefill: text, tools, trace: 'sent', notices: [] };
+}
+
+// ---- M3: the core block and the tool room (§8.3, §11, D-93) -------------------------------------
+
+/**
+ * The core block (§8.3): one system message with the tool protocol (and, prompted, the catalog),
+ * placed with the leading system run, never inside a preset block. null without tools.
+ */
+function coreBlock(tools: readonly ToolSpec[], transport: 'native' | 'prompted'): PromptMsg | null {
+  const text = renderCoreBlock(tools, transport);
+  if (tools.length === 0 || text.trim() === '') return null;
+  return { role: 'system', blocks: [{ k: 'text', text }], src: CORE_TOOLS_SRC, placement: 'head' };
+}
+
+/** `lead` with `core` right after the last message of its leading system run (first when there is none). */
+function withCore(lead: readonly PromptMsg[], core: PromptMsg | null): PromptMsg[] {
+  if (core === null) return [...lead];
+  let at = 0;
+  while (at < lead.length && lead[at]!.role === 'system') at++;
+  return [...lead.slice(0, at), core, ...lead.slice(at)];
+}
+
+/** D-96: the run of chat messages a request leaves out, as the history tools number it, and what follows it. */
+interface LeftOut {
+  /** First and last left-out message: path positions from 1 (the greeting #1, hidden messages counted). */
+  a: number;
+  b: number;
+  /** The first chat message sent after the run: the gap note goes right before it. */
+  next: PromptMsg | undefined;
+}
+
+/**
+ * The left-out run of the chat area: chat.msgs[from, keepFrom) (from = after the greeting when it is
+ * kept, 0 when it was dropped or there is none), or null when nothing is left out. Its ends are
+ * mapped to their positions on the view's path, the numbering of tools/builtin/history.ts; hidden or
+ * blank path messages inside the run simply stay inside the range.
+ */
+function leftOut(view: PathView, chat: ChatArea, from: number, keepFrom: number): LeftOut | null {
+  if (keepFrom <= from) return null;
+  const pos = (id: string): number => view.path.findIndex((m) => m.id === id) + 1;
+  return { a: pos(chat.ids[from]!), b: pos(chat.ids[keepFrom - 1]!), next: chat.msgs[keepFrom] };
+}
+
+/**
+ * D-96: the chat part with the gap note right before the first message sent after the left-out run
+ * (after any depth insert placed in front of that message: depths count chat messages only) and the
+ * reminder for the turn's transport after everything at depth 0. Unchanged when nothing is left out.
+ */
+function withGapNotes(chatPart: PromptMsg[], gap: LeftOut | null, transport: 'native' | 'prompted'): PromptMsg[] {
+  if (gap === null) return chatPart;
+  const at = gap.next === undefined ? -1 : chatPart.indexOf(gap.next);
+  chatPart.splice(at < 0 ? chatPart.length : at, 0, gapMsg(gap.a, gap.b));
+  chatPart.push(remindMsg(transport));
+  return chatPart;
 }
 
 /**
@@ -414,12 +504,15 @@ function sentRows(messages: readonly PromptMsg[], counter: TokenCounter): Pick<T
  * counted with the counter the trace names (so the EMA compares like with like). The prefill the
  * request carries (a preset's, or on a continue the whole answer so far) is prompt the server
  * counts too: it is added to tokens.estimated like one more message, while `blocks` stays 1:1 with
- * the messages. A reported token count already on the trace is kept.
+ * the messages. M3: native tool declarations (`nativeTools`, what the request declares on the wire)
+ * are prompt too and are added the same way (estimateToolSpecs); prompted tools are in the messages.
+ * A reported token count already on the trace is kept.
  */
-export function traceForSent(trace: Trace, messages: readonly PromptMsg[], prefill?: string): Trace {
+export function traceForSent(trace: Trace, messages: readonly PromptMsg[], prefill?: string, nativeTools?: readonly ToolSpec[]): Trace {
   const counter = counterById(trace.tokens.counter);
   const rows = sentRows(messages, counter);
   if (prefill !== undefined && prefill !== '') rows.tokens.estimated += estimateTokens(prefill, counter) + MESSAGE_OVERHEAD_TOKENS;
+  if (nativeTools && nativeTools.length > 0) rows.tokens.estimated += estimateToolSpecs(nativeTools, counter);
   return { ...trace, blocks: rows.blocks, tokens: { ...trace.tokens, ...rows.tokens } };
 }
 
@@ -523,8 +616,15 @@ export function assemble(input: AssembleInput): AssembleResult {
     inserts.push({ depth: 0, role: 'system', src: 'guidance', text: guidanceText(run.userText(g.text), g.rejected) });
   }
 
-  const prefill = decidePrefill(input, run);
-  const chat = chatArea(input.view, input.upTo, run);
+  // caps.tools 'none' never carries tools (the request builder offers none then; defensive here).
+  const prefill = decidePrefill(input, run, input.caps.tools === 'none' ? [] : input.tools);
+  // M3: what survives the prefill rule decides everything tool-related below; with no tools the
+  // core block, the declarations, the room and the reasoning echo do not exist (exactly M2).
+  const tools = prefill.tools;
+  const transport = input.caps.tools === 'prompted' ? 'prompted' : 'native';
+  const core = tools.length > 0 ? coreBlock(tools, transport) : null;
+  const echo = tools.length > 0 ? input.echoReasoning : undefined;
+  const chat = chatArea(input.view, input.upTo, run, echo);
 
   // Budget (§11, D-49): everything but the older history is mandatory. The protected tail is the
   // message the turn is about (U; on continue the answer A and the U it replies to); the protected
@@ -540,7 +640,19 @@ export function assemble(input: AssembleInput): AssembleResult {
   // the 'strict' post-processing placeholder (one short user message at most).
   const cueTok = input.kind === 'continue' && input.caps.prefill === 'none' ? estimateTokens(CONTINUE_CUE, counter) + MESSAGE_OVERHEAD_TOKENS : 0;
   const placeholderTok = preset.postProcessing === 'strict' ? estimateTokens(POST_PROCESSING_PLACEHOLDER, counter) + MESSAGE_OVERHEAD_TOKENS : 0;
-  const fixed = scaled(blocksTok + loreOwnTok + insertsTok + prefillTok + cueTok + placeholderTok, factor);
+  // M3 (§11: the core block is reserved first and never trimmed): the core block, and for native
+  // tools the declarations the server renders into the prompt.
+  const toolsTok = (core === null ? 0 : measure(core)) + (core !== null && transport === 'native' ? estimateToolSpecs(tools, counter) : 0);
+  // D-96: with the history tools offered, a cut history brings the gap note and the reminder. Both
+  // are fixed; whether they come and the note's numbers depend on the cut, so the widest note (both
+  // numbers as wide as the path length) and the reminder in the variant this transport sends (the
+  // prompted one shows the call: D-96 amended) are reserved before it. When the history turns out
+  // whole they are not sent and the reservation is simply unused.
+  const gapping = core !== null && offersHistoryTools(tools);
+  const gapTok = gapping ? Math.max(...widestGapMsgs(input.view.path.length).map(measure)) + measure(remindMsg(transport)) : 0;
+  const fixed = scaled(blocksTok + loreOwnTok + insertsTok + prefillTok + cueTok + placeholderTok + toolsTok + gapTok, factor);
+  // D-93: the tool room the history leaves free (budget tokens; 0 without tools).
+  const room = core === null ? 0 : toolRoom(input.window, input.reserve);
   // Measured on demand: trimHistory stops at the first overflow, so older messages are never
   // tokenized (D-49's early stop holds with a real tokenizer too).
   const sized = chat.msgs.map((m, i) => {
@@ -556,26 +668,39 @@ export function assemble(input: AssembleInput): AssembleResult {
   const tail = Math.min(protectedTail(input, chat.ids), Math.max(0, sized.length - head));
   const maxKept = preset.context?.maxMessages;
   const trimOpts = { protectedTail: tail, ...(maxKept !== undefined ? { maxKept } : {}) };
-  let cut = trimHistory(sized, available - fixed, { protectedHead: head, ...trimOpts });
+  const tokOf = (from: number, to: number): number => sized.slice(from, to).reduce((a, s) => a + s.tok, 0);
+  /**
+   * The cut with `protect` leading messages kept, leaving the tool room free. When even the
+   * protected messages leave less than the whole room, every droppable message goes (the cut
+   * trimHistory reports for a miss) and the room is what is left; null when the protected messages
+   * do not fit at all. Without tools this is the M2 cut exactly.
+   */
+  const fit = (protect: number): { cut: ReturnType<typeof trimHistory>; room: number } | null => {
+    const c = trimHistory(sized, available - fixed - room, { protectedHead: protect, ...trimOpts });
+    if (c.fits) return { cut: c, room };
+    if (room === 0) return null;
+    const left = available - fixed - tokOf(0, protect) - tokOf(sized.length - tail, sized.length);
+    return left >= 0 ? { cut: { ...c, fits: true }, room: Math.min(room, left) } : null;
+  };
+  let fitted = fit(head);
   // The last resort before a refusal: the greeting goes the way of old history. SillyTavern fills
   // the history newest first and leaves out whatever does not fit, the greeting included
   // (openai.js populateChatHistory); refusing a turn ST would send is worse than a missing greeting.
+  // A smaller tool room comes before that: the greeting goes only when nothing else is left.
   let greetingDropped = false;
-  if (!cut.fits && head > 0) {
-    const without = trimHistory(sized, available - fixed, { protectedHead: 0, ...trimOpts });
-    if (without.fits) {
-      cut = without;
-      greetingDropped = true;
-    }
+  if (fitted === null && head > 0) {
+    fitted = fit(0);
+    greetingDropped = fitted !== null;
   }
-  if (!cut.fits) {
-    const tailTok = sized.slice(sized.length - tail).reduce((a, s) => a + s.tok, 0);
+  if (fitted === null) {
+    const tailTok = tokOf(sized.length - tail, sized.length);
     const need = fixed + tailTok;
     const s = (n: number): number => scaled(n, factor);
     const parts = [
       `the preset's blocks ${s(blocksTok + loreOwnTok)} (lore included: ${lore.run.used} of its budget ${budgetForLore})`,
       ...(insertsTok > 0 ? [`in-chat inserts ${s(insertsTok)} (author's note, depth prompts, depth lore)`] : []),
       ...(prefillTok + cueTok + placeholderTok > 0 ? [`prefill and cues ${s(prefillTok + cueTok + placeholderTok)}`] : []),
+      ...(toolsTok + gapTok > 0 ? [`the tool instructions ${s(toolsTok + gapTok)}`] : []),
       `your current message${tail > 1 ? ' and the answer it continues' : ''} ${tailTok}`,
     ];
     const greeting = head > 0 ? `; the greeting (${sized[0]!.tok} tokens) is already left out` : '';
@@ -585,10 +710,16 @@ export function assemble(input: AssembleInput): AssembleResult {
       message: `the required part of the prompt needs about ${need} tokens, but only ${Math.max(0, available)} are available (window ${input.window} - reply reserve ${input.reserve}): ${parts.join(', ')}${greeting}`,
     };
   }
-  const kept = greetingDropped ? chat.msgs.slice(cut.keepFrom) : [...chat.msgs.slice(0, head), ...chat.msgs.slice(cut.keepFrom)];
+  const cut = fitted.cut;
+  // Indexes into chat.msgs of what the history sends, oldest first.
+  const keptAt: number[] = [];
+  if (!greetingDropped) for (let i = 0; i < head; i++) keptAt.push(i);
+  for (let i = cut.keepFrom; i < chat.msgs.length; i++) keptAt.push(i);
+  const kept = keptAt.map((i) => chat.msgs[i]!);
 
-  // The leading system run of the preset is the head the adapters send as the system prompt.
-  const lead = [...loreTop, ...layout.top, ...layout.before];
+  // The leading system run of the preset is the head the adapters send as the system prompt; the
+  // core block closes it (M3).
+  const lead = withCore([...loreTop, ...layout.top, ...layout.before], core);
   for (const m of lead) {
     if (m.role !== 'system') break;
     m.placement = 'head';
@@ -598,7 +729,8 @@ export function assemble(input: AssembleInput): AssembleResult {
   // continued message before its in-chat injections). A is put back after the chat for shape to take.
   // In cue mode A is a real message and counts like any other.
   const displaced = input.kind === 'continue' && input.caps.prefill !== 'none' ? kept.pop() : undefined;
-  const chatPart = [...injectAtDepth(kept, inserts), ...(displaced ? [displaced] : [])];
+  const chatPart = withGapNotes(injectAtDepth(kept, inserts), gapping ? leftOut(input.view, chat, greetingDropped ? 0 : head, cut.keepFrom) : null, transport);
+  if (displaced) chatPart.push(displaced);
   const messages: PromptMsg[] = [...lead, ...newChat, ...loreRecap, ...chatPart, ...layout.after, ...layout.bottom, ...loreBottom];
 
   const unsent = unsentLore(lore.run.fired, used);
@@ -647,12 +779,15 @@ export function assemble(input: AssembleInput): AssembleResult {
   return {
     ok: true,
     messages,
-    tools: prefill.tools,
+    tools: core === null ? [] : tools,
     prefill: prefill.prefill,
     trace,
     varsDiff: run.varsDiff(),
     notices,
     ...(input.explain ? { verdicts: lore.run.verdicts ?? [], loreUse: { used: lore.run.used, factor } } : {}),
     ...(lore.run.regexErrors.length > 0 ? { loreRegexErrors: lore.run.regexErrors } : {}),
+    toolRoom: fitted.room,
+    // D-56 inContext: the chat messages whose text this request carries (a blank upTo shows nothing).
+    kept: keptAt.filter((i) => messageText(chat.msgs[i]!).trim() !== '').map((i) => chat.ids[i]!),
   };
 }

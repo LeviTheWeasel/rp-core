@@ -5,13 +5,14 @@
 // CONTRACT FILE: signature is fixed; the storage agent implements the body.
 //
 // Fold order (§19.2): path, edits, swipes, vars [D-30] → fires (M2 reads them) → directorAt (M4)
-// → Compendium (M5). One linear pass over the tree index; the 10k-message benchmark lives in
-// test/session/fold.test.ts.
+// → Compendium (M3 notes, §5.8; M5 the rest). One linear pass over the tree index; the 10k-message
+// benchmark lives in test/session/fold.test.ts, the 5 000-row Compendium one in test/memory.
 
 import type { DeepPartial, Entry, SessionConfig, SessionHeader, Trace, VarsDiff } from './entries.ts';
 import type { TreeIndex } from './tree.ts';
 import { buildTree, effectiveMessage, pathTo, swipeSiblings, tails } from './tree.ts';
 import type { MessageView, PathView } from './view.ts';
+import { foldCompendium } from '../agents/compendium/apply.ts';
 
 /** Apply one diff in place: null deletes, anything else sets. */
 function applyVars(into: Record<string, string | number>, diff: VarsDiff | undefined): void {
@@ -116,13 +117,16 @@ export function foldView(header: SessionHeader, entries: readonly Entry[], idx?:
     fires,
     ...(continued.size > 0 ? { continued } : {}),
     castNames: castNamesOf(header),
+    // §5.8: the mem rows bound to this path (or to none), from the index, so a view folded at
+    // another leaf (foldViewAt) sees the same notes.
+    compendium: foldCompendium(tree.mems, { pathSet }),
   };
 }
 
 /**
  * The PathView with the head on `leaf` instead of the session's head: the state a turn starts from
- * when that is not the head (a swipe starts at U, before the answer it replaces, §6.3). Vars and
- * fires are folded along the path to `leaf` only.
+ * when that is not the head (a swipe starts at U, before the answer it replaces, §6.3). Vars,
+ * fires and the Compendium are folded along the path to `leaf` only.
  */
 export function foldViewAt(header: SessionHeader, idx: TreeIndex, leaf: string): PathView {
   return foldView(header, [], { ...idx, head: leaf });

@@ -278,6 +278,25 @@ describe('shipped caps-data', () => {
     expect(checkCapsRows(bad.slice(1), 'hosts')).toEqual(['hosts[0]: match needs hostname or server']);
   });
 
+  test("checkCapsRows: a local server's host row may not confirm structured output (§7.2, M3)", () => {
+    const so = { structuredOutput: { mode: 'json_schema', confirmedBy: 'host' } };
+    const rows = [
+      { match: { port: 8080, server: 'llama.cpp' }, as_of: '2026-10-26', src: 's', caps: so },
+      { match: { server: 'vllm' }, as_of: '2026-10-26', src: 's', caps: so },
+      { match: { server: 'ollama' }, as_of: '2026-10-26', src: 's', caps: { structuredOutput: { mode: 'json_schema' } } },
+      { match: { hostname: 'api.example.com' }, as_of: '2026-10-26', src: 's', caps: so },
+    ] as unknown as CapsRow[];
+    expect(checkCapsRows(rows, 'hosts')).toEqual([
+      "hosts[0]: a local server's structured output needs a probe or the user, not confirmedBy 'host' (§7.2)",
+      "hosts[1]: a local server's structured output needs a probe or the user, not confirmedBy 'host' (§7.2)",
+    ]);
+    // The shipped local rows claim nothing: an unknown local model gets no structured output.
+    for (const origin of [LLAMA, 'http://127.0.0.1:11434']) {
+      expect(resolveCaps(input({ origin, local: true, model: 'm' })).structuredOutput).toEqual({ mode: 'none' });
+    }
+    expect(resolveCaps(input({ origin: 'http://10.0.0.5:8000', local: true, model: 'm', server: 'vllm' })).structuredOutput).toEqual({ mode: 'none' });
+  });
+
   test('llama.cpp :8080', () => {
     const c = resolveCaps(input({ origin: LLAMA, local: true, model: 'mag-mell-12b' }));
     expect(c.midSystem).toBe('native');

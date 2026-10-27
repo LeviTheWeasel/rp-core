@@ -10,6 +10,7 @@ import type { EventBus } from './bus.ts';
 import type { CheckpointCadence } from './checkpoint.ts';
 import type { HostHooks } from './hooks.ts';
 import type { CallTimeouts } from './narrate.ts';
+import type { ToolSets } from './request.ts';
 import type { Scheduler } from './sched.ts';
 import type { TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
@@ -41,6 +42,11 @@ export interface EngineCtx {
    * samples, D-50). defaultCounter() unless a test pins another (engine.ts EngineSeams).
    */
   counter: TokenCounter;
+  /**
+   * TEST SEAM (M3, engine.ts EngineSeams): the tool sets the request builder offers instead of the
+   * built-ins. Hosts never set it.
+   */
+  toolSets?: ToolSets;
 }
 
 /** ISO timestamp from the injected clock. */

@@ -19,11 +19,13 @@
 // modes and placeholder but is block-aware [D-48]: a message carrying tool calls, tool results,
 // reasoning or a replay payload is never merged or re-roled (ST and RoleCall turn tool messages
 // into user text and drop tool_calls), messages of different placement never merge, and a blank
-// message merges like any other instead of ST's "an empty message starts a new one" quirk.
+// message merges like any other instead of ST's "an empty message starts a new one" quirk. M3: the
+// one exception is a history answer carrying only text and its raw reasoning (the DeepSeek echo,
+// §8.4): it still merges with a neighbouring answer, reasoning kept in order, never re-roled.
 
 import type { ModelCaps, PromptMsg } from '../providers/types.ts';
 import type { Preset } from '../formats/native.ts';
-import type { TurnKind } from '../session/entries.ts';
+import type { Block, TurnKind } from '../session/entries.ts';
 import type { Notice } from '../protocol/events.ts';
 
 export interface ShapeInput {
@@ -175,9 +177,25 @@ function placementOf(m: PromptMsg): 'head' | 'inline' {
   return m.placement === 'head' ? 'head' : 'inline';
 }
 
-/** Two messages may become one: both plain text, same role, same placement. */
+/** A raw reasoning block (the model's own text, not a summary or a redaction). */
+const isRawReasoning = (b: Block): b is Extract<Block, { k: 'reasoning' }> => b.k === 'reasoning' && (b.kind === undefined || b.kind === 'raw');
+
+/**
+ * M3 (§8.4, D-94): a history answer carrying the DeepSeek echo, i.e. a chat message (src 'history')
+ * from the assistant whose only blocks besides text are raw reasoning, with no replay payload. Such
+ * messages still merge with a neighbouring answer (their reasoning kept in order): DeepSeek refuses
+ * successive assistant turns, and a hidden user message between two answers would otherwise leave
+ * them apart. Messages of the tool loop itself stay fixed.
+ */
+function isEchoAnswer(m: PromptMsg): boolean {
+  if (m.role !== 'assistant' || !isHistory(m) || (m.replay !== undefined && m.replay.length > 0)) return false;
+  return m.blocks.every((b) => b.k === 'text' || isRawReasoning(b));
+}
+
+/** Two messages may become one: both plain text (or echo answers), same role, same placement. */
 function canMerge(a: PromptMsg, b: PromptMsg): boolean {
-  return a.role === b.role && !isFixedMessage(a) && !isFixedMessage(b) && placementOf(a) === placementOf(b);
+  const mergeable = (m: PromptMsg): boolean => !isFixedMessage(m) || isEchoAnswer(m);
+  return a.role === b.role && mergeable(a) && mergeable(b) && placementOf(a) === placementOf(b);
 }
 
 /** ST's join: a blank line between the parts. A blank part adds nothing (and no separator). */
@@ -199,7 +217,11 @@ function textMsg(role: PromptMsg['role'], text: string, src: string, placement: 
  * sources joined with '+' so the trace row still names every block that went into it.
  */
 function merged(a: PromptMsg, b: PromptMsg): PromptMsg {
-  return textMsg(a.role, joinText(messageText(a), messageText(b)), `${a.src}+${b.src}`, a.placement ?? b.placement);
+  const out = textMsg(a.role, joinText(messageText(a), messageText(b)), `${a.src}+${b.src}`, a.placement ?? b.placement);
+  // Echo answers (M3): the reasoning of both, in order, before the joined text.
+  const reasoning = [...a.blocks, ...b.blocks].filter(isRawReasoning);
+  if (reasoning.length > 0) out.blocks = [...reasoning, ...out.blocks];
+  return out;
 }
 
 /** `m` under another role. A message that stops being system leaves the head (placement 'inline'). */

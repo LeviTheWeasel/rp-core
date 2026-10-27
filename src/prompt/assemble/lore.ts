@@ -21,6 +21,7 @@
 //   so `{{char}}` / `{{user}}` keys work; here identity macros only, read-only (a key is data the
 //   user typed, not a template that may set variables).
 
+import { NOTES_BOOK_KEY } from '../../agents/compendium/notes.ts';
 import type { Character, ChatRole, LoreBook, Persona, Preset } from '../../formats/native.ts';
 import type { Notice } from '../../protocol/events.ts';
 import {
@@ -97,16 +98,19 @@ export function shadowedSessionBooks(lorebooks: readonly { key: string; book: Lo
  * The books a request reads, in ST's "character first" order: persona, card, then the session's.
  * A world is read once by name: of session books with the same name only the last is read
  * (shadowedSessionBooks), and an own book that a session book (or, for the card's, the persona's)
- * of the same name stands in for is left out (shadowedCastBooks).
+ * of the same name stands in for is left out (shadowedCastBooks). The notes book ('@notes', M3) is
+ * not a world: it never shadows a book and is never shadowed, whatever a book is called.
  */
 export function loreSources(cast: { character: Character; persona?: Persona }, lorebooks: readonly LoreSource[]): LoreSource[] {
-  const sessionShadowed = shadowedSessionBooks(lorebooks);
-  const session = lorebooks.filter((s) => !sessionShadowed.has(s.key));
+  const books = lorebooks.filter((s) => s.key !== NOTES_BOOK_KEY);
+  const sessionShadowed = shadowedSessionBooks(books);
+  const session = books.filter((s) => !sessionShadowed.has(s.key));
   const shadowed = shadowedCastBooks(cast, session);
   const out: LoreSource[] = [];
   if (cast.persona?.book && shadowed.persona === undefined) out.push({ key: PERSONA_BOOK_KEY, book: cast.persona.book });
   if (cast.character.book && shadowed.card === undefined) out.push({ key: CARD_BOOK_KEY, book: cast.character.book });
-  out.push(...session);
+  // Notes stay where the caller put them (request.ts: first); the lore engine gathers them after '@card'.
+  for (const s of lorebooks) if (s.key === NOTES_BOOK_KEY || !sessionShadowed.has(s.key)) out.push(s);
   return out;
 }
 

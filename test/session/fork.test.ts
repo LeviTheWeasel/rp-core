@@ -26,9 +26,9 @@ function seedSource(home: string) {
   add(msg('a0000001', 'u0000001', 'assistant', 'first', { ...withVars({ hp: 10 }), turn: 't_1' }));
   add(msg('a000001b', 'u0000001', 'assistant', 'swiped', withVars({ hp: 1 })));
   add(head('a0000001'));
-  add({ t: 'mem', ts: TS, key: 'file:a0000001', on: 'a0000001', row: 1 } as EntryInput);
-  add({ t: 'mem', ts: TS, key: 'file:a000001b', on: 'a000001b', row: 2 } as EntryInput);
-  add({ t: 'mem', ts: TS, key: null, on: null, row: 3 } as EntryInput);
+  add({ t: 'mem', ts: TS, key: 'file:a0000001', on: 'a0000001', by: 'filing', ops: [], row: 1 });
+  add({ t: 'mem', ts: TS, key: 'file:a000001b', on: 'a000001b', by: 'filing', ops: [], row: 2 });
+  add({ t: 'mem', ts: TS, key: null, on: null, by: 'user', ops: [{ op: 'note', title: 'Lamp', keys: ['lamp'], content: 'It flickers.' }], row: 3 });
   add(edit('a0000001', 'first (edited)', { vars: { mood: 'ok' } }));
   add(hide('u0000001'));
   add(msg('u0000002', 'a0000001', 'user', 'More'));
@@ -79,6 +79,9 @@ describe('forkSession', () => {
     expect(forkView.vars).toEqual(srcAtAt.vars);
     expect(forkView.head).toBe('a0000001');
     expect(forkView.path[2]!.blocks).toEqual(text('first (edited)'));
+    // The global note row came along: the fork folds the same notes as the source at `at`.
+    expect([...forkView.compendium.entries.keys()]).toEqual(['note:lamp']);
+    expect([...forkView.compendium.entries.values()]).toEqual([...srcAtAt.compendium.entries.values()].map((e) => ({ ...e, prov: { ...e.prov, lastSeq: expect.any(Number), createdSeq: expect.any(Number) } })));
 
     // The new log is locked and appendable; the temp file is gone.
     expect(() => openSessionLog(home, NEW)).toThrow(SessionLockedError);

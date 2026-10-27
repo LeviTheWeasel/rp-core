@@ -9,26 +9,43 @@
 // Notices come back with the key their once-per-session rule is kept under (the turn asks the
 // session whether a key was told; a preview shows them all): most are once per code, a missing
 // book once per id, a broken '/regex/' lore key once per entry (label).
+//
+// M3 (.notes/m3-decisions.md C): the notes book joins the lore sources; the tools are chosen in two
+// passes. Pass A assembles without tools, byte-identical to M2. The history tools are offered when
+// pass A had to trim the history, the lore tools when some enabled entry (or live note) of the
+// turn's lore did not fire; none on a continue or for caps.tools 'none'. With nothing to offer,
+// pass A is the request. Otherwise pass B assembles with the specs (core block, tool room [D-93],
+// the prefill rule [D-28] inside assemble), the history carrying this model's own reasoning when its
+// tool requests echo it [D-94 revised]. Pass B trims more than pass A (the room, the core block): when
+// the request it sends leaves history out and the history tools are not offered yet, they are, and
+// pass B runs once more. The result carries the turn's TurnTools: the dispatch table and the ToolCtx
+// every round reads.
 
 import type { Route } from './admit.ts';
+import { MIN_ROOM_TOKENS, type TurnTools } from './narrate.ts';
 import { tokenFactorFor } from './ema.ts';
 import { modelLabel } from './route.ts';
+import { NOTES_BOOK_KEY, notesBook } from '../agents/compendium/notes.ts';
 import type { Preset, Samplers } from '../formats/native.ts';
 import { validateLoreBook } from '../formats/native.ts';
 import { loadFromLibrary } from '../formats/library.ts';
-import { entryLabel, type LoreRunResult, type LoreSource } from '../lore/engine.ts';
-import { assemble, type AssembleResult } from '../prompt/assemble.ts';
-import { regexNotice } from '../prompt/assemble/lore.ts';
+import { entryKey, entryLabel, type LoreRunResult, type LoreSource } from '../lore/engine.ts';
+import { assemble, type AssembleInput, type AssembleResult } from '../prompt/assemble.ts';
+import { loreSources, regexNotice } from '../prompt/assemble/lore.ts';
 import { contextWindow, replyReserve } from '../prompt/budget.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
+import { subRng } from '../prompt/rng.ts';
 import { shape } from '../prompt/shape.ts';
-import type { TokenCounter } from '../prompt/tokens.ts';
+import { estimateTokens, type TokenCounter } from '../prompt/tokens.ts';
 import type { Notice } from '../protocol/events.ts';
 import type { PromptMsg } from '../providers/types.ts';
 import type { Binding, SessionConfig, SessionHeader, TurnKind } from '../session/entries.ts';
 import { foldViewAt } from '../session/fold.ts';
 import type { TreeIndex } from '../session/tree.ts';
 import type { PathView } from '../session/view.ts';
+import { HISTORY_TOOLS, LORE_TOOLS, toolSpecs } from '../tools/builtin/index.ts';
+import { HandleTable } from '../tools/handles.ts';
+import type { Tool } from '../tools/types.ts';
 
 export type AssembledOk = Extract<AssembleResult, { ok: true }>;
 
@@ -76,7 +93,23 @@ export interface RequestInput {
   placements: DepthInsert[];
   /** Also return the lore verdicts (preview, /lore test) [D-45]. */
   explain?: boolean;
+  /**
+   * TEST SEAM (M3): the tool sets the selection draws from instead of the built-ins (EngineSeams
+   * toolSets). Hosts never set it; the rules that decide WHEN a set is offered stay the same.
+   */
+  toolSets?: ToolSets;
 }
+
+/** The tool sets the two-pass selection offers (C1): each is offered whole or not at all. */
+export interface ToolSets {
+  /** Offered when the history did not fit whole (pass A trimmed it). */
+  history(): Tool[];
+  /** Offered when the turn's lore holds an enabled entry or live note that did not fire. */
+  lore(): Tool[];
+}
+
+/** The built-in sets: search_history + read_history, search_lore + read_lore. */
+export const BUILTIN_TOOL_SETS: ToolSets = { history: HISTORY_TOOLS, lore: LORE_TOOLS };
 
 export type ReplyLimits = { maxTokens?: number; samplers: Partial<Samplers> };
 
@@ -95,6 +128,18 @@ export type BuiltRequest =
       asm: AssembledOk;
       shaped: Shaped;
       notices: KeyedNotice[];
+      /**
+       * M3: the tools this turn offers, fixed for the turn (§9.1): null when none (continue,
+       * caps.tools 'none', the prefill rule [D-28], or nothing worth offering — see
+       * .notes/m3-decisions.md "tool selection").
+       */
+      tools: TurnTools | null;
+      /**
+       * M3: the history carries this route's raw reasoning for the DeepSeek echo (D-94 revised: tools
+       * offered natively, caps.reasoning.echo 'all-with-tools', thinking on). Another model must never
+       * get it (§8.6): a fallback whose echo rule differs rebuilds the request (turn.ts).
+       */
+      echo?: true;
     }
   | { ok: false; code: RequestFailure; message: string; notices: KeyedNotice[] };
 
@@ -260,32 +305,141 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   const tokenFactor = tokenFactorFor(input.tree, view, primary.model, input.counter.id);
   const books = loadLorebooks(input.home, plan.config.lorebooks ?? []);
   notices.push(...books.notices);
+  // C5: the path's live notes are one more book, before the session's (the lore engine gathers
+  // '@notes' after '@card'); none without notes, so an M2 request stays as it was.
+  const notes = notesBook(view.compendium);
+  const lorebooks: LoreSource[] = notes ? [{ key: NOTES_BOOK_KEY, book: notes }, ...books.sources] : books.sources;
 
-  let asm: AssembleResult;
-  try {
-    asm = assemble({
-      sessionId: input.sessionId,
+  const base: AssembleInput = {
+    sessionId: input.sessionId,
+    view,
+    upTo: plan.upTo,
+    kind: plan.kind,
+    cast: input.header.cast,
+    preset: plan.preset,
+    lorebooks,
+    ...(input.explain ? { explain: true } : {}),
+    counter: input.counter,
+    placements: input.placements,
+    ...(plan.config.authorNote ? { authorNote: plan.config.authorNote } : {}),
+    ...(plan.guidance ? { guidance: { text: plan.guidance, ...(plan.rejected !== undefined ? { rejected: plan.rejected } : {}) } } : {}),
+    caps: primary.caps,
+    window,
+    reserve,
+    tokenFactor,
+    seed: input.seed,
+    now: input.now,
+    timeZone: input.timeZone,
+    tools: [],
+    prefillVsTools: plan.config.narrator.prefillVsTools,
+  };
+  const common = { window, reserve, limits, tokenFactor, view };
+
+  // Pass A: no tools, exactly the M2 request.
+  const a = assembleAndShape(base, primary, plan, input.header.cast);
+  if (!a.ok) return { ok: false, code: a.code, message: a.message, notices: [...notices, ...a.notices] };
+  const passA = (): BuiltRequest => ({ ok: true, ...common, asm: a.asm, shaped: a.shaped, notices: [...notices, ...a.notices], tools: null });
+
+  // C1: what is worth offering, read off pass A.
+  const transport = primary.caps.tools;
+  if (plan.kind === 'continue' || transport === 'none') return passA();
+  const sets = input.toolSets ?? BUILTIN_TOOL_SETS;
+  const sources = loreSources(input.header.cast, lorebooks);
+  const history = a.asm.trace.trimmed !== null;
+  let offered: Tool[] = [...(history ? sets.history() : []), ...(unfiredLore(sources, a.asm.trace.lore.fired) ? sets.lore() : [])];
+  if (offered.length === 0) return passA();
+
+  // Pass B: with the specs and, when this route's tool requests echo reasoning (D-94 revised), this
+  // model's own reasoning in the history (every other answer goes out with the adapter's placeholder).
+  const echoOf = echoRuleOf(primary, plan.binding.reasoning);
+  const passB = (list: readonly Tool[]) =>
+    assembleAndShape({ ...base, tools: toolSpecs(list), ...(echoOf ? { echoReasoning: echoOf } : {}) }, primary, plan, input.header.cast);
+  let b = passB(offered);
+  // Tools are optional: a request that cannot carry them (the core block does not fit) goes without.
+  if (!b.ok) return passA();
+  // D-28 turned them off inside assemble: pass B is the request (its trace and notice say why).
+  if (b.asm.tools.length === 0) return { ok: true, ...common, asm: b.asm, shaped: b.shaped, notices: [...notices, ...b.notices], tools: null };
+  // Too little room for even one round of results: tools would only cost the core block.
+  if (b.asm.toolRoom < MIN_ROOM_TOKENS) return passA();
+  // C1 reads "the history did not fit" off the request actually sent: pass B reserves the room and the
+  // core block, so it may trim history pass A kept. Then the history set joins and pass B runs once
+  // more (more tools only trim more, so one step settles it; D-96's gap note follows the set). When
+  // that request cannot carry the tools (a small window), the history set goes alone: with the history
+  // cut, reading it matters more than the lore pass A left unfired. When neither fits, the first pass
+  // B stands.
+  if (!history && b.asm.trace.trimmed !== null) {
+    const more = sets.history();
+    if (more.length > 0) {
+      for (const list of [[...more, ...offered], more]) {
+        const c = passB(list);
+        if (c.ok && c.asm.tools.length > 0 && c.asm.toolRoom >= MIN_ROOM_TOKENS) {
+          b = c;
+          offered = list;
+          break;
+        }
+      }
+    }
+  }
+
+  // C6: the per-turn tool context; signal and pageChars come per round (narrate.ts).
+  const kept = new Set(b.asm.kept);
+  const cast = input.header.cast;
+  const tools: TurnTools = {
+    transport,
+    tools: new Map(offered.map((t) => [t.name, t])),
+    specs: b.asm.tools,
+    ctx: {
       view,
       upTo: plan.upTo,
-      kind: plan.kind,
-      cast: input.header.cast,
-      preset: plan.preset,
-      lorebooks: books.sources,
-      ...(input.explain ? { explain: true } : {}),
-      counter: input.counter,
-      placements: input.placements,
-      ...(plan.config.authorNote ? { authorNote: plan.config.authorNote } : {}),
-      ...(plan.guidance ? { guidance: { text: plan.guidance, ...(plan.rejected !== undefined ? { rejected: plan.rejected } : {}) } } : {}),
-      caps: primary.caps,
-      window,
-      reserve,
-      tokenFactor,
-      seed: input.seed,
+      names: { char: cast.character.name, user: cast.persona?.name || 'User' },
+      lore: sources,
+      compendium: view.compendium,
+      handles: new HandleTable(),
+      inContext: (id) => kept.has(id),
       now: input.now,
-      timeZone: input.timeZone,
-      tools: [],
-      prefillVsTools: plan.config.narrator.prefillVsTools,
-    });
+      rng: subRng(input.seed, 'tools'),
+    },
+    roomTokens: b.asm.toolRoom,
+    window,
+    tokenFactor,
+    count: (text) => estimateTokens(text, input.counter),
+  };
+  return {
+    ok: true,
+    ...common,
+    asm: b.asm,
+    shaped: b.shaped,
+    notices: [...notices, ...b.notices],
+    tools,
+    ...(echoOf ? { echo: true as const } : {}),
+  };
+}
+
+/**
+ * D-94 (revised): the connection and model whose raw reasoning a route's tool requests echo, or null
+ * when they echo none: native tools, caps.reasoning.echo 'all-with-tools' and thinking on for the
+ * call (not `reasoning 'none'` on a model that can turn thinking off; the adapter's rule, wire.ts
+ * echoesReasoning). Pass B keeps that model's reasoning blocks in the history; a fallback whose rule
+ * differs from the primary's gets its own request.
+ */
+export function echoRuleOf(route: Route, reasoning: Binding['reasoning']): { connection: string; model: string } | null {
+  const caps = route.caps;
+  if (caps.tools !== 'native' || caps.reasoning.echo !== 'all-with-tools') return null;
+  if (reasoning === 'none' && caps.reasoning.canDisable) return null;
+  return { connection: route.conn.id, model: route.model };
+}
+
+/** One assemble + shape for the primary route, with their notices keyed. */
+function assembleAndShape(
+  input: AssembleInput,
+  primary: Route,
+  plan: RequestPlan,
+  cast: SessionHeader['cast'],
+): { ok: true; asm: AssembledOk; shaped: Shaped; notices: KeyedNotice[] } | { ok: false; code: RequestFailure; message: string; notices: KeyedNotice[] } {
+  const notices: KeyedNotice[] = [];
+  let asm: AssembleResult;
+  try {
+    asm = assemble(input);
   } catch (e) {
     return { ok: false, code: 'assemble_failed', message: errMessage(e), notices };
   }
@@ -294,14 +448,17 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     if (n.code === 'lore_regex_invalid' && asm.loreRegexErrors) notices.push(...regexNoticesPerEntry(asm.loreRegexErrors));
     else notices.push({ key: n.code, notice: n });
   }
-
-  let shaped: Shaped;
   try {
-    const out = shapeRequest(primary, asm, plan, input.header.cast);
-    shaped = out.shaped;
+    const out = shapeRequest(primary, asm, plan, cast);
     notices.push(...out.notices);
+    return { ok: true, asm, shaped: out.shaped, notices };
   } catch (e) {
     return { ok: false, code: 'shape_failed', message: errMessage(e), notices };
   }
-  return { ok: true, window, reserve, limits, tokenFactor, view, asm, shaped, notices };
+}
+
+/** C1: some enabled entry of the turn's lore (a live note included) did not fire in pass A. */
+export function unfiredLore(sources: readonly LoreSource[], fired: readonly { book: string; id: string }[]): boolean {
+  const done = new Set(fired.map((f) => entryKey(f.book, f.id)));
+  return sources.some((s) => s.book.entries.some((e) => e.enabled !== false && !done.has(entryKey(s.key, e.id))));
 }

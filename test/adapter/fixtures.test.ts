@@ -60,6 +60,20 @@ describe('golden fixtures', () => {
       { t: 'reasoning', i: 0, d: '**Setting the scene**\nRain, a tired keeper.' },
       { t: 'reasoning_end', i: 0 },
       { t: 'text', i: 0, d: 'Mara wipes the bar. "Room\'s upstairs."' },
+      // M3: the reasoning_details stream, verbatim, once, before the finish (§8.6).
+      {
+        t: 'replay',
+        r: {
+          kind: 'reasoning_details',
+          connection: 'c',
+          model: 'm',
+          payload: [
+            { type: 'reasoning.text', text: '**Setting the scene**\n', format: 'google-gemini-v1', index: 0 },
+            { type: 'reasoning.text', text: 'Rain, a tired keeper.', format: 'google-gemini-v1', index: 0 },
+            { type: 'reasoning.encrypted', data: 'CiQB4/H/XgPq0w==', id: 'tool_0', format: 'google-gemini-v1', index: 1 },
+          ],
+        },
+      },
       { t: 'finish', reason: 'end', raw: 'stop', model: 'google/gemini-3-pro-preview' },
       { t: 'usage', u: { inputTotal: 812, inputCacheRead: 640, outputTotal: 96, outputReasoning: 71, cost: 0.0019 } },
     ]);
@@ -164,6 +178,7 @@ describe('RoleCall SSE aggregator cases as fixtures', () => {
       { t: 'tool_start', i: 0, id: 'call_r', name: 'postgen_status' },
       { t: 'tool_args', i: 0, d: '{"summary":"ok"}' },
       { t: 'tool_end', i: 0 },
+      { t: 'replay', r: { kind: 'reasoning_details', connection: 'c', model: 'm', payload: [{ type: 'reasoning.encrypted', data: 'abc' }] } },
       { t: 'finish', reason: 'end', raw: 'tool_calls' },
     ]);
     const { reader } = await parseSse(request({ caps: NANOGPT, model: { connection: 'nano', model: 'x' } }), fixture('rolecall-reasoning-tool.sse'));

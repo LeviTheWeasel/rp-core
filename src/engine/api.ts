@@ -6,6 +6,8 @@
 // implements it in engine.ts; the CLI agent codes against it.
 
 import type { Character, Persona, Samplers } from '../formats/native.ts';
+import type { CEntry } from '../agents/compendium/types.ts';
+import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg, Provider, ProviderError, ToolSpec } from '../providers/types.ts';
 import type { DeepPartial, SessionConfig, SessionHeader, Trace, TurnKind } from '../session/entries.ts';
@@ -128,7 +130,18 @@ export interface RunTurnOptions {
 export type TurnOutcome =
   | { type: 'done'; message: MessageView }
   | { type: 'stopped'; message: MessageView | null }
-  | { type: 'failed'; category: string; code: string; message: string; draft: string }
+  | {
+      type: 'failed';
+      category: string;
+      code: string;
+      message: string;
+      draft: string;
+      /**
+       * 'conn:model' of the model call whose failure this is (the fallback's when it ran and failed);
+       * absent when no model call failed (a refusal before the call, a conflict, an internal error).
+       */
+      route?: string;
+    }
   | { type: 'conflict'; draft: string };
 
 export interface TurnHandle {
@@ -235,6 +248,29 @@ export interface SessionHandle {
    * Director is never called (M4: a stub directive).
    */
   preview(opts?: PreviewOptions): PreviewResult;
+
+  /**
+   * M3 (§7.5, /search, history/search): search the active path's visible messages (the same search
+   * the narrator's search_history runs). `before`: only messages numbered below it (#n from 1, the
+   * greeting #1). `inContext` marks hits whose text the last request sent (the head answer's trace
+   * rows), or false when unknown. Read-only: works while a turn runs.
+   */
+  search(input: { query: string; before?: number; limit?: number }): HistorySearch;
+
+  /** M3 (§5.8): the notes of the current path in creation order, live and retired. */
+  notes(): CEntry[];
+  /**
+   * M3: add a note (one human `mem` row, on:null, op 'note'). keys default to [title]. Returns its
+   * key. Refusals: session_busy during a turn; invalid_params for an empty title or content, or a
+   * title with no letters or digits. Publishes a `memory` event {change:'note', kind:'note', by:'user'}.
+   */
+  memoryAdd(input: { title: string; keys?: string[]; content: string }): { key: string };
+  /** M3: change a note's title, keys or text (op 'edit'; its key stays). not_found for an unknown ref. Event change 'edited'. */
+  memoryEdit(input: { ref: string; title?: string; keys?: string[]; content?: string }): { key: string };
+  /** M3: retire a note (op 'retire'): it stops firing and leaves search_lore. Event change 'retired'. */
+  memoryRetire(input: { ref: string; reason?: string }): { key: string };
+  /** M3: bring a retired note back (op 'restore'). Event change 'restored'. */
+  memoryRestore(input: { ref: string }): { key: string };
 
   /** Stop any running turn (keeping partial text), wait for it to settle, release the lock. */
   close(): Promise<void>;

@@ -233,9 +233,11 @@ describe('a configured openai-chat connection', () => {
     async () => {
       const srv = chatServer([['*Alice ', 'waves.*'], ['A second ', 'take.']]);
       const home = tmpHome('rp-core-m1b-');
+      // M3: the card's book has entries that do not fire on "Hello", which would offer the lore tools
+      // (D-92) and grow the prompt past the mock's fixed 120 reported tokens; this is a tool-free turn.
       writeFileSync(
         join(home, 'config.toml'),
-        `[connections.mock]\nbase_url = "${srv.base}"\n[prices."mock:m"]\nin_per_m = 1.0\nout_per_m = 2.0\nas_of = "2026-10-26"\n`,
+        `[connections.mock]\nbase_url = "${srv.base}"\n[caps."mock:m"]\ntools = "none"\n[prices."mock:m"]\nin_per_m = 1.0\nout_per_m = 2.0\nas_of = "2026-10-26"\n`,
       );
       const id = await newSessionWith(home, '--model', 'mock:m', '--max-tokens', '64', '--no-chat');
       const r = await run(['send', id, 'Hello', '--home', home]);
@@ -300,7 +302,7 @@ describe('a configured openai-chat connection', () => {
 
 describe('probe and models', () => {
   test(
-    'probe conn:model prints the server kind, windows and caps; --write stores the rows that later resolve as probe',
+    'probe conn:model prints the server kind, windows and caps; --write stores the rows that later resolve as catalog',
     async () => {
       const srv = ollamaServer();
       const home = tmpHome('rp-core-m1b-');
@@ -323,15 +325,18 @@ describe('probe and models', () => {
       expect(out[0]).toMatchObject({ connection: 'ol', ok: true, server: 'ollama', written: true });
       expect(out[0]!.models).toEqual([{ id: 'cold:latest' }, { id: 'loaded:latest', contextLength: 16384 }]);
       expect(out[0]!.notes.some((n) => n.includes('trained 1024000'))).toBe(true);
-      const cache = JSON.parse(readFileSync(join(home, 'caps-cache.json'), 'utf8')) as Record<string, { as_of: string; server: string; caps: Record<string, unknown> }>;
+      const cache = JSON.parse(readFileSync(join(home, 'caps-cache.json'), 'utf8')) as Record<string, { as_of: string; server: string; catalog: Record<string, unknown> }>;
       expect(Object.keys(cache)).toEqual(['ol:cold:latest', 'ol:loaded:latest']);
-      expect(cache['ol:loaded:latest']).toMatchObject({ server: 'ollama', caps: { contextLength: 16384, tools: 'native' } });
+      // M3: catalog facts are kept apart from active-probe facts (row.catalog vs row.probe).
+      expect(cache['ol:loaded:latest']).toMatchObject({ server: 'ollama', catalog: { contextLength: 16384, tools: 'native' } });
+      expect(cache['ol:loaded:latest']).not.toHaveProperty('probe');
       expect(cache['ol:loaded:latest']!.as_of).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
-      // The stored rows are the probe source of the caps from now on.
+      // The stored rows are the catalog source of the caps from now on (not 'probe': no active probe ran).
       const again = await run(['probe', 'ol:loaded:latest', '--json', '--home', home]);
       const caps = (JSON.parse(again.stdout) as { caps: { source: string[]; contextLength: number } }[])[0]!.caps;
-      expect(caps.source).toContain('probe');
+      expect(caps.source).toContain('catalog');
+      expect(caps.source).not.toContain('probe');
       expect(caps.contextLength).toBe(16384);
     },
     T,

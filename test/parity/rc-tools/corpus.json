@@ -1,0 +1,3590 @@
+[
+ {
+  "id": "P-01",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:71@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "Sure, planning now.\n<tool_call>{\"name\": \"commit_planning_round\", \"args\": {\"directive\": {\"mood\": \"tense\"}}}</tool_call>",
+   "schemas": {
+    "commit_planning_round": {
+     "type": "object",
+     "required": [
+      "directive"
+     ],
+     "properties": {
+      "directive": {
+       "type": "object",
+       "description": "The narrator directive (mood, pacing, etc.)."
+      },
+      "pacing": {
+       "type": "string",
+       "enum": [
+        "slow",
+        "fast"
+       ],
+       "description": "How quickly the next beat unfolds."
+      }
+     }
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "directive": {
+      "mood": "tense"
+     }
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "directive": {
+      "mood": "tense"
+     }
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-02",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:82@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "Here goes:\n<tool_call>\n```json\n{\"name\": \"ping\", \"args\": {}}\n```\n</tool_call>",
+   "schemas": {
+    "ping": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-03",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:92@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "thinking...\n<tool_call>{\"name\": \"ping\", \"args\": {}}</tool_call>\nmore prose\n<tool_call>{\"name\": \"commit_planning_round\", \"args\": {\"directive\": {\"mood\": \"calm\"}}}</tool_call>",
+   "schemas": {
+    "ping": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    },
+    "commit_planning_round": {
+     "type": "object",
+     "required": [
+      "directive"
+     ],
+     "properties": {
+      "directive": {
+       "type": "object",
+       "description": "The narrator directive (mood, pacing, etc.)."
+      },
+      "pacing": {
+       "type": "string",
+       "enum": [
+        "slow",
+        "fast"
+       ],
+       "description": "How quickly the next beat unfolds."
+      }
+     }
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": false
+   },
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "directive": {
+      "mood": "calm"
+     }
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": false
+   },
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "directive": {
+      "mood": "calm"
+     }
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-04",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:101@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>{\"name\": \"ping\", \"args\": {}}",
+   "schemas": {
+    "ping": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": true
+   }
+  ],
+  "core": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": false
+   }
+  ],
+  "deviation": "TD-2"
+ },
+ {
+  "id": "P-05",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:110@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>{\"name\": \"commit_planning_round\", \"args\": {\"directive\": {\"mood\": \"wry\"},}}</tool_call>",
+   "schemas": {
+    "commit_planning_round": {
+     "type": "object",
+     "required": [
+      "directive"
+     ],
+     "properties": {
+      "directive": {
+       "type": "object",
+       "description": "The narrator directive (mood, pacing, etc.)."
+      },
+      "pacing": {
+       "type": "string",
+       "enum": [
+        "slow",
+        "fast"
+       ],
+       "description": "How quickly the next beat unfolds."
+      }
+     }
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "directive": {
+      "mood": "wry"
+     }
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "directive": {
+      "mood": "wry"
+     }
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-06",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:120@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>not json at all</tool_call>",
+   "schemas": {
+    "ping": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ],
+  "core": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ]
+ },
+ {
+  "id": "P-07",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:129@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "just a normal reply",
+   "schemas": {
+    "ping": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  },
+  "rc": [],
+  "core": []
+ },
+ {
+  "id": "P-08",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:44@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "sure\n<tool_call>{\"name\":\"read_scene_messages\",\"args\":{\"from_index\":30,\"to_index\":55}}</tool_call>",
+   "schemas": {
+    "read_scene_messages": {
+     "type": "object",
+     "properties": {
+      "from_index": {
+       "type": "number"
+      },
+      "to_index": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "from_index"
+     ]
+    },
+    "list_panels": {
+     "type": "object",
+     "properties": {}
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 30,
+     "to_index": 55
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 30,
+     "to_index": 55
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-09",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:54@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call name=\"read_scene_messages\">\n{\"from_index\": 30, \"to_index\": 55} </tool_call>",
+   "schemas": {
+    "read_scene_messages": {
+     "type": "object",
+     "properties": {
+      "from_index": {
+       "type": "number"
+      },
+      "to_index": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "from_index"
+     ]
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 30,
+     "to_index": 55
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 30,
+     "to_index": 55
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-10",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:64@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call id='7' name='read_scene_messages'>{\"from_index\": 1}</tool_call>",
+   "schemas": {
+    "read_scene_messages": {
+     "type": "object",
+     "properties": {
+      "from_index": {
+       "type": "number"
+      },
+      "to_index": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "from_index"
+     ]
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 1
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 1
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-11",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:72@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call name=\"read_scene_messages\">{\"args\":{\"from_index\":2}}</tool_call>",
+   "schemas": {
+    "read_scene_messages": {
+     "type": "object",
+     "properties": {
+      "from_index": {
+       "type": "number"
+      },
+      "to_index": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "from_index"
+     ]
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 2
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 2
+    },
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-12",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:80@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call name=\"list_panels\" />",
+   "schemas": {
+    "list_panels": {
+     "type": "object",
+     "properties": {}
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "list_panels",
+    "args": {},
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "list_panels",
+    "args": {},
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-13",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:91@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_calls>{\"name\":\"read_scene_messages\"}</tool_calls>",
+   "schemas": {
+    "read_scene_messages": {
+     "type": "object",
+     "properties": {
+      "from_index": {
+       "type": "number"
+      },
+      "to_index": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "from_index"
+     ]
+    }
+   }
+  },
+  "rc": [],
+  "core": [
+   {
+    "name": "read_scene_messages",
+    "args": {},
+    "error": true
+   }
+  ],
+  "deviation": "TD-3"
+ },
+ {
+  "id": "P-14",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:99@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call></tool_call>",
+   "schemas": {}
+  },
+  "rc": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ],
+  "core": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ]
+ },
+ {
+  "id": "P-15",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:105@fb8dc623e",
+  "kind": "parse",
+  "input": {
+   "content": "first\n<tool_call name=\"read_scene_messages\">{\"from_index\":0}</tool_call>\nthen\n<tool_call name=\"list_panels\">{}</tool_call>",
+   "schemas": {
+    "read_scene_messages": {
+     "type": "object",
+     "properties": {
+      "from_index": {
+       "type": "number"
+      },
+      "to_index": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "from_index"
+     ]
+    },
+    "list_panels": {
+     "type": "object",
+     "properties": {}
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 0
+    },
+    "error": false
+   },
+   {
+    "name": "list_panels",
+    "args": {},
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "read_scene_messages",
+    "args": {
+     "from_index": 0
+    },
+    "error": false
+   },
+   {
+    "name": "list_panels",
+    "args": {},
+    "error": false
+   }
+  ]
+ },
+ {
+  "id": "P-16",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>{\"name\": \"search_history\", \"arguments\": {\"query\": \"брат\"}}</tool_call>",
+   "schemas": {
+    "search_history": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "search_history",
+    "args": {
+     "query": ""
+    },
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "search_history",
+    "args": {
+     "query": "брат"
+    },
+    "error": false
+   }
+  ],
+  "deviation": "TD-1"
+ },
+ {
+  "id": "P-17",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>{\"name\": \"x\", \"args\": null}</tool_call>",
+   "schemas": {}
+  },
+  "rc": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ],
+  "core": [
+   {
+    "name": "x",
+    "args": {},
+    "error": false
+   }
+  ],
+  "deviation": "TD-1"
+ },
+ {
+  "id": "P-18",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>[{\"name\": \"a\", \"args\": {}}, {\"name\": \"b\", \"args\": {}}]</tool_call>",
+   "schemas": {}
+  },
+  "rc": [
+   {
+    "name": "a",
+    "args": {},
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "a",
+    "args": {},
+    "error": false
+   },
+   {
+    "name": "b",
+    "args": {},
+    "error": false
+   }
+  ],
+  "deviation": "TD-3"
+ },
+ {
+  "id": "P-19",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>{\"name\": \"a\", \"args\": {}}\n{\"name\": \"b\", \"args\": {}}</tool_call>",
+   "schemas": {}
+  },
+  "rc": [
+   {
+    "name": "a",
+    "args": {},
+    "error": false
+   }
+  ],
+  "core": [
+   {
+    "name": "a",
+    "args": {},
+    "error": false
+   },
+   {
+    "name": "b",
+    "args": {},
+    "error": false
+   }
+  ],
+  "deviation": "TD-3"
+ },
+ {
+  "id": "P-20",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>search_history(query=\"брат\")</tool_call>",
+   "schemas": {
+    "search_history": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "additionalProperties": false
+    }
+   }
+  },
+  "rc": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ],
+  "core": [
+   {
+    "name": "search_history",
+    "args": {
+     "query": "брат"
+    },
+    "error": false
+   }
+  ],
+  "deviation": "TD-4"
+ },
+ {
+  "id": "P-21",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<TOOL_CALL>{\"name\": \"ping\", \"args\": {}}</TOOL_CALL>",
+   "schemas": {
+    "ping": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  },
+  "rc": [],
+  "core": [
+   {
+    "name": "ping",
+    "args": {},
+    "error": false
+   }
+  ],
+  "deviation": "TD-9"
+ },
+ {
+  "id": "P-22",
+  "source": "added",
+  "kind": "parse",
+  "input": {
+   "content": "<tool_call>{\"name\": \"a\", \"args\": {}}\n<tool_call>{\"name\": \"b\", \"args\": {}}</tool_call>",
+   "schemas": {}
+  },
+  "rc": [
+   {
+    "name": "",
+    "args": {},
+    "error": true
+   }
+  ],
+  "core": [
+   {
+    "name": "a",
+    "args": {},
+    "error": false
+   },
+   {
+    "name": "b",
+    "args": {},
+    "error": false
+   }
+  ],
+  "deviation": "TD-2"
+ },
+ {
+  "id": "S-01",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:121@fb8dc623e",
+  "kind": "strip",
+  "input": "Let me look.\n<tool_call name=\"read_scene_messages\">{\"from_index\":30}</tool_call>\ndone",
+  "rc": "Let me look.\n\ndone",
+  "core": "Let me look.\ndone",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-02",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:127@fb8dc623e",
+  "kind": "strip",
+  "input": "Let me look.\n<tool_call name=\"read_scene_messages\">{\"fr",
+  "rc": "Let me look.\n",
+  "core": "Let me look.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-03",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:23@fb8dc623e",
+  "kind": "strip",
+  "input": "Let me read.\n\n```<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>```Found it.",
+  "rc": "Let me read.\n\nFound it.",
+  "core": "Let me read.\n\nFound it."
+ },
+ {
+  "id": "S-04",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:31@fb8dc623e",
+  "kind": "strip",
+  "input": "Let me read.\n\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```\n\nFound it.",
+  "rc": "Let me read.\n\n\nFound it.",
+  "core": "Let me read.\n\nFound it.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-05",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:39@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n```json\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```\nDone.",
+  "rc": "Reading.\nDone.",
+  "core": "Reading.\nDone."
+ },
+ {
+  "id": "S-06",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:45@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n~~~\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n~~~\nDone.",
+  "rc": "Reading.\nDone.",
+  "core": "Reading.\nDone."
+ },
+ {
+  "id": "S-07",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:50@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n\nDone.",
+  "rc": "Reading.\n\n\n\nDone.",
+  "core": "Reading.\n\nDone.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-08",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:59@fb8dc623e",
+  "kind": "strip",
+  "input": "Here is the shape:\n```json\n{\"a\":1}\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\nDone.",
+  "rc": "Here is the shape:\n```json\n{\"a\":1}\n```\n\nDone.",
+  "core": "Here is the shape:\n```json\n{\"a\":1}\n```\nDone.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-09",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:70@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```json\n{\"a\":1}\n```\nDone.",
+  "rc": "Reading.\n\n```json\n{\"a\":1}\n```\nDone.",
+  "core": "Reading.\n```json\n{\"a\":1}\n```\nDone.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-10",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:81@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>",
+  "rc": "Reading.\n```\n",
+  "core": "Reading.\n```",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-11",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:89@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n~~~\nDone.",
+  "rc": "Reading.\n```\n\n~~~\nDone.",
+  "core": "Reading.\n```\n~~~\nDone.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-12",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:95@fb8dc623e",
+  "kind": "strip",
+  "input": "Reading.\n````\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```\nDone.",
+  "rc": "Reading.\n````\n\n```\nDone.",
+  "core": "Reading.\n````\n```\nDone.",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "S-13",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:104@fb8dc623e",
+  "kind": "strip",
+  "input": "First.\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```\nSecond.\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```\nThird.",
+  "rc": "First.\nSecond.\nThird.",
+  "core": "First.\nSecond.\nThird."
+ },
+ {
+  "id": "S-14",
+  "source": "prompted-tool-calls/__tests__/fenced-tool-calls.test.ts:112@fb8dc623e",
+  "kind": "strip",
+  "input": "Doing both.\n```\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>\n```\nDone.",
+  "rc": "Doing both.\n```\n\n\n```\nDone.",
+  "core": "Doing both.\nDone.",
+  "deviation": "TD-6"
+ },
+ {
+  "id": "S-15",
+  "source": "added",
+  "kind": "strip",
+  "input": "done</tool_call> now",
+  "rc": "done</tool_call> now",
+  "core": "done now",
+  "deviation": "TD-8"
+ },
+ {
+  "id": "S-16",
+  "source": "added",
+  "kind": "strip",
+  "input": "A <tool_call>{\"name\":\"a\"}</tool_call>\n<tool_result name=\"a\">x</tool_result>\nB",
+  "rc": "A \n<tool_result name=\"a\">x</tool_result>\nB",
+  "core": "A",
+  "deviation": "TD-8"
+ },
+ {
+  "id": "S-17",
+  "source": "added",
+  "kind": "strip",
+  "input": "<tool_call>{\"name\":\"a\",\"args\":{}}</tool_call >\nThen prose.",
+  "rc": "",
+  "core": "Then prose.",
+  "deviation": "TD-9"
+ },
+ {
+  "id": "S-18",
+  "source": "added",
+  "kind": "strip",
+  "input": "She turned. <tool_call>{\"name\":\"a\",\"args\":{}}</tool_call> \"Listen.\"",
+  "rc": "She turned.  \"Listen.\"",
+  "core": "She turned. \"Listen.\"",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "T-01",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:146@fb8dc623e",
+  "kind": "stream",
+  "input": {
+   "text": "Let me look.\n<tool_call name=\"read_scene_messages\">{\"from_index\":30}</tool_call>\ndone",
+   "feed": "chars"
+  },
+  "rc": "Let me look.\n\ndone",
+  "core": "Let me look.\ndone",
+  "deviation": "TD-5"
+ },
+ {
+  "id": "T-02",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:155@fb8dc623e",
+  "kind": "stream",
+  "input": {
+   "text": "a < b and c > d",
+   "feed": "chars"
+  },
+  "rc": "a < b and c > d",
+  "core": "a < b and c > d"
+ },
+ {
+  "id": "T-03",
+  "source": "prompted-tool-calls/__tests__/attribute-open-tag.test.ts:159@fb8dc623e",
+  "kind": "stream",
+  "input": {
+   "text": "text <tool_c",
+   "feed": "whole"
+  },
+  "rc": "text ",
+  "core": "text <tool_c",
+  "deviation": "TD-7"
+ },
+ {
+  "id": "T-04",
+  "source": "added",
+  "kind": "stream",
+  "input": {
+   "text": "Let me read.\n\n```<tool_call>{\"name\":\"patch_visual_novel\",\"arguments\":{}}</tool_call>```Found it.",
+   "feed": "chars"
+  },
+  "rc": "Let me read.\n\n``````Found it.",
+  "core": "Let me read.\n\nFound it.",
+  "deviation": "TD-6"
+ },
+ {
+  "id": "T-05",
+  "source": "added",
+  "kind": "stream",
+  "input": {
+   "text": "Done. <tool",
+   "feed": "chars"
+  },
+  "rc": "Done. ",
+  "core": "Done. <tool",
+  "deviation": "TD-7"
+ },
+ {
+  "id": "R-01",
+  "source": "tool-call-repair/__tests__/repair.test.ts:36@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\": 1, \"b\": \"x\"}"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  }
+ },
+ {
+  "id": "R-02",
+  "source": "tool-call-repair/__tests__/repair.test.ts:43@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\": 1, \"b\": \"x\",}"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  }
+ },
+ {
+  "id": "R-03",
+  "source": "tool-call-repair/__tests__/repair.test.ts:50@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\": 1, \"b\": \"x\""
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  }
+ },
+ {
+  "id": "R-04",
+  "source": "tool-call-repair/__tests__/repair.test.ts:56@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{'a': 1}"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1
+   }
+  }
+ },
+ {
+  "id": "R-05",
+  "source": "tool-call-repair/__tests__/repair.test.ts:62@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{a: 1, b: \"x\"}"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  }
+ },
+ {
+  "id": "R-06",
+  "source": "tool-call-repair/__tests__/repair.test.ts:68@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "```json\n{\"a\": 1}\n```"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1
+   }
+  }
+ },
+ {
+  "id": "R-07",
+  "source": "tool-call-repair/__tests__/repair.test.ts:76@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":\"75\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "a": {
+      "type": "number"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 75
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 75
+   }
+  }
+ },
+ {
+  "id": "R-08",
+  "source": "tool-call-repair/__tests__/repair.test.ts:82@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":\"42\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "a": {
+      "type": "integer"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 42
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 42
+   }
+  }
+ },
+ {
+  "id": "R-09",
+  "source": "tool-call-repair/__tests__/repair.test.ts:88@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":\"true\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "a": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": true
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": true
+   }
+  }
+ },
+ {
+  "id": "R-10",
+  "source": "tool-call-repair/__tests__/repair.test.ts:94@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":\"null\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "a": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": null
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": null
+   }
+  }
+ },
+ {
+  "id": "R-11",
+  "source": "tool-call-repair/__tests__/repair.test.ts:100@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":1,\"hallucinated\":\"extra\"}",
+   "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "type": "number"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-15"
+ },
+ {
+  "id": "R-12",
+  "source": "tool-call-repair/__tests__/repair.test.ts:110@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":1}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "a",
+     "b"
+    ],
+    "properties": {
+     "a": {
+      "type": "number"
+     },
+     "b": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": ""
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-14"
+ },
+ {
+  "id": "R-13",
+  "source": "tool-call-repair/__tests__/repair.test.ts:123@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"tags\":{\"name\":\"x\"}}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "tags": [
+     {
+      "name": "x"
+     }
+    ]
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-16"
+ },
+ {
+  "id": "R-14",
+  "source": "tool-call-repair/__tests__/repair.test.ts:135@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"items\":[1,\"two\",{\"name\":\"ok\"}]}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name"
+       ],
+       "properties": {
+        "name": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "items": [
+     {
+      "name": "ok"
+     }
+    ]
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-15"
+ },
+ {
+  "id": "R-15",
+  "source": "tool-call-repair/__tests__/repair.test.ts:149@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"outer\":{\"inner\":\"10\"}}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "outer": {
+      "type": "object",
+      "properties": {
+       "inner": {
+        "type": "number"
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "outer": {
+     "inner": 10
+    }
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "outer": {
+     "inner": 10
+    }
+   }
+  }
+ },
+ {
+  "id": "R-16",
+  "source": "tool-call-repair/__tests__/repair.test.ts:165@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"directive\": \"test\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "directive"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "directive": {
+      "type": "string"
+     },
+     "callbacks": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "type": "object",
+       "required": [
+        "reference",
+        "intent"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "reference": {
+         "type": "string"
+        },
+        "intent": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "directive": "test"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "directive": "test"
+   }
+  }
+ },
+ {
+  "id": "R-17",
+  "source": "tool-call-repair/__tests__/repair.test.ts:175@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"directive\": \"test\",}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "directive"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "directive": {
+      "type": "string"
+     },
+     "callbacks": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "type": "object",
+       "required": [
+        "reference",
+        "intent"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "reference": {
+         "type": "string"
+        },
+        "intent": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "directive": "test"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "directive": "test"
+   }
+  }
+ },
+ {
+  "id": "R-18",
+  "source": "tool-call-repair/__tests__/repair.test.ts:184@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"count\": \"42\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "count"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "count": {
+      "type": "integer"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "count": 42
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "count": 42
+   }
+  }
+ },
+ {
+  "id": "R-19",
+  "source": "tool-call-repair/__tests__/repair.test.ts:237@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": {
+    "repeat": "x",
+    "times": 1100000
+   },
+   "schema": {
+    "type": "object",
+    "required": [
+     "directive"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "directive": {
+      "type": "string"
+     },
+     "callbacks": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "type": "object",
+       "required": [
+        "reference",
+        "intent"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "reference": {
+         "type": "string"
+        },
+        "intent": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": false
+  },
+  "core": {
+   "ok": false
+  }
+ },
+ {
+  "id": "R-20",
+  "source": "tool-call-repair/__tests__/repair.test.ts:320@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\": 1, \"b\": \"x\",}"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": 1,
+    "b": "x"
+   }
+  }
+ },
+ {
+  "id": "R-21",
+  "source": "tool-call-repair/__tests__/repair.test.ts:326@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "reason": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {}
+  },
+  "core": {
+   "ok": true,
+   "args": {}
+  }
+ },
+ {
+  "id": "R-22",
+  "source": "tool-call-repair/__tests__/repair.test.ts:333@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "   \n  ",
+   "schema": {
+    "type": "object"
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {}
+  },
+  "core": {
+   "ok": true,
+   "args": {}
+  }
+ },
+ {
+  "id": "R-23",
+  "source": "tool-call-repair/__tests__/repair.test.ts:340@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "null",
+   "schema": {
+    "type": "object"
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {}
+  },
+  "core": {
+   "ok": true,
+   "args": {}
+  }
+ },
+ {
+  "id": "R-24",
+  "source": "tool-call-repair/__tests__/repair.test.ts:347@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "[{\"name\": \"Caspian\"}]",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Caspian"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "Caspian"
+   }
+  }
+ },
+ {
+  "id": "R-25",
+  "source": "tool-call-repair/__tests__/repair.test.ts:362@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "[{\"name\": \"first\"}, {\"name\": \"second\"}]",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "first"
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-16"
+ },
+ {
+  "id": "R-26",
+  "source": "tool-call-repair/__tests__/repair.test.ts:375@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"allies\":[\"Sunken Choir\"]</tool_call>",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "allies": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "allies": [
+     "Sunken Choir"
+    ]
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "allies": [
+     "Sunken Choir"
+    ]
+   }
+  }
+ },
+ {
+  "id": "R-27",
+  "source": "tool-call-repair/__tests__/repair.test.ts:385@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\": \"test\"}[/TOOL_CALLS]",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "test"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "test"
+   }
+  }
+ },
+ {
+  "id": "R-28",
+  "source": "tool-call-repair/__tests__/repair.test.ts:395@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\": \"test\"}<|im_end|>",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "test"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "test"
+   }
+  }
+ },
+ {
+  "id": "R-29",
+  "source": "tool-call-repair/__tests__/repair.test.ts:405@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\": \"test\"}<|tool_calls_end|>",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "test"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "test"
+   }
+  }
+ },
+ {
+  "id": "R-30",
+  "source": "tool-call-repair/__tests__/repair.test.ts:415@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"html\": \"<div>hi</div>\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "html": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "html": "<div>hi</div>"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "html": "<div>hi</div>"
+   }
+  }
+ },
+ {
+  "id": "R-31",
+  "source": "tool-call-repair/__tests__/repair.test.ts:506@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":\"Torvald\",\"strengths\":\"\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "strengths": []
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "strengths": []
+   }
+  }
+ },
+ {
+  "id": "R-32",
+  "source": "tool-call-repair/__tests__/repair.test.ts:515@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":\"Torvald\",\"relationships\":\"\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "relationships": []
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "relationships": []
+   }
+  }
+ },
+ {
+  "id": "R-33",
+  "source": "tool-call-repair/__tests__/repair.test.ts:524@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":\"Torvald\",\"likes\":\"null\",\"dislikes\":\"none\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "likes": [],
+    "dislikes": []
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "likes": [],
+    "dislikes": []
+   }
+  }
+ },
+ {
+  "id": "R-34",
+  "source": "tool-call-repair/__tests__/repair.test.ts:537@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"targetSlugs\":null,\"recipientSlugs\":\"none\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "targetSlugs",
+     "recipientSlugs"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "targetSlugs": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "type": "string"
+      }
+     },
+     "recipientSlugs": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "targetSlugs": null,
+    "recipientSlugs": null
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "targetSlugs": null,
+    "recipientSlugs": null
+   }
+  }
+ },
+ {
+  "id": "R-35",
+  "source": "tool-call-repair/__tests__/repair.test.ts:554@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":\"Торвальд\",\"aliases\":[\"Лютый\"],\"role\":\"neutral\",\"strengths\":\"\",\"likes\":\"\",\"relationships\":\"\",\"dislikes\":\"\"}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Торвальд",
+    "aliases": [
+     "Лютый"
+    ],
+    "role": "neutral",
+    "strengths": [],
+    "likes": [],
+    "relationships": [],
+    "dislikes": []
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "Торвальд",
+    "aliases": [
+     "Лютый"
+    ],
+    "role": "neutral",
+    "strengths": [],
+    "likes": [],
+    "relationships": [],
+    "dislikes": []
+   }
+  }
+ },
+ {
+  "id": "R-36",
+  "source": "tool-call-repair/__tests__/repair.test.ts:595@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":\"Torvald\",\"aliases\":42}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "aliases": [
+     "42"
+    ]
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "aliases": [
+     "42"
+    ]
+   }
+  }
+ },
+ {
+  "id": "R-37",
+  "source": "tool-call-repair/__tests__/repair.test.ts:595@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":\"Torvald\",\"aliases\":{\"x\":1}}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "Torvald",
+    "aliases": [
+     "x: 1"
+    ]
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-17"
+ },
+ {
+  "id": "R-38",
+  "source": "tool-call-repair/__tests__/repair.test.ts:610@fb8dc623e",
+  "kind": "args",
+  "input": {
+   "raw": "{\"name\":{\"nested\":true}}",
+   "schema": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "aliases": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "strengths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "likes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "dislikes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "relationships": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "with",
+        "nature"
+       ],
+       "properties": {
+        "with": {
+         "type": "string"
+        },
+        "nature": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "name": "nested: true"
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-17"
+ },
+ {
+  "id": "R-39",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"mode\": \"some\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "enum": [
+       "all",
+       "any"
+      ]
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "mode": "some"
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-17"
+ },
+ {
+  "id": "R-40",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"n\": \"4.7\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "n": {
+      "type": "integer"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "n": 4
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-17"
+ },
+ {
+  "id": "R-41",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"q\": \"брат\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "q": {
+      "type": "string",
+      "maxLength": 3
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "q": "брат"
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-17"
+ },
+ {
+  "id": "R-42",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"s\": [\"a\", \"b\"]}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "s": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "s": "a, b"
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-17"
+ },
+ {
+  "id": "R-43",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"b\": \"null\"}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "b": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "b": false
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-14"
+ },
+ {
+  "id": "R-44",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"s\": null}",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "s": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "s": ""
+   }
+  },
+  "core": {
+   "ok": false
+  },
+  "deviation": "TD-14"
+ },
+ {
+  "id": "R-45",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "</tool_call>",
+   "schema": {
+    "type": "object"
+   }
+  },
+  "rc": {
+   "ok": false
+  },
+  "core": {
+   "ok": true,
+   "args": {}
+  },
+  "deviation": "TD-19"
+ },
+ {
+  "id": "R-46",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "search_lore(query=\"x y = z\")",
+   "schema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "rc": {
+   "ok": false
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "query": "x y = z"
+   }
+  },
+  "deviation": "TD-19"
+ },
+ {
+  "id": "R-47",
+  "source": "added",
+  "kind": "args",
+  "input": {
+   "raw": "{\"a\":\"x</tool_call>"
+  },
+  "rc": {
+   "ok": true,
+   "args": {
+    "a": "x"
+   }
+  },
+  "core": {
+   "ok": true,
+   "args": {
+    "a": "x"
+   }
+  }
+ },
+ {
+  "id": "E-01",
+  "source": "narrator-engine/__tests__/tool-executor-repair.test.ts:5@fb8dc623e",
+  "kind": "executor",
+  "input": {
+   "tool": {
+    "name": "vn_example",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "amount": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "amount"
+     ]
+    }
+   },
+   "call": {
+    "name": "vn_example",
+    "args": "{\"amount\": 2,}"
+   }
+  },
+  "rc": {
+   "ran": true,
+   "args": {
+    "amount": 2
+   }
+  },
+  "core": {
+   "ran": true,
+   "args": {
+    "amount": 2
+   }
+  }
+ },
+ {
+  "id": "E-02",
+  "source": "narrator-engine/__tests__/tool-executor-repair.test.ts:27@fb8dc623e",
+  "kind": "executor",
+  "input": {
+   "tool": {
+    "name": "vn_example",
+    "schema": {
+     "type": "object",
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "amount"
+     ]
+    }
+   },
+   "call": {
+    "name": "vn_example",
+    "args": "<not-json>"
+   }
+  },
+  "rc": {
+   "ran": false,
+   "message": "Invalid arguments for vn_example (schema): $: expected type \"object\", got string. Re-emit one complete JSON object matching the tool schema."
+  },
+  "core": {
+   "ran": false,
+   "message": "Invalid arguments for vn_example: the arguments are text, not a JSON object. Send one complete JSON object that matches the schema."
+  },
+  "deviation": "TD-19"
+ },
+ {
+  "id": "E-03",
+  "source": "added",
+  "kind": "executor",
+  "input": {
+   "tool": {
+    "name": "lookup",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "call": {
+    "name": "nope",
+    "args": "{}"
+   }
+  },
+  "rc": {
+   "ran": false,
+   "message": "Unknown tool: nope"
+  },
+  "core": {
+   "ran": false,
+   "message": "Unknown tool \"nope\". The tools you can call: lookup."
+  },
+  "deviation": "TD-20"
+ },
+ {
+  "id": "E-04",
+  "source": "added",
+  "kind": "executor",
+  "input": {
+   "tool": {
+    "name": "lookup",
+    "schema": {
+     "type": "object",
+     "properties": {
+      "query": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "query"
+     ],
+     "additionalProperties": false
+    },
+    "throws": "index unavailable"
+   },
+   "call": {
+    "name": "lookup",
+    "args": "{\"query\":\"x\"}"
+   }
+  },
+  "rc": {
+   "ran": true,
+   "args": {
+    "query": "x"
+   },
+   "message": "Execution error: index unavailable"
+  },
+  "core": {
+   "ran": true,
+   "args": {
+    "query": "x"
+   },
+   "message": "Tool lookup failed: index unavailable"
+  },
+  "deviation": "TD-20"
+ },
+ {
+  "id": "D-01",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:43@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"name\" string=\"true\">Mara</｜DSML｜parameter>\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\",\"role\":\"resident\",\"status\":\"active\"}]</｜DSML｜parameter>\n<｜DSML｜parameter name=\"age\" string=\"false\">null</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "",
+   "calls": [
+    {
+     "name": "Remember_Character",
+     "args": {
+      "name": "Mara",
+      "affiliations": [
+       {
+        "org": "Violet Dragons",
+        "role": "resident",
+        "status": "active"
+       }
+      ],
+      "age": null
+     }
+    }
+   ]
+  },
+  "core": {
+   "content": "",
+   "calls": [
+    {
+     "name": "Remember_Character",
+     "args": {
+      "name": "Mara",
+      "affiliations": [
+       {
+        "org": "Violet Dragons",
+        "role": "resident",
+        "status": "active"
+       }
+      ],
+      "age": null
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D-02",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:64@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "I found two durable changes.<||DSML||tool_calls><||DSML||invoke name=\"Remember_Event\"><||DSML||parameter name=\"name\" string=\"true\">Arrival</||DSML||parameter><||DSML||parameter name=\"importance\" string=\"false\">3</||DSML||parameter></||DSML||invoke><||DSML||invoke name=\"postgen_status\"><||DSML||parameter name=\"summary\" string=\"true\">Saved the arrival.</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>",
+   "offered": [
+    "Remember_Event",
+    "postgen_status"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "I found two durable changes.",
+   "calls": [
+    {
+     "name": "Remember_Event",
+     "args": {
+      "name": "Arrival",
+      "importance": 3
+     }
+    },
+    {
+     "name": "postgen_status",
+     "args": {
+      "summary": "Saved the arrival."
+     }
+    }
+   ]
+  },
+  "core": {
+   "content": "I found two durable changes.",
+   "calls": [
+    {
+     "name": "Remember_Event",
+     "args": {
+      "name": "Arrival",
+      "importance": 3
+     }
+    },
+    {
+     "name": "postgen_status",
+     "args": {
+      "summary": "Saved the arrival."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D-03",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:80@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "Keep literal |DSML| prose.<|DSML|tool_calls><|DSML|invoke name=\"Remember_Character\"><|DSML|parameter name=\"name\" string=\"true\">Mara |DSML| Vale</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "Keep literal |DSML| prose.",
+   "calls": [
+    {
+     "name": "Remember_Character",
+     "args": {
+      "name": "Mara |DSML| Vale"
+     }
+    }
+   ]
+  },
+  "core": {
+   "content": "Keep literal |DSML| prose.",
+   "calls": [
+    {
+     "name": "Remember_Character",
+     "args": {
+      "name": "Mara |DSML| Vale"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D-04",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:91@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"postgen_status\">\n<｜DSML｜parameter name=\"summary\" string=\"true\">Nothing significant changed.</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+   "offered": [
+    "postgen_status"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "",
+   "calls": [
+    {
+     "name": "postgen_status",
+     "args": {
+      "summary": "Nothing significant changed."
+     }
+    }
+   ]
+  },
+  "core": {
+   "content": "",
+   "calls": [
+    {
+     "name": "postgen_status",
+     "args": {
+      "summary": "Nothing significant changed."
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "D-05",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:111@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"name\" string=\"true\">Mara</｜DSML｜parameter>\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\",\"role\":\"resident\",\"status\":\"active\"}]</｜DSML｜parameter>\n<｜DSML｜parameter name=\"age\" string=\"false\">null</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 1,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "",
+   "calls": []
+  },
+  "core": {
+   "content": "",
+   "calls": []
+  }
+ },
+ {
+  "id": "D-06",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:126@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"name\" string=\"true\">Mara</｜DSML｜parameter>\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\",\"role\":\"resident\",\"status\":\"active\"}]</｜DSML｜parameter>\n<｜DSML｜parameter name=\"age\" string=\"false\">null</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 0,
+   "model": "claude-sonnet-5"
+  },
+  "rc": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"name\" string=\"true\">Mara</｜DSML｜parameter>\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\",\"role\":\"resident\",\"status\":\"active\"}]</｜DSML｜parameter>\n<｜DSML｜parameter name=\"age\" string=\"false\">null</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "calls": []
+  },
+  "core": {
+   "content": "",
+   "calls": [
+    {
+     "name": "Remember_Character",
+     "args": {
+      "name": "Mara",
+      "affiliations": [
+       {
+        "org": "Violet Dragons",
+        "role": "resident",
+        "status": "active"
+       }
+      ],
+      "age": null
+     }
+    }
+   ]
+  },
+  "deviation": "TD-12"
+ },
+ {
+  "id": "D-07",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:138@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls><｜DSML｜invoke name=\"Remember_Character\"><｜DSML｜parameter name=\"name\" string=\"true\">Mara",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "<｜DSML｜tool_calls><｜DSML｜invoke name=\"Remember_Character\"><｜DSML｜parameter name=\"name\" string=\"true\">Mara",
+   "calls": []
+  },
+  "core": {
+   "content": "",
+   "calls": []
+  },
+  "deviation": "TD-12"
+ },
+ {
+  "id": "D-08",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:146@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\"}</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "calls": []
+  },
+  "core": {
+   "content": "",
+   "calls": []
+  },
+  "deviation": "TD-12"
+ },
+ {
+  "id": "D-09",
+  "source": "__tests__/vvs-728-dsml-tool-call-normalization.test.ts:158@fb8dc623e",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls>",
+   "offered": [
+    "Remember_Character"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "<｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls><｜DSML｜tool_calls>",
+   "calls": []
+  },
+  "core": {
+   "content": "",
+   "calls": []
+  },
+  "deviation": "TD-12"
+ },
+ {
+  "id": "D-10",
+  "source": "added",
+  "kind": "dsml",
+  "input": {
+   "content": "<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"Remember_Character\">\n<｜DSML｜parameter name=\"name\" string=\"true\">Mara</｜DSML｜parameter>\n<｜DSML｜parameter name=\"affiliations\" string=\"false\">[{\"org\":\"Violet Dragons\",\"role\":\"resident\",\"status\":\"active\"}]</｜DSML｜parameter>\n<｜DSML｜parameter name=\"age\" string=\"false\">null</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+   "offered": [
+    "search_history"
+   ],
+   "native": 0,
+   "model": "deepseek-v4-pro"
+  },
+  "rc": {
+   "content": "",
+   "calls": [
+    {
+     "name": "Remember_Character",
+     "args": {
+      "name": "Mara",
+      "affiliations": [
+       {
+        "org": "Violet Dragons",
+        "role": "resident",
+        "status": "active"
+       }
+      ],
+      "age": null
+     }
+    }
+   ]
+  },
+  "core": {
+   "content": "",
+   "calls": []
+  },
+  "deviation": "TD-12"
+ },
+ {
+  "id": "V-01",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:14@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "I'll commit my planning now.\n```json\n{\"name\": \"commit_planning_round\", \"arguments\": {\"seedUpdates\": [], \"mood\": \"tense\"}}\n```",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "seedUpdates": [],
+     "mood": "tense"
+    }
+   }
+  ],
+  "core": [
+   {
+    "name": "commit_planning_round",
+    "args": {
+     "seedUpdates": [],
+     "mood": "tense"
+    }
+   }
+  ]
+ },
+ {
+  "id": "V-02",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:27@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "Plan: {\"tool\": \"update_arc\", \"parameters\": {\"id\": \"a1\", \"status\": \"rising\"}}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [
+   {
+    "name": "update_arc",
+    "args": {
+     "id": "a1",
+     "status": "rising"
+    }
+   }
+  ],
+  "core": [
+   {
+    "name": "update_arc",
+    "args": {
+     "id": "a1",
+     "status": "rising"
+    }
+   }
+  ]
+ },
+ {
+  "id": "V-03",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:34@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "{\"tool_calls\": [\n  {\"function\": {\"name\": \"plant_seed\", \"arguments\": \"{\\\"title\\\": \\\"the letter\\\"}\"}},\n  {\"name\": \"commit_planning_round\", \"arguments\": {}}\n]}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [
+   {
+    "name": "plant_seed",
+    "args": {
+     "title": "the letter"
+    }
+   },
+   {
+    "name": "commit_planning_round",
+    "args": {}
+   }
+  ],
+  "core": [
+   {
+    "name": "plant_seed",
+    "args": {
+     "title": "the letter"
+    }
+   },
+   {
+    "name": "commit_planning_round",
+    "args": {}
+   }
+  ]
+ },
+ {
+  "id": "V-04",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:45@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "I would normally call commit_planning_round here.\n{\"name\": \"made_up_tool\", \"arguments\": {\"x\": 1}}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [],
+  "core": []
+ },
+ {
+  "id": "V-05",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:53@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "{\"name\": \"update_arc\"}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [],
+  "core": []
+ },
+ {
+  "id": "V-06",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:59@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "{\"name\": \"update_arc\", \"arguments\": {\"id\": \"a1\"}}\n{\"name\": \"update_arc\", \"arguments\": {\"id\": \"a1\"}}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [
+   {
+    "name": "update_arc",
+    "args": {
+     "id": "a1"
+    }
+   }
+  ],
+  "core": [
+   {
+    "name": "update_arc",
+    "args": {
+     "id": "a1"
+    }
+   }
+  ]
+ },
+ {
+  "id": "V-07",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:65@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "The mood is tense. Nothing else to do.",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [],
+  "core": []
+ },
+ {
+  "id": "V-08",
+  "source": "narrator-engine/__tests__/content-tool-salvage.test.ts:71@fb8dc623e",
+  "kind": "salvage",
+  "input": {
+   "content": "{\"name\": \"update_arc\", \"arguments\": \"just words\"}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [],
+  "core": []
+ },
+ {
+  "id": "V-09",
+  "source": "added",
+  "kind": "salvage",
+  "input": {
+   "content": "[{\"name\": \"update_arc\", \"arguments\": {}}, {\"name\": \"made_up_tool\", \"arguments\": {}}]",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [
+   {
+    "name": "update_arc",
+    "args": {}
+   }
+  ],
+  "core": [],
+  "deviation": "TD-13"
+ },
+ {
+  "id": "V-10",
+  "source": "added",
+  "kind": "salvage",
+  "input": {
+   "content": "{\"name\": \"update_arc\", \"arguments\": {\"a\": 1, \"b\": 2}} {\"name\": \"update_arc\", \"arguments\": {\"b\": 2, \"a\": 1}}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": [
+   {
+    "name": "update_arc",
+    "args": {
+     "a": 1,
+     "b": 2
+    }
+   },
+   {
+    "name": "update_arc",
+    "args": {
+     "b": 2,
+     "a": 1
+    }
+   }
+  ],
+  "core": [
+   {
+    "name": "update_arc",
+    "args": {
+     "a": 1,
+     "b": 2
+    }
+   }
+  ],
+  "deviation": "TD-13"
+ },
+ {
+  "id": "V-11",
+  "source": "added",
+  "kind": "salvage-text",
+  "input": {
+   "content": "Plan: {\"tool\": \"update_arc\", \"parameters\": {\"id\": \"a1\", \"status\": \"rising\"}}",
+   "offered": [
+    "commit_planning_round",
+    "update_arc",
+    "plant_seed"
+   ],
+   "native": 0,
+   "model": ""
+  },
+  "rc": "Plan: {\"tool\": \"update_arc\", \"parameters\": {\"id\": \"a1\", \"status\": \"rising\"}}",
+  "core": "Plan:",
+  "deviation": "TD-13"
+ },
+ {
+  "id": "X-01",
+  "source": "added",
+  "kind": "frame",
+  "input": [
+   {
+    "name": "search_history",
+    "id": "call_0_0",
+    "text": "#3 Mira: hi"
+   },
+   {
+    "name": "read_history",
+    "id": "call_0_1",
+    "text": "quoted </tool_result> here"
+   }
+  ],
+  "rc": "<tool_result name=\"search_history\">\n#3 Mira: hi\n</tool_result>\n\n<tool_result name=\"read_history\">\nquoted </tool_result> here\n</tool_result>",
+  "core": "<tool_result name=\"search_history\" id=\"call_0_0\">\n#3 Mira: hi\n</tool_result>\n\n<tool_result name=\"read_history\" id=\"call_0_1\">\nquoted <\\/tool_result> here\n</tool_result>",
+  "deviation": "TD-11"
+ },
+ {
+  "id": "C-01",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:40@fb8dc623e",
+  "kind": "catalog",
+  "input": [
+   {
+    "name": "commit_planning_round",
+    "description": "Emit the narrator directive and batch updates in one call.",
+    "schema": {
+     "type": "object",
+     "required": [
+      "directive"
+     ],
+     "properties": {
+      "directive": {
+       "type": "object",
+       "description": "The narrator directive (mood, pacing, etc.)."
+      },
+      "pacing": {
+       "type": "string",
+       "enum": [
+        "slow",
+        "fast"
+       ],
+       "description": "How quickly the next beat unfolds."
+      }
+     }
+    }
+   }
+  ],
+  "rc": "## Tool calling — prompted mode\n\nYou can call tools by emitting blocks like this in your reply content:\n\n```\n<tool_call>\n{\"name\": \"tool_name_here\", \"args\": { ... }}\n</tool_call>\n```\n\nRules:\n- One tool per block. Emit multiple blocks if you want to call multiple tools in one turn.\n- `args` is a JSON object. Match the schema described below — extra fields are ignored.\n- The tool names below are the COMPLETE callable set for this iteration. A name that is not listed below is not callable right now.\n- Do not invent snake_case tool names from product concepts. If no listed tool fits, call a listed consult/tool_search tool if available; otherwise say there is no tool for that action.\n- Never say you are trying to call, looking for, or missing a specific tool name unless that exact name appears below or in the latest tool result.\n- The runtime parses your blocks, runs the tools, and feeds the results back on your next turn. You do NOT see the results in the same reply you emitted the call.\n- When you have enough information to give the user a final answer, reply with NO `<tool_call>` blocks. That's how the loop ends.\n- Don't wrap blocks in code fences. The literal `<tool_call>` / `</tool_call>` tags are the only delimiters.\n- You can think out loud freely between blocks — only text inside the tags is treated as a call.\n\n## Available tools\n### `commit_planning_round`\n\nEmit the narrator directive and batch updates in one call.\n\nArgs:\n- `directive` (object, required) — The narrator directive (mood, pacing, etc.).\n- `pacing` (string, optional) (one of: \"slow\", \"fast\") — How quickly the next beat unfolds.",
+  "core": "## Looking things up\n\nYou have tools that look up details which are not in front of you. Use them quietly:\n- When your reply depends on an earlier detail (a name, a number, a place, a promise, who said what) and you are not sure of it, look it up first, then write.\n- Never guess names, numbers or quotes. If a search finds nothing, keep the detail vague instead of inventing it.\n- Search by word roots and short forms, in the story's own language: one or two key words find more than a whole phrase.\n- Never mention tools, searches or results in the story. The reader sees only the story.\n\n## How to call a tool\n\nWrite each call as one block on a line of its own:\n<tool_call>{\"name\": \"tool_name\", \"args\": {\"argument\": \"value\"}}</tool_call>\n\n- One call per block. For several calls, write several blocks one after another.\n- \"args\" is a JSON object with the arguments listed for that tool below, and nothing else.\n- Write the block as plain text: no code fence, no quotes and no other markup around it.\n- After your calls, stop writing and wait. The results come back in the next message inside <tool_result> blocks; then continue your reply.\n- Only the tools listed below exist.\n\n## Tools\n\n### `commit_planning_round`\n\nEmit the narrator directive and batch updates in one call.\n\nArgs:\n- `directive` (object, required) — The narrator directive (mood, pacing, etc.).\n- `pacing` (string, optional) (one of: \"slow\", \"fast\") — How quickly the next beat unfolds.",
+  "deviation": "TD-10"
+ },
+ {
+  "id": "C-02",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:56@fb8dc623e",
+  "kind": "catalog",
+  "input": [
+   {
+    "name": "ping",
+    "description": "Ping with no arguments.\nSecond line ignored in catalog.",
+    "schema": {
+     "type": "object",
+     "properties": {},
+     "required": []
+    }
+   }
+  ],
+  "rc": "## Tool calling — prompted mode\n\nYou can call tools by emitting blocks like this in your reply content:\n\n```\n<tool_call>\n{\"name\": \"tool_name_here\", \"args\": { ... }}\n</tool_call>\n```\n\nRules:\n- One tool per block. Emit multiple blocks if you want to call multiple tools in one turn.\n- `args` is a JSON object. Match the schema described below — extra fields are ignored.\n- The tool names below are the COMPLETE callable set for this iteration. A name that is not listed below is not callable right now.\n- Do not invent snake_case tool names from product concepts. If no listed tool fits, call a listed consult/tool_search tool if available; otherwise say there is no tool for that action.\n- Never say you are trying to call, looking for, or missing a specific tool name unless that exact name appears below or in the latest tool result.\n- The runtime parses your blocks, runs the tools, and feeds the results back on your next turn. You do NOT see the results in the same reply you emitted the call.\n- When you have enough information to give the user a final answer, reply with NO `<tool_call>` blocks. That's how the loop ends.\n- Don't wrap blocks in code fences. The literal `<tool_call>` / `</tool_call>` tags are the only delimiters.\n- You can think out loud freely between blocks — only text inside the tags is treated as a call.\n\n## Available tools\n### `ping`\n\nPing with no arguments.\n\nArgs:\n- (no arguments — pass `{}` or omit `args`)",
+  "core": "## Looking things up\n\nYou have tools that look up details which are not in front of you. Use them quietly:\n- When your reply depends on an earlier detail (a name, a number, a place, a promise, who said what) and you are not sure of it, look it up first, then write.\n- Never guess names, numbers or quotes. If a search finds nothing, keep the detail vague instead of inventing it.\n- Search by word roots and short forms, in the story's own language: one or two key words find more than a whole phrase.\n- Never mention tools, searches or results in the story. The reader sees only the story.\n\n## How to call a tool\n\nWrite each call as one block on a line of its own:\n<tool_call>{\"name\": \"tool_name\", \"args\": {\"argument\": \"value\"}}</tool_call>\n\n- One call per block. For several calls, write several blocks one after another.\n- \"args\" is a JSON object with the arguments listed for that tool below, and nothing else.\n- Write the block as plain text: no code fence, no quotes and no other markup around it.\n- After your calls, stop writing and wait. The results come back in the next message inside <tool_result> blocks; then continue your reply.\n- Only the tools listed below exist.\n\n## Tools\n\n### `ping`\n\nPing with no arguments.\nSecond line ignored in catalog.\n\nArgs:\n- (no arguments: pass {})",
+  "deviation": "TD-10"
+ },
+ {
+  "id": "C-03",
+  "source": "prompted-tool-calls/__tests__/prompted-tool-calls.test.ts:64@fb8dc623e",
+  "kind": "catalog",
+  "input": [],
+  "rc": "## Tool calling — disabled this turn\n\nYou have no tools available this turn. Reply directly.",
+  "core": "",
+  "deviation": "TD-10"
+ }
+]

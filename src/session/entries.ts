@@ -48,7 +48,8 @@ export interface Trace {
   reserve: number;
   /**
    * counter: how `estimated` was counted (M2; absent = 'chars', M1). The EMA compares like with like.
-   * estimated: the messages sent (the sum of `blocks`) plus the prefill the request carried, if any.
+   * estimated: the messages sent (the sum of `blocks`) plus the prefill the request carried, if any,
+   * plus (M3) the native tool declarations of round 0's request, if any.
    */
   tokens: { estimated: number; reported?: number; counter?: 'chars' | 'o200k' };
   /** 1:1 with the messages sent. */
@@ -76,7 +77,28 @@ export interface Trace {
   trimmed: { from: string; to: string } | null;
   calls: { callKey: string; agent: string; model: string; ms: number; usage?: Usage }[];
   agents: Record<string, { status: 'done' | 'reused' | 'skipped' | 'failed'; code?: string; transport?: string }>;
-  tools?: { name: string; ok: boolean; repaired?: string[] }[];
+  /**
+   * M3: one row per tool call the narrator made, in call order (§9.1: every repair is traced).
+   * round: the loop round the call came from (0-based); ok: the tool ran and did not report an
+   * error; refused: the call was not run — 'final_round' (the model called on the text-only final
+   * round, §7.1), 'unknown_tool', 'bad_args' (the D-56 chain gave up), 'cancelled' (Stop); chars:
+   * the result's length as sent; cut: the result was cut to fit (maxOutput or the tool room).
+   */
+  tools?: ToolTraceRow[];
+  /**
+   * M3: the narrator's tool loop. Absent when no tools were offered. n: model calls the loop made
+   * (the final round included); ended: why it stopped calling tools (§7.1) — 'answer' (a round with
+   * no calls), 'max_rounds', 'ceiling' (CALL_CEILING), 'guard' (3-of-8 loop guard), 'room' (the
+   * tool room ran out), 'stopped', 'error'.
+   */
+  rounds?: {
+    n: number;
+    transport: 'native' | 'prompted';
+    ended: 'answer' | 'max_rounds' | 'ceiling' | 'guard' | 'room' | 'stopped' | 'error';
+    /** The tool room assemble reserved, in budget tokens, and what was left at the end. */
+    room: number;
+    roomLeft: number;
+  };
   hooks?: { name: string; ok: boolean; note?: string }[];
   presetHash: string;
   loreHashes: Record<string, string>;
@@ -304,14 +326,55 @@ export interface JobEntry {
   attempt: number;
   code?: string;
 }
-/** §5.8 Compendium row. Opaque until M5. */
+/**
+ * §5.8 Compendium row (M3: typed; only human note rows are written before M5). `key`: the task key
+ * (filing/historian, M5) or null for a human row; `on`: the message the row is bound to, or null for
+ * a global human edit (it applies on every path where its target exists). Extra fields are kept.
+ */
 export interface MemEntry {
   t: 'mem';
   seq: number;
   ts: string;
   key: string | null;
   on: string | null;
+  by: 'filing' | 'historian' | 'user';
+  /** First and last path message the task covered (M5). */
+  range?: [string, string];
+  /** [] = "nothing to record"; the key is still closed [D-68]. */
+  ops: MemOp[];
+  skipped?: { path: string; why: string }[];
+  gen?: { model: string; profile: 'full' | 'lite'; transport: 'structured' | 'tagged'; calls: number; ms: number };
   [k: string]: unknown;
+}
+
+type MemRec = Record<string, unknown>;
+
+/**
+ * §5.8 MemOp. M3 applies note / edit / retire / restore over notes; the fold records file, arc and
+ * revert as issues until M5a. `ref` is an entry key (CEntry.key, e.g. 'note:брат'), never a handle.
+ * A note's edit: set.title renames it (its key stays), set.content replaces its text, keys replaces
+ * its lore keys.
+ */
+export type MemOp =
+  | { op: 'file'; type: string; data: MemRec }
+  | { op: 'arc'; plot: string; overview: string }
+  | { op: 'note'; title: string; keys: string[]; content: string }
+  | { op: 'edit'; ref: string; set?: MemRec; unset?: string[]; keys?: string[]; featured?: boolean }
+  | { op: 'retire'; ref: string; reason: string }
+  | { op: 'restore'; ref: string }
+  | { op: 'revert'; key: string };
+
+/** M3: Trace.tools row (see Trace.tools). */
+export interface ToolTraceRow {
+  round: number;
+  callId: string;
+  name: string;
+  ok: boolean;
+  repaired?: string[];
+  refused?: 'final_round' | 'unknown_tool' | 'bad_args' | 'cancelled';
+  ms?: number;
+  chars?: number;
+  cut?: true;
 }
 
 export type Entry =
@@ -625,7 +688,9 @@ const ENTRY_CHECKS: Record<EntryKind, Check> = {
     },
     { code: str },
   ),
-  mem: obj({ seq: seqNum, ts: str, key: nullable(str), on: nullable(str) }),
+  // M3: by and ops are required; each op only needs an `op` string (the fold skips what it cannot
+  // apply and records why, so a richer writer never makes a reader drop the row).
+  mem: obj({ seq: seqNum, ts: str, key: nullable(str), on: nullable(str), by: oneOf('filing', 'historian', 'user'), ops: arr(obj({ op: str })) }),
 };
 
 /** JSON.parse that reports instead of throwing (also catches pathological nesting). */

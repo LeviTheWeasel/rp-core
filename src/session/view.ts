@@ -5,6 +5,7 @@
 // fold.ts from the log; never stored. CONTRACT FILE (types only).
 
 import type { Block, Generation, Trace } from './entries.ts';
+import type { CompendiumView } from '../agents/compendium/types.ts';
 
 export interface MessageView {
   id: string;
@@ -20,8 +21,8 @@ export interface MessageView {
 }
 
 /**
- * PathView for M1a. Fields reserved for later milestones (directorAt M4, compendium M5,
- * notes M3) are added then; consumers must only read what is declared here.
+ * PathView. Fields reserved for later milestones (directorAt M4) are added then; consumers must
+ * only read what is declared here.
  */
 export interface PathView {
   session: string;
@@ -45,4 +46,9 @@ export interface PathView {
   continued?: ReadonlySet<string>;
   /** Names and aliases of the card and persona. */
   castNames: string[];
+  /**
+   * M3 (§5.8): the Compendium folded along this path (rows with `on` null or on the path). M3 holds
+   * only human notes; the notes lore book is derived from it (agents/compendium/notes.ts notesBook).
+   */
+  compendium: CompendiumView;
 }

@@ -6,7 +6,8 @@
 // strict flag parsing with zero dependencies, global flags anywhere on the line, one function per
 // subcommand. M1a: new, import, send, sessions, show. M1b: init, chat (the REPL), probe, models;
 // config.toml's connections behind every turn. M2: import of presets and world info, new --preset /
-// --lore, preview, --provider record:/replay:. `--stdio` comes in M6.
+// --lore, preview, --provider record:/replay:. M3: probe --active, a script's caps line, tool lines
+// in send's text mode. `--stdio` comes in M6.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
@@ -44,7 +45,8 @@ interface Command {
   help: string;
 }
 
-const PROVIDER_HELP = `  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role
+const PROVIDER_HELP = `  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role;
+                            a first line {"caps": {...}} sets its caps (e.g. "tools": "prompted")
   --provider record:<file>  use the configured connections and append every model call to <file>
                             (JSONL; keys and header values are scrubbed)
   --provider replay:<file>  play a recording back instead of the network; a request that differs
@@ -97,10 +99,11 @@ ${PROVIDER_HELP}`,
   chat: {
     flags: { provider: 'string' },
     usage: `rp-core chat <session> [${PROVIDER_FLAG}]`,
-    summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, /preset, /lore, ...)',
+    summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, /preset, /lore, /memory, /search, ...)',
     help: `Opens the session (lock + recovery of an interrupted answer) and reads lines: text is your
 message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /tails, /goto,
-/fork, /model, /preset, /lore, /preview, /usage, /trace, /quit). Ctrl+C stops an answer and keeps
+/fork, /model, /preset, /lore, /memory, /search, /preview, /usage, /trace, /probe, /quit). The
+banner says whether the narrator can use tools (native, prompted or off). Ctrl+C stops an answer and keeps
 what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
 previous answer.
 ${PROVIDER_HELP}
@@ -133,6 +136,8 @@ The session's bindings pick the connection from config.toml.
   --guidance <text>         swipe only: steer the re-roll
   --json                    stdout carries only events, one JSON object per line
 ${PROVIDER_HELP}
+In text mode stdout carries only the answer; notices and the narrator's tool calls (one line each,
+e.g. "⋯ search_history "caravan" → 2 hits") go to stderr.
 A failure after output keeps the partial answer, marked [interrupted].
 Ctrl+C stops the turn and keeps what arrived; Ctrl+C again quits at once.
 Exit codes: 0 done, 2 stopped, 3 failed, 4 conflict, 5 refused before the turn opened.`,
@@ -159,15 +164,22 @@ Exit 5 when the request cannot be built (the reason as for send's refusals; --tu
 message is not_found).`,
   },
   probe: {
-    flags: { write: 'bool', json: 'bool' },
-    usage: 'rp-core probe [connection[:model]] [--write] [--json]',
+    flags: { write: 'bool', json: 'bool', active: 'bool' },
+    usage: 'rp-core probe [connection[:model]] [--active] [--write] [--json]',
     summary: "ask a server for its models, windows and slots; show a model's caps",
     help: `Reads the server's catalog (/models, llama.cpp /props, Ollama /api/show and /api/ps, LM Studio,
 koboldcpp, OpenRouter supported_parameters) for the connection (default: every connection in
 config.toml) and prints the server kind, the models with their context windows, reported slots
 (advice only: capacity stays at max_in_flight) and the caps the model would get.
-  --write  store the catalog in <home>/caps-cache.json; new turns use it
-  --json   print an array of {connection, ok, server, models, slots, notes, model, caps}
+  --active  also call the model (one <connection>:<model> only): a tiny reply, one tool offered
+            with tool_choice auto, a json_schema reply; at most 6 calls, replies capped at 96
+            tokens for a ping and 512-1024 for the tool and JSON calls, room for a thinking model
+            (they cost money on a paid API). It shows whether the model calls tools natively, leaks
+            them as text (prompted) or the server refuses them, and how usage and structured output
+            arrive; a probe that learned nothing (a timeout, a reply cut short) says inconclusive
+  --write   store the catalog (and with --active the probe facts) in <home>/caps-cache.json; new
+            turns use them; [caps."conn:model"] in config.toml still wins
+  --json    print an array of {connection, ok, server, models, slots, notes, model, caps, active?}
 Exit 1 when a server did not answer or refused the key (nothing is stored for it then).`,
   },
   models: {
@@ -203,7 +215,7 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M2)
+  return `rp-core — headless roleplay agent core (milestone M3)
 
 Usage: rp-core <command> [flags]
 
@@ -277,6 +289,11 @@ function runtimeOf(home: Home, deps: MainDeps, p: Parsed, provider?: PreparedPro
   return rt;
 }
 
+/** What a chat takes from MainDeps: the signal source, and fetch and clock for /probe --active. */
+function chatExtras(deps: MainDeps): { signals?: SignalSource; fetch?: typeof fetch; clock?: () => Date } {
+  return { ...(deps.signals ? { signals: deps.signals } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.clock ? { clock: deps.clock } : {}) };
+}
+
 function positiveInt(p: Parsed, flag: string, command: string): number | undefined {
   const v = str(p, flag);
   if (v === undefined) return undefined;
@@ -309,7 +326,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         json,
         io,
         rt,
-        ...(chat ? { chat: (engine, session) => runChat(engine, session, { rt, io, exitNow, ...(deps.signals ? { signals: deps.signals } : {}) }) } : {}),
+        ...(chat ? { chat: (engine, session) => runChat(engine, session, { rt, io, exitNow, ...chatExtras(deps) }) } : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
         ...(str(p, 'preset') !== undefined ? { preset: str(p, 'preset')! } : {}),
         ...(list(p, 'lore').length > 0 ? { lore: list(p, 'lore') } : {}),
@@ -323,7 +340,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const sessionId = p.positionals[0];
       if (sessionId === undefined) throw new UsageError('which session? rp-core chat <session>', name);
       const rt = runtimeOf(home, deps, p, providerOf(p, name, deps.tty === true));
-      return cmdChat({ rt, io, sessionId, exitNow, ...(deps.signals ? { signals: deps.signals } : {}) });
+      return cmdChat({ rt, io, sessionId, exitNow, ...chatExtras(deps) });
     }
     case 'probe': {
       noPositionals(p, name, 2);
@@ -334,6 +351,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         io,
         json,
         write: bool(p, 'write'),
+        active: bool(p, 'active'),
         clock: deps.clock ?? systemClock,
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(target !== undefined ? { target } : {}),

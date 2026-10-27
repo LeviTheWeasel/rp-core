@@ -57,7 +57,19 @@ export type Command =
    * too). --verdicts adds every lore entry's verdict, as /lore test prints them [D-45].
    */
   | { name: 'preview'; at?: { n: number } | { id: string }; wire: boolean; verdicts: boolean }
-  | { name: 'probe' }
+  /** /probe alone: how to probe from the shell; /probe --active [--write]: probe the narrator's model (M3). */
+  | { name: 'probe'; active?: true; write?: boolean }
+  /** M3 (§7.4.9 subset, decision F6): the notes of this path. `ref` is C<n>, a key or a unique title. */
+  | { name: 'memory'; action: 'list' }
+  | { name: 'memory'; action: 'show'; ref: string }
+  /** /memory add <title> | <keys> | <content>: keys comma-separated; [] lets the session key it by its title. */
+  | { name: 'memory'; action: 'add'; title: string; keys: string[]; content: string }
+  /** /memory edit <ref> <title> | <keys> | <content>: an empty (or missing) part keeps the old value. */
+  | { name: 'memory'; action: 'edit'; ref: string; title?: string; keys?: string[]; content?: string }
+  | { name: 'memory'; action: 'retire'; ref: string; reason?: string }
+  | { name: 'memory'; action: 'restore'; ref: string }
+  /** /search <query> [before=<n>] (§7.5): the narrator's search_history over this path. */
+  | { name: 'search'; query: string; before?: number }
   | { name: 'help' }
   | { name: 'quit' }
   /** A §12.4 command that belongs to a later milestone. */
@@ -107,7 +119,11 @@ export function commandClass(c: Command): CommandClass {
     case 'lore':
       return c.action === 'add' || c.action === 'rm' ? 'edit' : 'read';
     case 'preview':
+    case 'search':
       return 'read';
+    case 'memory':
+      // Notes are written to the journal: refused mid-turn like any other edit (session_busy).
+      return c.action === 'list' || c.action === 'show' ? 'read' : 'edit';
     default:
       return 'edit';
   }
@@ -115,12 +131,13 @@ export function commandClass(c: Command): CommandClass {
 
 /** §12.4 commands that arrive with later milestones (§15). */
 const LATER: Readonly<Record<string, string>> = {
-  memory: 'M3 (manual notes) and M5 (Compendium)',
   director: 'M4 (Story Director)',
   persona: 'a later milestone',
-  search: 'a later milestone',
   impersonate: 'M9 (draft)',
 };
+
+/** §7.4.9 /memory subcommands of the Compendium (M5); M3 has list, show, add, edit, retire, restore. */
+const MEMORY_LATER: readonly string[] = ['tree', 'new', 'undo', 'refile', 'retry', 'recall', 'export', 'profile', 'mode'];
 
 /** Default author's note depth (SillyTavern's default). */
 export const DEFAULT_NOTE_DEPTH = 4;
@@ -204,7 +221,11 @@ export function parseLine(raw: string): ParsedLine {
     case 'preview':
       return parsePreview(rest);
     case 'probe':
-      return cmd({ name: 'probe' });
+      return parseProbe(rest);
+    case 'memory':
+      return parseMemory(rest);
+    case 'search':
+      return parseSearch(rest);
     case 'help':
     case '?':
       return cmd({ name: 'help' });
@@ -252,6 +273,110 @@ function parseLore(rest: string): ParsedLine {
     default:
       return err(`/lore: "${m![1]}" is not a subcommand; /lore lists the books, /lore add <id|file>, /lore rm <id>, /lore test <text>`);
   }
+}
+
+/** /probe, /probe --active [--write] (M3: the active probes of the narrator's model). */
+function parseProbe(rest: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  let active = false;
+  let write = false;
+  for (const w of rest === '' ? [] : rest.split(/\s+/)) {
+    if (w === '--active') active = true;
+    else if (w === '--write') write = true;
+    else return err(`/probe: unknown argument ${w} (it takes --active [--write])`);
+  }
+  if (write && !active) {
+    return err('/probe --write needs --active here; a catalog probe of a whole server runs from the shell: rp-core probe <connection> --write');
+  }
+  return { kind: 'command', command: active ? { name: 'probe', active: true, write } : { name: 'probe' } };
+}
+
+const ADD_USAGE = '/memory add <title> | <keys> | <text>, e.g. /memory add Brother | Yan, brother | Mira\'s brother Yan sails the north road (keys may be empty)';
+const EDIT_USAGE = '/memory edit <ref> <title> | <keys> | <text> (an empty part keeps the old value)';
+const REF_HINT = 'its C<n> as /memory lists it, its key, or its title';
+
+/**
+ * The note a command names, then the rest of the line: a quoted ref ("Old lighthouse") may hold
+ * spaces, else the ref is the first word. null when there is none.
+ */
+export function takeRef(s: string): { ref: string; rest: string } | null {
+  const t = s.trim();
+  const q = t[0];
+  if (q === '"' || q === "'") {
+    const end = t.indexOf(q, 1);
+    if (end > 1) return { ref: t.slice(1, end).trim(), rest: t.slice(end + 1).trim() };
+    return null;
+  }
+  const m = /^(\S+)\s*([\s\S]*)$/.exec(t);
+  return m ? { ref: m[1]!, rest: m[2]!.trim() } : null;
+}
+
+/** Comma-separated keys, trimmed, blanks dropped. */
+const splitKeys = (s: string): string[] =>
+  s
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k !== '');
+
+/** /memory [list|show|add|edit|retire|restore] (decision F6); the M5 subcommands are 'later'. */
+function parseMemory(rest: string): ParsedLine {
+  const m = /^(\S+)\s*([\s\S]*)$/.exec(rest);
+  const sub = m ? m[1]!.toLowerCase() : '';
+  const arg = m ? m[2]!.trim() : '';
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const cmd = (command: Command): ParsedLine => ({ kind: 'command', command });
+  switch (sub) {
+    case '':
+    case 'list':
+      return arg === '' ? cmd({ name: 'memory', action: 'list' }) : err('/memory list takes no arguments yet (entry types and --retired arrive with the Compendium, M5)');
+    case 'show':
+    case 'restore': {
+      const ref = unquote(arg);
+      if (ref === '') return err(`/memory ${sub} needs a note: ${REF_HINT}`);
+      return cmd({ name: 'memory', action: sub === 'show' ? 'show' : 'restore', ref });
+    }
+    case 'add': {
+      const [title, keys, ...text] = arg.split('|');
+      if (keys === undefined || text.length === 0) return err(`usage: ${ADD_USAGE}`);
+      const content = text.join('|').trim();
+      if (title!.trim() === '') return err(`/memory add: the title is empty (${ADD_USAGE})`);
+      if (content === '') return err(`/memory add: the text is empty (${ADD_USAGE})`);
+      return cmd({ name: 'memory', action: 'add', title: title!.trim(), keys: splitKeys(keys), content });
+    }
+    case 'edit': {
+      const r = takeRef(arg);
+      if (!r || r.ref === '') return err(`usage: ${EDIT_USAGE}`);
+      const [title, keys, ...text] = r.rest.split('|');
+      const change: { title?: string; keys?: string[]; content?: string } = {};
+      if (title !== undefined && title.trim() !== '') change.title = title.trim();
+      if (keys !== undefined && splitKeys(keys).length > 0) change.keys = splitKeys(keys);
+      if (text.length > 0 && text.join('|').trim() !== '') change.content = text.join('|').trim();
+      if (Object.keys(change).length === 0) return err(`/memory edit: nothing to change (${EDIT_USAGE})`);
+      return cmd({ name: 'memory', action: 'edit', ref: r.ref, ...change });
+    }
+    case 'retire': {
+      const r = takeRef(arg);
+      if (!r || r.ref === '') return err(`/memory retire needs a note (${REF_HINT}), then an optional reason`);
+      return cmd({ name: 'memory', action: 'retire', ref: r.ref, ...(r.rest !== '' ? { reason: r.rest } : {}) });
+    }
+    default:
+      if (MEMORY_LATER.includes(sub)) return cmd({ name: 'later', command: `memory ${sub}`, when: 'M5 (Compendium)' });
+      return err(`/memory: "${m![1]}" is not a subcommand; /memory lists your notes, then show, add, edit, retire, restore`);
+  }
+}
+
+/** /search <query> [before=<n>]: the cursor is the last word. */
+function parseSearch(rest: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const need = '/search needs words to look for, e.g. /search caravan (quotes keep a phrase together: /search "north road")';
+  if (rest === '') return err(need);
+  const m = /^([\s\S]*?)\s*\bbefore=(\S*)$/i.exec(rest);
+  if (!m) return { kind: 'command', command: { name: 'search', query: rest } };
+  const before = positive(m[2]!);
+  if (before === null) return err(`/search: before= takes a message number (the #n of a hit), got "${m[2]}"`);
+  const query = m[1]!.trim();
+  if (query === '') return err(need);
+  return { kind: 'command', command: { name: 'search', query, before } };
 }
 
 function parsePreview(rest: string): ParsedLine {
@@ -349,7 +474,7 @@ export function resolveBindingArg(
   return { ok: true, value: parts };
 }
 
-/** /help text (the M2 set; later commands are listed with their milestone). */
+/** /help text (the M3 set; later commands are listed with their milestone). */
 export function helpText(): string {
   return [
     'Type to speak. Commands:',
@@ -366,8 +491,13 @@ export function helpText(): string {
     '  /note <text> [@depth], /note off   the author\'s note (default depth 4)',
     '  /think show|hide   show the model\'s reasoning or fold it to one line',
     '  /show              the story so far, numbered      /usage   tokens and cost of this path',
-    '  /trace             what the last answer\'s prompt held: the lore that fired, and why the rest did not',
-    '  /probe             how to probe a server',
+    '  /trace             what the last answer\'s prompt held: the lore that fired, and why the rest did not; its tool rounds',
+    '  /search <words> [before=n]   find earlier messages on this path, newest first (what the narrator\'s search_history finds)',
+    '  /memory            your notes; /memory show <ref> (ref: C<n>, its key or its title)',
+    '  /memory add <title> | <keys> | <text>    a note: sent to the narrator when one of its keys comes up',
+    '  /memory edit <ref> <title> | <keys> | <text>    change a note (an empty part keeps the old value)',
+    '  /memory retire <ref> [reason], /memory restore <ref>    stop a note firing / bring it back',
+    '  /probe             how to probe a server; /probe --active [--write] tests the narrator\'s model (a few tiny calls)',
     '  /preset [id|file]  show the preset and the library, or switch (builtin, a library id, or an ST preset file to import)',
     '  /lore              the lorebooks of this session; /lore add <id|file> (a world info file is imported), /lore rm <id>',
     '  /lore test <text>  which lore entries a message would wake, and why (nothing is sent)',
@@ -375,7 +505,7 @@ export function helpText(): string {
     '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',
-    'Later: /memory (M3), /director (M4).',
+    'Later: /director (M4); /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).',
     'Start a line with // to send text that begins with "/".',
   ].join('\n');
 }

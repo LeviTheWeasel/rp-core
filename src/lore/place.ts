@@ -18,12 +18,14 @@
 //   after the author's note and the card's depth prompt, so an entry's `order` only sorts it among
 //   the lore (the inserts come out in that order and depth.ts keeps input order on ties). ST merges
 //   same-depth same-role entries into one message; the core keeps them apart so the trace sees
-//   every source — the named D-47 deviation.
+//   every source — the named D-47 deviation. Entries of the notes book ('@notes', M3, §5.8) go in
+//   with src 'compendium' (prompt/depth.ts rank 4) instead; srcId stays entryLabel().
 // CONTRACT FILE: signatures are fixed; the lore agent implements the bodies.
 //
 // As in ST (world-info.js checkWorldInfo, prompt building): an entry with empty text is not placed,
 // an outlet entry without a name is dropped, and a depth entry without a role is a system message.
 
+import { NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import { DEFAULT_LORE_ORDER, entryLabel, type LoreHit } from './engine.ts';
 
@@ -85,7 +87,7 @@ export function placeLore(fired: readonly LoreHit[]): LorePlacement {
           out.depth.push({
             depth: p.depth,
             role: p.role ?? 'system',
-            src: 'lore',
+            src: h.book === NOTES_BOOK_KEY ? 'compendium' : 'lore',
             srcId: entryLabel(h.book, h.id),
             text: h.text,
           });

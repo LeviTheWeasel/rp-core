@@ -14,11 +14,13 @@
 // after Stop: the engine is not waited for (the next open recovers that turn, as after a crash).
 
 import { Engine } from '../engine/engine.ts';
+import { systemClock } from '../engine/system.ts';
 import { Refusal, type Connection, type EngineHandle, type EngineOptions, type SessionHandle } from '../engine/api.ts';
 import type { Io } from './io.ts';
 import { EXIT, reportRefusal } from './oneshot.ts';
 import { runRepl, type ReplDeps } from './repl.ts';
-import { connectionProblem, connectionWindow, engineOptions, redactor, windowOf, type Runtime } from './runtime.ts';
+import { runProbe } from './catalog.ts';
+import { bindingCaps, connectionCaps, connectionProblem, connectionWindow, engineOptions, redactor, windowOf, type Runtime } from './runtime.ts';
 import { EXIT_SIGINT, EXIT_SIGTERM, type SignalSource } from './signals.ts';
 
 export interface ChatArgs {
@@ -30,6 +32,9 @@ export interface ChatArgs {
   signals?: SignalSource;
   /** Extra engine options (tests: clock, random, timers). */
   engine?: Partial<EngineOptions>;
+  /** For /probe --active (default globalThis.fetch and the system clock). */
+  fetch?: typeof fetch;
+  clock?: () => Date;
 }
 
 /** `rp-core chat <session>`: open (lock + recovery) and run the REPL until /quit or EOF. */
@@ -53,6 +58,7 @@ export function overrideOf(conn: Connection): NonNullable<ReplDeps['override']> 
     conn: conn.id,
     plays: conn.origin.startsWith('replay:') ? 'recording' : 'script',
     windowOf: (model) => connectionWindow(conn, model),
+    capsOf: (model) => connectionCaps(conn, model),
   };
 }
 
@@ -90,7 +96,28 @@ export async function runChat(engine: EngineHandle, session: SessionHandle, a: C
       io: a.io,
       openSession: (id) => engine.session(id),
       windowOf: (conn, model) => windowOf(a.rt, conn, model),
+      capsOf: (conn, model) => bindingCaps(a.rt, conn, model),
       redact: redactor(a.rt),
+      // /probe --active calls the configured connection; under record: those calls would land in
+      // the recording, so it is left to the shell there.
+      ...(a.rt.recording === undefined
+        ? {
+            probe: async (p: { target: string; write: boolean; io: Io; signal: AbortSignal }) => {
+              const r = await runProbe({
+                rt: a.rt,
+                io: p.io,
+                json: false,
+                clock: a.clock ?? systemClock,
+                target: p.target,
+                write: p.write,
+                active: true,
+                signal: p.signal,
+                ...(a.fetch ? { fetch: a.fetch } : {}),
+              });
+              return { code: r.code, written: r.results.some((x) => x.written) };
+            },
+          }
+        : {}),
       ...(debugTap ? { debugTap } : {}),
       // Under --provider every role plays the script: /model only checks config.toml's names then.
       ...(a.rt.provider ? {} : { connectionProblem: (conn: string) => connectionProblem(a.rt, conn) }),

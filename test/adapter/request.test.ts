@@ -351,7 +351,10 @@ describe('stream usage, tools, reasoning control, structured output', () => {
 
   test('response_format json_schema only where structured output is json_schema', () => {
     const responseSchema = { name: 'verdict', schema: { type: 'object' } };
-    expect(body(request({ responseSchema })).response_format).toEqual({ type: 'json_schema', json_schema: { name: 'verdict', schema: { type: 'object' } } });
+    // M3: the llama.cpp preset no longer claims json_schema (§7.2: a probe or the user confirms it).
+    expect(body(request({ responseSchema })).response_format).toBeUndefined();
+    const confirmed = llama({ structuredOutput: { mode: 'json_schema', confirmedBy: 'probe' } });
+    expect(body(request({ caps: confirmed, responseSchema })).response_format).toEqual({ type: 'json_schema', json_schema: { name: 'verdict', schema: { type: 'object' } } });
     expect(body(request({ caps: llama({ structuredOutput: { mode: 'none' } }), responseSchema })).response_format).toBeUndefined();
   });
 });
@@ -385,7 +388,9 @@ describe('DeepSeek reasoning echo (§8.4, caps.reasoning.echo all-with-tools)', 
     const summary = body(
       request({ caps, tools, messages: [blocks('assistant', { k: 'reasoning', text: 'sum', kind: 'summary' }, { k: 'text', text: 'a' })] }),
     ).messages as Record<string, unknown>[];
-    expect(summary[0]).toEqual({ role: 'assistant', content: 'a' });
+    // M3 (D-94): with the echo on every assistant message carries the field; a summary is not the
+    // model's own reasoning, so this one gets the placeholder.
+    expect(summary[0]).toEqual({ role: 'assistant', content: 'a', reasoning_content: ' ' });
   });
 });
 

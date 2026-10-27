@@ -6,6 +6,7 @@ import type { AssembleInput, AssembleResult } from '../../src/prompt/assemble.ts
 import type { ModelCaps, PromptMsg } from '../../src/providers/types.ts';
 import type { Block } from '../../src/session/entries.ts';
 import type { MessageView, PathView } from '../../src/session/view.ts';
+import { EMPTY_COMPENDIUM } from '../../src/agents/compendium/types.ts';
 
 export const NOW = '2026-10-26T12:00:00.000Z';
 
@@ -71,6 +72,7 @@ export function path(msgs: MessageView[], vars: Record<string, string | number> 
     vars,
     fires: [],
     castNames: ['Mira', 'Levi'],
+    compendium: EMPTY_COMPENDIUM,
   };
 }
 

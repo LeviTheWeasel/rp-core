@@ -12,7 +12,9 @@
 // 1. Gather the enabled entries in ST's "character first" order (getSortedEntries): the persona's
 //    book, the card's book, then every session book as ONE group (ST merges its global worlds into
 //    one list before sorting), each group sorted by `order` descending (missing order = 100),
-//    stable (ties keep source order, then book order).
+//    stable (ties keep source order, then book order). M3: the notes book ('@notes', §5.8) is its
+//    own group right after the card's, wherever it sits in `sources`; so the budget cuts notes
+//    after the card's entries and before the session books'.
 // 2. Loop 0 (direct): delay not reached → skipped; sticky window open → fires as 'sticky'; cooling
 //    down → skipped; constant → fires; otherwise primary keys over the entry's scan text
 //    (scanText of `scan` at entry.scanDepth ?? book.scanDepth ?? 2), then secondary keys with
@@ -68,9 +70,11 @@
 //   'no-key-match' with detail.recursionLimit (MAX_RECURSION). 'regex-error' replaces 'no-key-match' / 'secondary-logic' when a key of the entry failed to
 //   compile (the likely cause); the other reasons stand, with regexErrors listed. 'exclude-recursion'
 //   is said only when a recursion loop ran and its text would have woken the entry.
-// - Book `match: 'stem'` is matched as 'literal' in M2; stems arrive in M3 with normalizeTerm.
+// - Book `match: 'stem'` (the notes book, any book that asks) matches non-regex keys by word stems
+//   (lore/keys.ts, text/normalize.ts); the entry's caseSensitive and wholeWords do not apply there.
 // - Entries with meta.type are ordinary entries in M2 (M5a hands them to Compendium, D-76).
 
+import { NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
 import type { LoreBook, LoreEntry } from '../formats/native.ts';
 import { subRng } from '../prompt/rng.ts';
 import { KeyMatcher, secondaryPasses, type KeyOptions } from './keys.ts';
@@ -86,6 +90,9 @@ export interface LoreSource {
 /** The card's embedded book and the persona's book. '@' cannot start a library id (canonicalId). */
 export const CARD_BOOK_KEY = '@card';
 export const PERSONA_BOOK_KEY = '@persona';
+
+/** The books gathered as groups of their own, in gather order; every other source is a session book, gathered after them. */
+const GATHER_GROUPS: readonly string[] = [PERSONA_BOOK_KEY, CARD_BOOK_KEY, NOTES_BOOK_KEY];
 
 /** Default `order` of an entry that names none (ST's default insertion order). */
 export const DEFAULT_LORE_ORDER = 100;
@@ -255,10 +262,10 @@ function makeItem(idx: number, src: number, pos: number, source: LoreSource, ent
     entry,
     key: entryKey(source.key, entry.id),
     scanDepth: entry.scanDepth ?? book.scanDepth ?? DEFAULT_SCAN_DEPTH,
-    // book.match 'stem' is matched as 'literal' in M2 (M3 adds stems).
     opts: {
       caseSensitive: entry.caseSensitive ?? book.caseSensitive ?? false,
       wholeWords: entry.wholeWords ?? book.wholeWords ?? true,
+      match: book.match === 'stem' ? 'stem' : 'literal',
     },
     recursive: book.recursive ?? true,
     // ST: a missing or non-numeric probability is 100.
@@ -317,20 +324,24 @@ export function runLore(input: LoreRunInput): LoreRunResult {
     return { ok, secondary: true, matched: ok ? [...prim.matched, ...sec.matched] : prim.matched };
   };
 
-  // 1. Gather: the persona's book, the card's book, then the session books merged into one group;
-  // each group sorted by order descending, stable (source order, then book order). Disabled entries
-  // keep a draw index.
-  const groupKey = (key: string): string => (key === PERSONA_BOOK_KEY || key === CARD_BOOK_KEY ? key : '');
-  const groups = new Map<string, { entry: LoreEntry; s: number; pos: number }[]>();
+  // 1. Gather: the persona's book, the card's book, the notes book, then the session books merged
+  // into one group; each group sorted by order descending, stable (source order, then book order).
+  // Disabled entries keep a draw index.
+  const groupOf = (key: string): number => {
+    const g = GATHER_GROUPS.indexOf(key);
+    return g < 0 ? GATHER_GROUPS.length : g; // a session book
+  };
+  const groups = new Map<number, { entry: LoreEntry; s: number; pos: number }[]>();
   input.sources.forEach((source, s) => {
-    const g = groupKey(source.key);
+    const g = groupOf(source.key);
     let list = groups.get(g);
     if (!list) groups.set(g, (list = []));
     source.book.entries.forEach((entry, pos) => (list as { entry: LoreEntry; s: number; pos: number }[]).push({ entry, s, pos }));
   });
   const items: Item[] = [];
   let idx = 0;
-  for (const list of groups.values()) {
+  for (const g of [...groups.keys()].sort((a, b) => a - b)) {
+    const list = groups.get(g) as { entry: LoreEntry; s: number; pos: number }[];
     list.sort((a, b) => orderOf(b.entry) - orderOf(a.entry) || a.s - b.s || a.pos - b.pos);
     for (const { entry, s, pos } of list) {
       const it = makeItem(idx++, s, pos, input.sources[s] as LoreSource, entry);

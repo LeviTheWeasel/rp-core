@@ -444,17 +444,19 @@ describe('caps cache', () => {
     const home = join(tmpHome(), 'nested', 'home');
     expect(readCapsCache(home)).toEqual({});
     const cache: Record<string, CapsCacheRow> = {
-      'local:qwen3-14b': { as_of: '2026-10-26', server: 'llama.cpp', caps: { contextLength: 16384 } },
-      'ollama:gemma3:12b': { as_of: '2026-10-26', server: 'ollama', caps: { tools: 'native', reasoning: { control: 'effort' } as never } },
-      'b:x': { as_of: '2026-10-25', caps: {} },
+      'local:qwen3-14b': { as_of: '2026-10-26', server: 'llama.cpp', catalog: { contextLength: 16384 }, probe: { tools: 'native' } },
+      'ollama:gemma3:12b': { as_of: '2026-10-26', server: 'ollama', catalog: { tools: 'native', reasoning: { control: 'effort' } as never } },
+      'b:x': { as_of: '2026-10-25', catalog: {} },
     };
     writeCapsCache(home, cache);
     expect(readCapsCache(home)).toEqual(cache);
     expect(Object.keys(JSON.parse(readFileSync(capsCachePath(home), 'utf8')) as object)).toEqual(['b:x', 'local:qwen3-14b', 'ollama:gemma3:12b']);
     expect(readdirSync(home)).toEqual(['caps-cache.json']);
 
+    // M3: a legacy row ({caps}) is written and read back as catalog facts; `caps` is never written.
     writeCapsCache(home, { 'b:x': { as_of: '2026-10-27', caps: { contextLength: 1 } } });
-    expect(readCapsCache(home)).toEqual({ 'b:x': { as_of: '2026-10-27', caps: { contextLength: 1 } } });
+    expect(readCapsCache(home)).toEqual({ 'b:x': { as_of: '2026-10-27', catalog: { contextLength: 1 } } });
+    expect(readFileSync(capsCachePath(home), 'utf8')).not.toContain('"caps"');
     expect(readdirSync(home)).toEqual(['caps-cache.json']);
   });
 
@@ -466,9 +468,18 @@ describe('caps cache', () => {
     expect(readCapsCache(home)).toEqual({});
     writeFileSync(
       capsCachePath(home),
-      JSON.stringify({ ok: { as_of: '2026-10-26', caps: { contextLength: 2 }, extra: 1 }, noDate: { caps: {} }, noCaps: { as_of: '2026-10-26' }, junk: 3 }),
+      JSON.stringify({
+        ok: { as_of: '2026-10-26', caps: { contextLength: 2 }, extra: 1 },
+        probed: { as_of: '2026-10-26', probe: { streamUsage: 'always' }, catalog: 'junk' },
+        noDate: { caps: {} },
+        noCaps: { as_of: '2026-10-26' },
+        junk: 3,
+      }),
     );
-    expect(readCapsCache(home)).toEqual({ ok: { as_of: '2026-10-26', caps: { contextLength: 2 } } });
+    expect(readCapsCache(home)).toEqual({
+      ok: { as_of: '2026-10-26', catalog: { contextLength: 2 } },
+      probed: { as_of: '2026-10-26', probe: { streamUsage: 'always' } },
+    });
     expect(existsSync(capsCachePath(home))).toBe(true);
   });
 });

@@ -19,6 +19,7 @@ import { shape, type ShapeOutput } from '../../src/prompt/shape.ts';
 import { O200K_COUNTER } from '../../src/prompt/tokens.ts';
 import type { ModelCaps, PromptMsg } from '../../src/providers/types.ts';
 import type { MessageView, PathView } from '../../src/session/view.ts';
+import { EMPTY_COMPENDIUM } from '../../src/agents/compendium/types.ts';
 
 export const GOLDEN = join(import.meta.dir, 'st');
 export const CASES = readdirSync(GOLDEN).filter((d) => /^\d\d-/.test(d)).sort();
@@ -121,6 +122,7 @@ function pathOf(c: GoldenCase): PathView {
     vars: {},
     fires: [],
     castNames: [c.character.name, c.persona.name],
+    compendium: EMPTY_COMPENDIUM,
   };
 }
 

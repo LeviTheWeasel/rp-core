@@ -27,11 +27,14 @@
 // - Scrubbing covers the whole line, not only raw and error messages: the call's key (env.key) and
 //   every string of secrets() are replaced in the request, the events (a secret split across two
 //   text deltas included) and raw. A ProviderError's `detail` is never recorded.
+// - M3: a 'replay' event (reasoning_details, per-call extras) is recorded as JSON, scrubbed like any
+//   other event, and played back as recorded. The request's toolChoice and stop are not part of the
+//   recorded request nor of its hash (scripted.ts hashRequest), as before.
 
 import { scrub } from '../config/secrets.ts';
 import { canonicalJson, hashRequest } from './scripted.ts';
 import { PROVIDER_ERROR_CATEGORY, PROVIDER_ERROR_MESSAGE, ProviderError } from './types.ts';
-import type { FinishReason, ProviderErrorCategory, ProviderErrorCode, PromptMsg, Provider, ProviderEnv, StreamEv, ToolSpec, Usage } from './types.ts';
+import type { FinishReason, ProviderErrorCategory, ProviderErrorCode, PromptMsg, Provider, ProviderEnv, Replay, StreamEv, ToolSpec, Usage } from './types.ts';
 import type { ModelRequest } from './types.ts';
 import type { Samplers } from '../formats/native.ts';
 import type { Block } from '../session/entries.ts';
@@ -142,6 +145,9 @@ export function toRecordedEv(ev: StreamEv): RecordedEv {
       return { t: 'usage', u: usageCopy(ev.u) };
     case 'finish':
       return { t: 'finish', reason: ev.reason, raw: ev.raw, ...(ev.model !== undefined ? { model: ev.model } : {}) };
+    case 'replay':
+      // M3: the payload as JSON (a snapshot; it is scrubbed with the rest of the line, keys included).
+      return { t: 'replay', r: { kind: ev.r.kind, connection: ev.r.connection, model: ev.r.model, payload: jsonCopy(ev.r.payload) } };
     case 'error': {
       // `detail` (the server's own words) stays out: it may quote the prompt or echo a key (§13).
       const e = ev.err;
@@ -160,9 +166,15 @@ export function toRecordedEv(ev: StreamEv): RecordedEv {
   }
 }
 
+/** A JSON value copied through JSON (undefined becomes null: the file has no undefined). */
+function jsonCopy(v: unknown): unknown {
+  return v === undefined ? null : (JSON.parse(JSON.stringify(v)) as unknown);
+}
+
 /** A recorded event back as a StreamEv (a fresh object; an error becomes a ProviderError again). */
 export function fromRecordedEv(ev: RecordedEv): StreamEv {
   if (ev.t === 'usage') return { t: 'usage', u: { ...ev.u } };
+  if (ev.t === 'replay') return { t: 'replay', r: { ...ev.r, payload: jsonCopy(ev.r.payload) } };
   if (ev.t !== 'error') return { ...ev };
   const e = ev.err;
   const err = new ProviderError({
@@ -233,8 +245,9 @@ function captureRaw(base: typeof fetch): RawCapture {
  * The same response with its body read through `take`: each chunk is handed over as the consumer
  * pulls it (highWaterMark 0: nothing is read ahead), and a cancel (Stop, leaving the loop) reaches
  * the server's body. A body a constructed Response cannot carry is passed through unrecorded.
+ * Exported for the active probes (probe-active.ts), which watch the wire the same way.
  */
-function passThrough(res: Response, take: (chunk: Uint8Array) => void): Response {
+export function passThrough(res: Response, take: (chunk: Uint8Array) => void): Response {
   const source = res.body;
   if (source === null || NULL_BODY_STATUSES.has(res.status) || res.status < 200 || res.status > 599) return res;
   const reader = source.getReader();
@@ -497,6 +510,13 @@ const FINISH_REASONS: Readonly<Record<FinishReason, true>> = {
   max_rounds: true,
 };
 
+const REPLAY_KINDS: Readonly<Record<Replay['kind'], true>> = {
+  'anthropic-blocks': true,
+  'gemini-parts': true,
+  reasoning_details: true,
+  tool_extra: true,
+};
+
 const CATEGORIES: Readonly<Record<ProviderErrorCategory, true>> = {
   auth: true,
   request: true,
@@ -585,6 +605,16 @@ function checkEv(v: unknown, fail: Fail): RecordedEv {
         if (!has(USAGE_FIELDS, k)) fail(`unknown usage field "${k}"`);
         if (!isNonNegative(n)) fail(`usage.${k} must be a number >= 0`);
       }
+      break;
+    }
+    case 'replay': {
+      onlyKeys(v, ['t', 'r'], fail);
+      const r = v.r;
+      if (!isRecord(r)) fail('"replay".r must be an object {kind, connection, model, payload}');
+      onlyKeys(r, ['kind', 'connection', 'model', 'payload'], fail);
+      if (!has(REPLAY_KINDS, r.kind)) fail(`unknown replay kind ${JSON.stringify(r.kind)}`);
+      if (typeof r.connection !== 'string' || typeof r.model !== 'string') fail('"replay".r.connection and .model must be strings');
+      if (!('payload' in r)) fail('"replay".r.payload is missing');
       break;
     }
     case 'finish':

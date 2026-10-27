@@ -1,0 +1,14 @@
+# M3 provenance rows — agent `text`
+
+No code was ported by this agent: every row below is fresh code; sources are named where they
+shaped behaviour or a fixture.
+
+| Core file | Source | Commit | Verdict | What changed |
+|---|---|---|---|---|
+| `src/text/normalize.ts` (M3 section: foldText, normalizeTerm, wordsOf, parseQuery, matchQuery, locateQuery, stem keys) | none (fresh); the 56-ending probe list in the M3 research note (scratch, not project code) was the starting point; quote grammar compared with Bunraku:src/core/search/query.ts `tokenize` (Coneja-Chibi) for behaviour only | — / 702d8120 | fresh | Own Russian ending list (55, longest first, ≥ 3 letters left) plus a stem-tail step (vowel/ь/й/-ов/-ев) so й-stem names and -ов surnames meet; English possessive/plural/-e/-y folding; no Snowball code, no dependency. Words found code point by code point (D-46 class, surrogate pairs whole, spaceless runs one word, offsets in the original text). Quotes "…", «…», “…” as phrases; unlike Bunraku's tokenize an unclosed quote reads as loose words; D-46 stop words. |
+| `src/text/lexscore.ts` | RoleCall:apps/rc/src/lib/ai/dm-stream/tools/executors.ts `search_lorebook` (title×3/keys×2/text×1) — reference only, for the divergence fixture; git attributes it to Coneja-Chibi through the import commit 660a7d67a, so the original author is unknown (D-34 caveat) | fb8dc623e | reference | Fresh lexicographic ranking (§9.2): matched parts → parts in title/keys → rank → index; stems, phrases and spaceless substrings via normalize.ts; regex keys skipped. No RoleCall code. |
+| `src/lore/keys.ts` (stem mode only) | none | — | fresh | `KeyOptions.match`; stem keys through compileStemKey/matchStemKey with a per-matcher StemText cache reusing '\n'-extended prefixes; a refused '/re/' key in a stem book falls back to a stem key. The file's existing port header (RoleCall keyword.ts, Bunraku key-word-boundary.ts) is unchanged. |
+| `src/lore/engine.ts` (notes group, stem option) | none | — | fresh | '@notes' gathered as its own group after '@card' (explicit gather order persona → card → notes → session); book.match 'stem' passed to the key matcher. Existing port header unchanged. |
+| `src/lore/place.ts` ('@notes' → src 'compendium') | none | — | fresh | One line: depth inserts of the notes book carry src 'compendium' (§5.8, §10.1 rank 4). |
+| `test/text/lexscore.test.ts` | RoleCall search_lorebook weights (reference re-implementation in the test, 660a7d67a caveat as above); fixture from the M3 research note §10 | fb8dc623e | reference | «брат трактирщица»: RoleCall's weights rank «Брат Алексей» first (6 vs 2), lexScore the innkeeper (2 matched parts vs 1). |
+| `test/text/normalize.test.ts`, `test/fixtures/ru/normalize-terms.json`, `test/lore-m3/*.test.ts` | none | — | fresh | Fixture table (spec pairs, apart pairs, exact stems, documented misses), offsets, query grammar, stem lore books, '@notes' order/budget/placement, timing. |

@@ -11,7 +11,7 @@
 //   parents always ends at a root;
 // - a duplicate message id keeps the first message; later duplicates are ignored.
 
-import type { Block, EditEntry, Entry, Generation, MsgEntry } from './entries.ts';
+import type { Block, EditEntry, Entry, Generation, MemEntry, MsgEntry } from './entries.ts';
 
 export interface TreeIndex {
   msgs: Map<string, MsgEntry>;
@@ -28,6 +28,13 @@ export interface TreeIndex {
   head: string | null;
   /** seq of the last msg/edit/hide/head entry; 0 when there is none. */
   version: number;
+  /**
+   * M3: every `mem` row in seq order (mem rows are not part of the tree or the version, but the
+   * Compendium fold reads them, also for a view folded at another leaf).
+   */
+  mems: MemEntry[];
+  /** M3: seq of the last mem row; 0 when there is none. Views are cached on (version, lastMemSeq). */
+  lastMemSeq: number;
 }
 
 /** Entries are expected in seq order (the log guarantees it); anything else is sorted first. */
@@ -45,6 +52,8 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
   const hidden = new Map<string, boolean>();
   let head: string | null = null;
   let version = 0;
+  const mems: MemEntry[] = [];
+  let lastMemSeq = 0;
 
   for (const e of inSeqOrder(entries)) {
     switch (e.t) {
@@ -76,13 +85,18 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
         version = e.seq;
         if (msgs.has(e.leaf)) head = e.leaf;
         break;
+      case 'mem':
+        // Not part of the tree or the version; collected for the Compendium fold (M3).
+        mems.push(e);
+        lastMemSeq = e.seq;
+        break;
       default:
-        break; // config, turn, prep, chk, held, end, job, mem: not part of the tree or the version
+        break; // config, turn, prep, chk, held, end, job: not part of the tree or the version
     }
   }
   // An unknown leaf in a head entry, or an orphan msg, still counts for version: version is a
   // property of the log (the commit guard), not of what the tree could use.
-  return { msgs, children, edits, hidden, head, version };
+  return { msgs, children, edits, hidden, head, version, mems, lastMemSeq };
 }
 
 /** Ids from the root down to `leaf` (inclusive). [] for null. */

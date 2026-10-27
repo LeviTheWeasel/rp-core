@@ -7,12 +7,16 @@
 // first line happen synchronously in runTurn; the rest of the turn runs in turn.ts. preview (M2)
 // runs the same admission and request.ts buildRequest, and writes nothing.
 
+import { normalizeName } from '../agents/compendium/apply.ts';
+import { noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
+import type { CEntry } from '../agents/compendium/types.ts';
+import { searchHistory, type HistorySearch } from '../tools/builtin/history.ts';
 import { Refusal } from './api.ts';
 import type { CreateSessionInput, PreviewOptions, PreviewResult, RunTurnOptions, SessionHandle, TurnHandle } from './api.ts';
 import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.ts';
 import { effectiveText } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
-import { modelRequest } from './narrate.ts';
+import { firstRoundLast, modelRequest, roundFields } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
 import { buildRequest, maxTokensFor } from './request.ts';
 import { TurnRun, type EventBody, type TurnHost } from './turn.ts';
@@ -30,6 +34,7 @@ import {
   type Entry,
   type EntryInput,
   type EntryKind,
+  type MemOp,
   type SessionConfig,
   type SessionHeader,
   type Trace,
@@ -170,6 +175,64 @@ function historyChangedSince(entries: readonly Entry[], tree: TreeIndex, header:
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
+ * The path messages the head answer's request sent (§7.5 "(in context)"): every visible path
+ * message before the head outside the budget's cut (its trace.trimmed {from, to}; a continue's own
+ * trace when it has one). null when unknown: the head is not an answer with a trace, or the cut
+ * names messages that are no longer on the path.
+ */
+export function sentByHeadRequest(view: PathView, tree: TreeIndex): ReadonlySet<string> | null {
+  const head = view.path.at(-1);
+  if (!head || head.role !== 'assistant') return null;
+  let trace = tree.msgs.get(head.id)?.trace;
+  for (const e of tree.edits.get(head.id) ?? []) if (e.reason === 'continue' && e.trace) trace = e.trace;
+  if (!trace) return null;
+  const before = view.path.slice(0, -1);
+  const trimmed: unknown = trace.trimmed;
+  let cut: [number, number] | null = null;
+  if (trimmed !== null) {
+    if (!isObject(trimmed)) return null;
+    const from = before.findIndex((m) => m.id === trimmed.from);
+    const to = before.findIndex((m) => m.id === trimmed.to);
+    if (from < 0 || to < 0) return null;
+    cut = [Math.min(from, to), Math.max(from, to)];
+  }
+  const sent = new Set<string>();
+  before.forEach((m, i) => {
+    if (m.hidden || (cut && i >= cut[0] && i <= cut[1])) return;
+    sent.add(m.id);
+  });
+  return sent;
+}
+
+/** A note title as stored: trimmed; refused when it has no letter or digit (its key would be empty). */
+function noteTitle(v: unknown): string {
+  if (typeof v !== 'string') throw new Refusal('invalid_params', 'title must be a string');
+  const title = v.trim();
+  if (normalizeName(title) === '') throw new Refusal('invalid_params', 'a note title needs at least one letter or digit');
+  return title;
+}
+
+/** A note's text as stored: trimmed, never empty. */
+function noteContent(v: unknown): string {
+  if (typeof v !== 'string') throw new Refusal('invalid_params', 'content must be a string');
+  const content = v.trim();
+  if (content === '') throw new Refusal('invalid_params', 'a note needs some text');
+  return content;
+}
+
+/** Lore keys as stored: trimmed, blanks dropped, duplicates dropped (first kept). undefined when absent. */
+function noteKeys(v: unknown): string[] | undefined {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || !v.every((k) => typeof k === 'string')) throw new Refusal('invalid_params', 'keys must be an array of strings');
+  const keys: string[] = [];
+  for (const k of v as string[]) {
+    const key = k.trim();
+    if (key !== '' && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+/**
  * A new session's first entries: the card greetings (identity macros expanded; blank ones skipped,
  * there is nothing to show) as sibling roots, then a `head` back on greeting 0, since each msg moves
  * the head onto itself (§5.5).
@@ -215,8 +278,10 @@ function greetingEntries(ctx: EngineCtx, header: SessionHeader, now: string): En
 export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   readonly id: string;
   private ver: number;
-  private treeCache: { version: number; idx: TreeIndex } | null = null;
-  private viewCache: { version: number; view: PathView } | null = null;
+  /** seq of the newest mem row: mem rows change the Compendium but not the version (§5.8 "Стоимость"). */
+  private memSeq: number;
+  private treeCache: { version: number; memSeq: number; idx: TreeIndex } | null = null;
+  private viewCache: { version: number; memSeq: number; view: PathView } | null = null;
   private config: SessionConfig;
   private running: TurnRun | null = null;
   /** Turns left open with a `held` answer (M6 decides them); new turns are refused meanwhile. */
@@ -238,7 +303,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   ) {
     this.id = log.id;
     const entries = log.entries();
-    this.ver = buildTree(entries).version;
+    const tree = buildTree(entries);
+    this.ver = tree.version;
+    this.memSeq = tree.lastMemSeq;
     this.config = currentConfig(log.header, entries);
     for (const e of entries) if (e.t === 'turn') this.turnIds.add(e.turn);
   }
@@ -320,7 +387,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
 
   append<T extends EntryInput>(input: T, opts?: { durable?: boolean }): T & { seq: number } {
     const e = this.log.append(input, opts);
-    if (VERSIONED_KINDS.has((e as { t: EntryKind }).t)) this.ver = e.seq;
+    const t = (e as { t: EntryKind }).t;
+    if (VERSIONED_KINDS.has(t)) this.ver = e.seq;
+    else if (t === 'mem') this.memSeq = e.seq;
     return e;
   }
 
@@ -347,9 +416,12 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   }
 
   tree(): TreeIndex {
-    // Only versioned entries change the tree, so the version is a complete cache key.
-    if (this.treeCache?.version !== this.ver) this.treeCache = { version: this.ver, idx: buildTree(this.log.entries()) };
-    return this.treeCache.idx;
+    // Versioned entries change the tree and mem rows its `mems`: (version, memSeq) is a complete key.
+    const c = this.treeCache;
+    if (c?.version === this.ver && c.memSeq === this.memSeq) return c.idx;
+    const idx = buildTree(this.log.entries());
+    this.treeCache = { version: this.ver, memSeq: this.memSeq, idx };
+    return idx;
   }
 
   firstNotice(code: string): boolean {
@@ -373,10 +445,12 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   }
 
   view(): PathView {
-    if (this.viewCache?.version !== this.ver) {
-      this.viewCache = { version: this.ver, view: foldView(this.log.header, this.log.entries(), this.tree()) };
-    }
-    return this.viewCache.view;
+    // Cached like the tree: a mem row (a note) changes view().compendium without a new version.
+    const c = this.viewCache;
+    if (c?.version === this.ver && c.memSeq === this.memSeq) return c.view;
+    const view = foldView(this.log.header, this.log.entries(), this.tree());
+    this.viewCache = { version: this.ver, memSeq: this.memSeq, view };
+    return view;
   }
 
   busy(): boolean {
@@ -617,6 +691,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       // M4: the Director's stub directive goes here; the Director is never called by a preview.
       placements: [],
       ...(explain ? { explain: true } : {}),
+      ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
     });
     if (!built.ok) {
       // A shape failure is the request failing to build, as assemble's own.
@@ -631,7 +706,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       keys.add(n.key);
       notices.push(n.notice);
     }
-    const sent = traceForSent(built.asm.trace, built.shaped.messages, built.shaped.prefill);
+    const native = built.tools?.transport === 'native' ? built.tools.specs : undefined;
+    const sent = traceForSent(built.asm.trace, built.shaped.messages, built.shaped.prefill, native);
     if (past && opts.turn !== undefined) {
       const answer = tree.msgs.get(opts.turn)!;
       const was = answer.gen;
@@ -684,20 +760,23 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const notSent = Object.keys(samplers).filter((k) => (samplers as Record<string, unknown>)[k] !== undefined && (spec.fixed === true || !spec.accepted.includes(k)));
     if (notSent.length > 0) out.samplersNotSent = notSent;
 
-    // The HTTP body the primary connection would send (no headers: they carry the key).
+    // The HTTP body the primary connection would send (no headers: they carry the key): round 0 of
+    // the turn, its tools, tool_choice, stop list and reasoning setting included (M3).
     const provider = primary.conn.provider;
     if (provider.wire) {
+      const reasoning = plan.binding.reasoning;
       const req = modelRequest(
         {
           conn: primary.conn,
           model: primary.model,
           caps: primary.caps,
           messages: shaped.messages,
-          ...(shaped.prefill !== undefined ? { prefill: shaped.prefill } : {}),
+          ...(shaped.prefill !== undefined && built.tools === null ? { prefill: shaped.prefill } : {}),
           maxTokens,
           samplers,
-          ...(plan.binding.reasoning ? { reasoning: plan.binding.reasoning } : {}),
+          ...(reasoning ? { reasoning } : {}),
           callKey: 'preview:narrator:0',
+          ...roundFields(built.tools, primary.caps, samplers, firstRoundLast(built.tools, plan.maxRounds)),
         },
         new AbortController().signal,
       );
@@ -797,5 +876,119 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const ev = this.stamp(body);
     this.opened.push(ev);
     this.ctx.bus.publish(ev);
+  }
+
+  // ---- M3: history search and notes (§7.5, §5.8) ----------------------------------------------------
+
+  /**
+   * §7.5 /search: the narrator's search_history over the current path (read-only, also while a turn
+   * runs). A hit is "in context" when the head answer's request sent it; unknown counts as not.
+   */
+  search(input: { query: string; before?: number; limit?: number }): HistorySearch {
+    this.assertOpen();
+    if (!isObject(input) || typeof input.query !== 'string') throw new Refusal('invalid_params', 'search needs {query}');
+    const { before, limit } = input;
+    if (before !== undefined && !(Number.isSafeInteger(before) && before >= 1)) throw new Refusal('invalid_params', 'before must be a positive integer');
+    if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= 1)) throw new Refusal('invalid_params', 'limit must be a positive integer');
+    const view = this.view();
+    const sent = sentByHeadRequest(view, this.tree());
+    const { character, persona } = this.log.header.cast;
+    return searchHistory(view, null, input.query, {
+      ...(before !== undefined ? { before } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      names: { char: character.name, user: persona?.name || 'User' },
+      inContext: (id) => sent?.has(id) === true,
+    });
+  }
+
+  notes(): CEntry[] {
+    this.assertOpen();
+    return noteRefs(this.view().compendium).map((r) => r.entry);
+  }
+
+  memoryAdd(input: { title: string; keys?: string[]; content: string }): { key: string } {
+    this.guardMemory();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryAdd needs {title, content}');
+    const title = noteTitle(input.title);
+    const content = noteContent(input.content);
+    const keys = noteKeys(input.keys) ?? [];
+    const row = this.memAppend({ op: 'note', title, keys: keys.length > 0 ? keys : [title], content });
+    // The fold names the note (its key may carry '#2' when the title's key is taken).
+    let note: CEntry | undefined;
+    for (const e of this.view().compendium.entries.values()) if (e.prov.createdSeq === row.seq) note = e;
+    if (!note) throw new Error(`the note written at seq ${row.seq} did not fold`);
+    this.publishMemory('note', note);
+    return { key: note.key };
+  }
+
+  memoryEdit(input: { ref: string; title?: string; keys?: string[]; content?: string }): { key: string } {
+    this.guardMemory();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryEdit needs {ref}');
+    const title = input.title === undefined ? undefined : noteTitle(input.title);
+    const content = input.content === undefined ? undefined : noteContent(input.content);
+    const keys = noteKeys(input.keys);
+    if (title === undefined && content === undefined && keys === undefined) {
+      throw new Refusal('invalid_params', 'nothing to change: give a title, keys or content');
+    }
+    const note = this.findNote(input.ref, 'live');
+    const set: Record<string, unknown> = {};
+    if (title !== undefined) set.title = title;
+    if (content !== undefined) set.content = content;
+    // A rename without keys moves the key a keyless add derived from the title (stored keys exactly
+    // [old title]) to the new title, so the note fires on its new name; keys the user wrote stay.
+    const autoKey = keys === undefined && title !== undefined && title !== note.name && note.keys.length === 1 && note.keys[0] === note.name;
+    this.memAppend({
+      op: 'edit',
+      ref: note.key,
+      ...(Object.keys(set).length > 0 ? { set } : {}),
+      // Keys emptied by the trim fall back to the title, as on add.
+      ...(keys !== undefined ? { keys: keys.length > 0 ? keys : [title ?? note.name] } : autoKey ? { keys: [title] } : {}),
+    });
+    this.publishMemory('edited', this.view().compendium.entries.get(note.key) ?? note);
+    return { key: note.key };
+  }
+
+  memoryRetire(input: { ref: string; reason?: string }): { key: string } {
+    this.guardMemory();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryRetire needs {ref}');
+    if (input.reason !== undefined && typeof input.reason !== 'string') throw new Refusal('invalid_params', 'reason must be a string');
+    const note = this.findNote(input.ref, 'live');
+    if (note.retired) throw new Refusal('invalid_params', `the note ${JSON.stringify(note.name)} is already retired`);
+    this.memAppend({ op: 'retire', ref: note.key, reason: (input.reason ?? '').trim() });
+    this.publishMemory('retired', note);
+    return { key: note.key };
+  }
+
+  memoryRestore(input: { ref: string }): { key: string } {
+    this.guardMemory();
+    if (!isObject(input)) throw new Refusal('invalid_params', 'memoryRestore needs {ref}');
+    const note = this.findNote(input.ref, 'retired');
+    if (!note.retired) throw new Refusal('invalid_params', `the note ${JSON.stringify(note.name)} is not retired`);
+    this.memAppend({ op: 'restore', ref: note.key });
+    this.publishMemory('restored', note);
+    return { key: note.key };
+  }
+
+  /** The memory verbs' preconditions: an open session and no running turn. */
+  private guardMemory(): void {
+    this.assertOpen();
+    if (this.running) throw new Refusal('session_busy', 'a turn is running');
+  }
+
+  /** The note a ref names on the current path (C<n>, key or title, see resolveNoteRef), else not_found. */
+  private findNote(ref: unknown, prefer: 'live' | 'retired'): CEntry {
+    if (typeof ref !== 'string' || ref.trim() === '') throw new Refusal('invalid_params', 'ref must be a note handle (C<n>), key or title');
+    const note = resolveNoteRef(this.view().compendium, ref, prefer);
+    if (!note) throw new Refusal('not_found', `no single note matches ${JSON.stringify(ref)} (use its C<n> handle or key)`);
+    return note;
+  }
+
+  /** One durable human mem row with one op (§5.8, decision F1); the version does not move. */
+  private memAppend(op: MemOp): { seq: number } {
+    return this.verbAppend({ t: 'mem', ts: this.now(), key: null, on: null, by: 'user', ops: [op] });
+  }
+
+  private publishMemory(change: 'note' | 'edited' | 'retired' | 'restored', note: CEntry): void {
+    this.publish({ type: 'memory', change, ref: note.key, kind: 'note', name: note.name, by: 'user' });
   }
 }

@@ -13,11 +13,14 @@ import type { PreviewResult, RefusalCode } from '../engine/api.ts';
 import type { ImportWarning } from '../formats/native.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import { entryLabel } from '../lore/engine.ts';
-import type { PromptMsg } from '../providers/types.ts';
+import type { ModelCaps, PromptMsg } from '../providers/types.ts';
+import type { CEntry } from '../agents/compendium/types.ts';
+import { NOTES_SCAN_DEPTH, noteText } from '../agents/compendium/notes.ts';
+import type { HistorySearch } from '../tools/builtin/history.ts';
 import { estimateMessage } from '../prompt/tokens.ts';
-import type { Generation, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
+import type { Generation, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
-import { markers, messageText } from './render.ts';
+import { markers, messageText, toolLine } from './render.ts';
 import type { BookRow } from './refs.ts';
 import type { TailRow, UsageSummary } from './repl-journal.ts';
 
@@ -173,8 +176,12 @@ export function prefix(label: string, style: Style): string {
   return `${style.bold(label)} › `;
 }
 
-/** Status items of a message: "swipe 2/3", tokens, seconds, finish ("greeting 1/2" for a greeting). */
-export function statusItems(m: MessageView): string[] {
+/**
+ * Status items of a message: "swipe 2/3", tokens, seconds, finish ("greeting 1/2" for a greeting).
+ * `trace`: the answer's own trace, when the caller has it: 'tools: off (prefill)' when the preset's
+ * prefill turned the narrator's tools off for it (D-28, M3).
+ */
+export function statusItems(m: MessageView, trace?: Pick<Trace, 'prefill'>): string[] {
   if (m.gen?.kind === 'greeting') return [`greeting ${m.swipe.index + 1}/${m.swipe.count}`];
   const items = [`swipe ${m.swipe.index + 1}/${m.swipe.count}`];
   const g = m.gen;
@@ -184,13 +191,14 @@ export function statusItems(m: MessageView): string[] {
   if (g?.finish) items.push(g.finish);
   if (m.edited) items.push('edited');
   if (m.hidden) items.push('hidden');
+  if (trace?.prefill === 'tools_off') items.push('tools: off (prefill)');
   return items;
 }
 
 /** The dim line after an answer: "[swipe 1/1 · 386 tok · 7.9s · end]   /r swipe  /c continue  /e edit". */
-export function statusLine(m: MessageView, style: Style): string {
+export function statusLine(m: MessageView, style: Style, trace?: Pick<Trace, 'prefill'>): string {
   const hints = m.gen?.kind === 'greeting' ? (m.swipe.count > 1 ? '/r next greeting  /[ /] browse' : '') : '/r swipe  /c continue  /e edit';
-  return style.dim(`  [${statusItems(m).join(' · ')}]${hints ? `   ${hints}` : ''}`);
+  return style.dim(`  [${statusItems(m, trace).join(' · ')}]${hints ? `   ${hints}` : ''}`);
 }
 
 /** A whole message as the story shows it: "Mira › *text*" (user messages under the user label). */
@@ -219,12 +227,9 @@ const brief = (v: unknown, max = 40): string => {
 /** The one dim line a tool, agent, director, memory or retry event deserves (null: nothing to say). */
 export function sideLine(ev: Event): string | null {
   switch (ev.type) {
-    case 'tool': {
-      if (ev.phase !== 'done') return null;
-      const args = brief(ev.args);
-      const result = ev.summary ?? (ev.ok === false ? 'failed' : 'ok');
-      return `⋯ ${ev.name}${args ? ` ${args}` : ''} → ${result}`;
-    }
+    case 'tool':
+      // One line per finished call, whatever round it came from (render.ts, shared with `send`).
+      return toolLine(ev);
     case 'director':
       if (ev.status === 'planning') return null;
       return `⋯ director: ${ev.status}${ev.summary ? ` — ${brief(ev.summary, 60)}` : ev.reason ? ` (${ev.reason})` : ''}`;
@@ -272,6 +277,8 @@ export class TurnPrinter {
   private prefixed = false;
   private streamed = false;
   private reasoning: { show: boolean; chars: number } | null = null;
+  /** A side line (a tool call) interrupted the answer's text; the next round's separator is not shown. */
+  private afterSide = false;
   /** A msg/edit was committed during the turn (a failure with onError 'keep' still saved the answer). */
   kept = false;
 
@@ -294,13 +301,20 @@ export class TurnPrinter {
         this.reasoning.chars += ev.delta.length;
         if (this.reasoning.show) screen.write(style.dim(ev.delta.replace(/\n/g, '\n    ')));
         return;
-      case 'text':
-        if (ev.delta === '') return;
+      case 'text': {
+        let delta = ev.delta;
+        // D-55: the text of a round after tool calls starts with one "\n" when the answer so far
+        // ends mid-line. The side line already broke the line, so the screen drops it (the stored
+        // answer keeps it).
+        if (this.afterSide && delta.startsWith('\n')) delta = delta.slice(1);
+        if (delta === '') return;
+        this.afterSide = false;
         this.endReasoning();
         this.openText();
-        screen.write(this.prose.push(ev.delta));
+        screen.write(this.prose.push(delta));
         this.streamed = true;
         return;
+      }
       case 'changed':
         if (ev.change === 'msg' || ev.change === 'edit') this.kept = true;
         return;
@@ -338,6 +352,7 @@ export class TurnPrinter {
         const side = sideLine(ev);
         if (side === null) return;
         this.endReasoning();
+        if (this.prefixed) this.afterSide = true;
         this.closeText();
         screen.line(style.dim(`  ${side}`));
       }
@@ -403,10 +418,16 @@ export function lastWords(text: string, max = 40): string {
 
 // ---- command reports ------------------------------------------------------------------------------------
 
+/** The banner's tools word for a caps.tools value (M3): native, prompted, or off ('none' or unknown caps). */
+export function toolsWord(tools: ModelCaps['tools'] | null | undefined): 'native' | 'prompted' | 'off' {
+  return tools === 'native' || tools === 'prompted' ? tools : 'off';
+}
+
 /**
- * The banner line: "session s_4fa2 · Mira · narrator local:qwen3-14b (tools: off) · ctx 16384".
- * With the model's window unknown, `cap` (the preset's or the session's own limit) still bounds it:
- * "ctx ≤4095"; with neither, "ctx ?".
+ * The banner line: "session s_4fa2 · Mira · narrator local:qwen3-14b (tools: prompted) · ctx 16384".
+ * `tools` is the narrator route's caps.tools (off for 'none' or caps nobody knows). With the model's
+ * window unknown, `cap` (the preset's or the session's own limit) still bounds it: "ctx ≤4095"; with
+ * neither, "ctx ?".
  */
 export function bannerLine(
   header: Pick<SessionHeader, 'id' | 'title'>,
@@ -414,10 +435,11 @@ export function bannerLine(
   window: number | null,
   style: Style,
   cap?: number,
+  tools?: ModelCaps['tools'] | null,
 ): string {
   const title = header.title ?? '(untitled)';
   const ctx = window !== null ? String(window) : cap !== undefined && cap > 0 ? `≤${cap}` : '?';
-  return style.bold(`session ${header.id} · ${title} · narrator ${narrator.conn}:${narrator.model} (tools: off) · ctx ${ctx}`);
+  return style.bold(`session ${header.id} · ${title} · narrator ${narrator.conn}:${narrator.model} (tools: ${toolsWord(tools)}) · ctx ${ctx}`);
 }
 
 /** /show: the active path, numbered from 1 (the numbers /e, /hide, /rewind and /fork take). */
@@ -545,8 +567,48 @@ export function renderTrace(
   ];
   lines.push(...loreTraceLines(tr, titles), ...after);
   if (tr.calls.length > 0) lines.push(`  calls: ${tr.calls.map((c) => `${c.agent} ${c.model} ${(c.ms / 1000).toFixed(1)}s`).join(', ')}`);
+  lines.push(...toolTraceLines(tr));
   if (tr.partial) lines.push('  (partial: recovered after an interruption)');
   return lines.join('\n');
+}
+
+/** Why a tool loop stopped calling tools (Trace.rounds.ended), in a few words. */
+const ENDED: Readonly<Record<NonNullable<Trace['rounds']>['ended'], string>> = {
+  answer: 'answer',
+  max_rounds: 'max_rounds (the round limit)',
+  ceiling: 'ceiling (the model call limit of a turn)',
+  guard: 'guard (the same call kept coming back)',
+  room: 'room (the tool room ran out)',
+  stopped: 'stopped',
+  error: 'error',
+};
+
+/** One Trace.tools row: "round 1 · search_history · ok · 412 chars · cut". */
+function toolRowText(t: ToolTraceRow): string {
+  const parts = [`round ${t.round}`, t.name, t.refused !== undefined ? `refused: ${t.refused}` : t.ok ? 'ok' : 'error'];
+  if (t.repaired && t.repaired.length > 0) parts.push(`repaired: ${t.repaired.join(', ')}`);
+  if (t.chars !== undefined) parts.push(plural(t.chars, 'char'));
+  if (t.cut) parts.push('cut');
+  return parts.join(' · ');
+}
+
+/**
+ * /trace (M3): the narrator's tool loop — model calls, transport, why it stopped, the tool room
+ * used of what assemble reserved — then one line per tool call. Nothing for a turn without tools.
+ */
+export function toolTraceLines(tr: Pick<Trace, 'rounds' | 'tools'>): string[] {
+  const out: string[] = [];
+  const r = tr.rounds;
+  if (r) {
+    const used = Math.max(0, r.room - r.roomLeft);
+    out.push(`  rounds: ${r.n} · ${r.transport} tools · ended: ${ENDED[r.ended] ?? r.ended} · tool room ${used} of ${r.room} tok used`);
+  }
+  const rows = tr.tools ?? [];
+  if (rows.length > 0) {
+    out.push(`  tool calls: ${rows.length}`);
+    for (const t of rows) out.push(`    ${toolRowText(t)}`);
+  }
+  return out;
 }
 
 /** /sessions: newest first, the open one marked. */
@@ -810,11 +872,27 @@ const samplerText = (s: Record<string, unknown>): string => {
 };
 
 /**
- * /preview and `rp-core preview`: kind and model, then every message numbered with its role, its
- * source and its token count, followed by its full text; then prefill, max tokens, samplers, tools,
- * the lore lines and the notices.
+ * The tools line of a preview (M3): the tools the request offers and how (`transport`: the primary
+ * route's caps.tools, when the caller knows it); 'off (prefill)' when the preset's prefill turned
+ * them off (D-28); else none.
  */
-export function renderPreview(r: Extract<PreviewResult, { ok: true }>, style: Style, titles?: ReadonlyMap<string, string>): string {
+export function previewToolsText(r: Pick<Extract<PreviewResult, { ok: true }>, 'tools' | 'trace'>, transport?: ModelCaps['tools'] | null): string {
+  if (r.tools.length === 0) return r.trace.prefill === 'tools_off' ? "off (prefill): the preset's prefill wins this turn (prefill_vs_tools)" : 'none';
+  const how = transport === 'native' || transport === 'prompted' ? ` (${transport})` : '';
+  return `${r.tools.map((t) => t.name).join(', ')}${how}`;
+}
+
+/**
+ * /preview and `rp-core preview`: kind and model, then every message numbered with its role, its
+ * source and its token count, followed by its full text (M3: the core:tools block is one of them);
+ * then prefill, max tokens, samplers, tools, the lore lines and the notices.
+ */
+export function renderPreview(
+  r: Extract<PreviewResult, { ok: true }>,
+  style: Style,
+  titles?: ReadonlyMap<string, string>,
+  transport?: ModelCaps['tools'] | null,
+): string {
   const tr = r.trace;
   const counter = tr.tokens.counter ? ` (${tr.tokens.counter})` : '';
   const lines = [
@@ -836,7 +914,7 @@ export function renderPreview(r: Extract<PreviewResult, { ok: true }>, style: St
   const sent = Object.fromEntries(Object.entries(r.samplers).filter(([k]) => !dropped.has(k)));
   lines.push(`prefill: ${r.prefill === null ? 'none' : JSON.stringify(r.prefill)} · max tokens ${r.maxTokens} · samplers: ${samplerText(sent)}`);
   if (dropped.size > 0) lines.push(`not sent by this connection: ${[...dropped].join(', ')}`);
-  lines.push(`tools: ${r.tools.length === 0 ? 'none' : r.tools.map((t) => t.name).join(', ')}`);
+  lines.push(`tools: ${previewToolsText(r, transport)}`);
   lines.push(...loreTraceLines(tr, titles));
   for (const n of r.notices) lines.push(style.yellow(noticeText(n)));
   return lines.join('\n');
@@ -851,4 +929,61 @@ export function renderWire(wire: { url: string; body: unknown }): string {
 export function previewFailureText(r: Extract<PreviewResult, { ok: false }>): string {
   const human = (REFUSAL_TEXT as Partial<Record<string, string>>)[r.code];
   return `preview refused [${r.code}]: ${human ?? r.message}${human && r.message && r.message !== r.code && !human.includes(r.message) ? ` (${r.message})` : ''}`;
+}
+
+// ---- notes and search (M3) ----------------------------------------------------------------------
+
+/** A note's text on one line, cut to `max` characters. */
+const gist = (s: string, max = 60): string => {
+  const flat = s.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/** A note's lore keys as the notes book reads them (a note without keys is keyed by its title). */
+const noteKeys = (e: CEntry): string[] => {
+  const keys = e.keys.filter((k) => k.trim() !== '');
+  return keys.length > 0 ? keys : [e.name];
+};
+
+/**
+ * /memory (decision F6): the notes of this path in creation order, each with its handle:
+ * "C1  Brother — Mira's brother Yan sails the north road · keys: Yan, brother"; a retired one dimmed.
+ */
+export function renderNoteList(rows: readonly { ref: string; entry: CEntry }[], style: Style): string {
+  if (rows.length === 0) return 'no notes on this path yet: /memory add <title> | <keys> | <text> writes one';
+  const width = Math.max(...rows.map((r) => r.ref.length));
+  const live = rows.filter((r) => !r.entry.retired).length;
+  const lines = [`notes on this path: ${live} live${rows.length > live ? `, ${rows.length - live} retired` : ''} (/memory show <ref> prints one)`];
+  for (const { ref, entry: e } of rows) {
+    const parts = [`${e.name} — ${gist(e.content ?? '')}`, `keys: ${noteKeys(e).join(', ')}`];
+    if (e.retired) parts.push(`retired${e.retired.reason ? ` (${e.retired.reason})` : ''}`);
+    const line = `  ${ref.padEnd(width)}  ${parts.join(' · ')}`;
+    lines.push(e.retired ? style.dim(line) : line);
+  }
+  return lines.join('\n');
+}
+
+/** /memory show <ref>: the note, its keys, where it came from, and the text a turn sends when it fires. */
+export function renderNoteCard(ref: string, e: CEntry): string {
+  const lines = [`${ref} ${e.name} · ${e.key}`, `  keys: ${noteKeys(e).join(', ')}`];
+  const changed = e.prov.lastSeq !== e.prov.createdSeq ? `; last changed at row ${e.prov.lastSeq}` : '';
+  lines.push(`  written by you at journal row ${e.prov.createdSeq}${changed}`);
+  if (e.retired) {
+    lines.push(`  retired${e.retired.reason ? `: ${e.retired.reason}` : ''} (it does not fire; /memory restore ${ref} brings it back)`);
+  } else {
+    lines.push(`  sent when one of its keys comes up in the last ${NOTES_SCAN_DEPTH} messages, as:`);
+  }
+  for (const l of noteText(e.name, e.content ?? '').split('\n')) lines.push(`    ${l}`);
+  return lines.join('\n');
+}
+
+/**
+ * /search (§7.5): the hits as search_history gives them to the narrator — `#n speaker: snippet`,
+ * ' (in context)' when the last request sent that message — newest first, then the next page's command.
+ */
+export function renderSearch(query: string, r: HistorySearch, before: number | undefined, style: Style): string {
+  if (r.hits.length === 0) return style.dim(before !== undefined ? `no messages before #${before} match` : 'no messages match');
+  const lines = r.hits.map((h) => `#${h.n} ${h.speaker}: ${h.snippet}${h.inContext ? ' (in context)' : ''}`);
+  if (r.nextBefore !== null) lines.push(style.dim(`(older matches: /search ${query} before=${r.nextBefore})`));
+  return lines.join('\n');
 }

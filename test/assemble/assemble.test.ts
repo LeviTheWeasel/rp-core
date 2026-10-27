@@ -236,7 +236,7 @@ describe('chat area', () => {
     expect(r.trace.macros.unknown).toEqual([]);
   });
 
-  test('only text blocks are rendered (D-16): reasoning and tool rounds never reach the prompt', () => {
+  test('only text blocks are rendered (D-16), joined as one text block per message (C4)', () => {
     const tooly = m('a1', 'assistant', '', {
       blocks: [
         { k: 'reasoning', text: 'secret thoughts' },
@@ -253,10 +253,7 @@ describe('chat area', () => {
       [{ k: 'text', text: 'G' }],
       [{ k: 'text', text: 'U0' }],
       [{ k: 'text', text: 'U1' }],
-      [
-        { k: 'text', text: 'Let me look.' },
-        { k: 'text', text: ' Found it.' },
-      ],
+      [{ k: 'text', text: 'Let me look. Found it.' }],
       [{ k: 'text', text: 'U2' }],
     ]);
   });

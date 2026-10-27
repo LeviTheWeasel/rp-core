@@ -4,11 +4,13 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M2**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+- **Status:** milestone **M3**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
   koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
-  and lorebooks.
-- **Built with:** TypeScript on [Bun](https://bun.sh), with two small runtime dependencies:
-  `re2js` (regex lorebook keys) and `gpt-tokenizer` (token counts).
+  and lorebooks. The narrator can search the story and the lore before it answers, and you can give
+  it notes to remember.
+- **Built with:** TypeScript on [Bun](https://bun.sh), with three small runtime dependencies:
+  `re2js` (regex lorebook keys), `gpt-tokenizer` (token counts) and `jsonrepair` (broken tool-call
+  arguments).
 - **Licence:** AGPL-3.0-or-later.
 - **Design:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (in Russian).
 
@@ -21,18 +23,21 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 5. [Playing in the chat](#playing-in-the-chat)
 6. [Editing messages and choosing an editor](#editing-messages-and-choosing-an-editor)
 7. [Presets and lorebooks](#presets-and-lorebooks)
-8. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-9. [config.toml reference](#configtoml-reference)
-10. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-11. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-12. [Where your data lives](#where-your-data-lives)
-13. [Troubleshooting](#troubleshooting)
-14. [Command reference](#command-reference)
-15. [Development](#development)
+8. [Tools and search](#tools-and-search)
+9. [Notes](#notes)
+10. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+11. [Active probes](#active-probes)
+12. [config.toml reference](#configtoml-reference)
+13. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+14. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+15. [Where your data lives](#where-your-data-lives)
+16. [Troubleshooting](#troubleshooting)
+17. [Command reference](#command-reference)
+18. [Development](#development)
 
 ## What works today
 
-**Works now (M2):**
+**Works now (M3):**
 
 | Area | What you get |
 |---|---|
@@ -42,16 +47,16 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Chat | A streaming chat in the terminal |
 | Story tree | Swipes and guided re-rolls, continue, edit, hide, rewind, branches (tails) and forks |
 | Models | Switch the model in the middle of a session (`/model`) |
-| Notes | Author's note |
+| Tools and search | The narrator looks up earlier messages and lore before it answers, with the server's own tool calling or with calls written as text; `/search` runs the same search for you |
+| Notes | Author's note; your own notes for the narrator (`/memory add`), sent when their keys come up |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
-| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not; `/preview` prints the exact request before it is sent; `/lore test` explains every lore entry; `/usage` shows tokens and cost |
+| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, and the tool rounds; `/preview` prints the exact request before it is sent; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
 | Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls |
 
 **Not yet:**
 
 | Milestone | Arrives |
 |---|---|
-| M3 | Tools and history search |
 | M4 | The Story Director |
 | M5 | The Compendium (memory) |
 | M6 | `--stdio` for other UIs |
@@ -61,8 +66,8 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
 You need **Bun 1.3 or newer** and this repository.
 
-**1. Install the dependencies.** This fetches the two runtime dependencies (`re2js`,
-`gpt-tokenizer`) and the dev tools for tests and the typecheck.
+**1. Install the dependencies.** This fetches the three runtime dependencies (`re2js`,
+`gpt-tokenizer`, `jsonrepair`) and the dev tools for tests and the typecheck.
 
 ```bash
 cd ~/Documents/AI/rp-core
@@ -242,7 +247,8 @@ rp-core probe "ollama:magmell-16k:latest"
 - the capabilities rp-core will use: `context 16384`, how prompts are shaped, and which sampler
   fields are sent.
 
-`--write` stores what the server said in `~/.rp-core/caps-cache.json` for later turns.
+`--write` stores what the server said in `~/.rp-core/caps-cache.json` for later turns. With
+`--active` it also tries the model itself: whether it calls tools; see [Active probes](#active-probes).
 
 **First-answer latency.** The first answer after Ollama loads a model takes a few seconds while the
 model loads. Later answers start in well under a second, because Ollama keeps the prompt cached.
@@ -271,16 +277,21 @@ rp-core new --card <file or library id> [--model conn:model] [--preset <id or fi
 ### What you see
 
 ```
-session s_4c55fe7e · Maren Vell · narrator ollama:magmell-16k:latest (tools: off) · ctx 16384
+session s_4c55fe7e · Maren Vell · narrator ollama:magmell-16k:latest (tools: prompted) · ctx 16384
 Maren Vell › *The chest sat in the middle of the flooded nave…*
   [greeting 1/7]   /r next greeting  /[ /] browse
 you        › "I'm not Corvin," I say and step closer.
+  ⋯ search_history "Corvin" → 2 hits
 Maren Vell › …
   [swipe 1/1 · 312 tok · 5.8s · end]   /r swipe  /c continue  /e edit
 ```
 
+- **Banner.** The session, the character, the narrator's model, whether it can use tools
+  (`native`, `prompted` or `off`; see [Tools and search](#tools-and-search)) and its context window.
 - **Status line.** After every answer: which version of the answer you are looking at, its length,
   the time it took, and why it ended. `length` means it hit the token cap; `/c` continues it.
+  `tools: off (prefill)` means the preset's prefill switched the tools off for that answer.
+- **Tool calls.** Each lookup the narrator made is one dim line before the text it led to.
 - **Actions.** `*actions*` are shown in italics.
 - **Reasoning.** A model's reasoning is folded to one dim line; `/think show` unfolds it.
 
@@ -307,7 +318,10 @@ Maren Vell › …
 | `/lore test <text>` | Which lore entries a message would wake, and why; nothing is sent |
 | `/preview [n] [--wire] [--verdicts]` | The exact request of the next answer (or of answer *n*), without sending it; `--verdicts` adds the lore test |
 | `/usage` | Tokens and cost of the current path (cost needs `[prices]` or a server that reports it) |
-| `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not |
+| `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, the tool rounds and calls |
+| `/search <words> [before=n]` | Find earlier messages of this path, newest first ([details](#tools-and-search)) |
+| `/memory`, `/memory show\|add\|edit\|retire\|restore` | Your notes for the narrator ([details](#notes)) |
+| `/probe --active [--write]` | Test the narrator's model with a few tiny calls ([details](#active-probes)) |
 | `/sessions`, `/open <id>` | List sessions, switch to one |
 | `/help`, `/quit` | Help, leave |
 
@@ -565,6 +579,177 @@ their own line.
   a probability below 100 % can come out differently in the next `send`. Inside the chat, `/preview`
   and `/lore test` use the next answer's seed.
 
+## Tools and search
+
+The narrator can look things up before it writes. It has four tools, and all of them only read:
+
+| Tool | What it does |
+|---|---|
+| `search_history` | Finds earlier messages of this story by words, newest first |
+| `read_history` | Reads earlier messages in full, by their numbers (`#1` is the greeting) |
+| `search_lore` | Finds lorebook entries and your [notes](#notes) by words |
+| `read_lore` | Reads those entries in full |
+
+- **Offered only when they can help.** The history tools come when the story no longer fits the
+  window and its oldest messages were left out; the lore tools when a lorebook entry or a note did
+  not fire for this answer. A short story whose lore is all in the prompt gets no tools, and its
+  request is exactly what it would be without them. Continuing an answer (`/c`) never offers tools.
+- **Told what is hidden.** With the history tools comes a note where the left-out messages were
+  (`[Messages #2–#161 of this chat are not shown here. search_history finds what was said in them;
+  read_history shows them in full.]`) and, at the end of the request, a reminder to look a detail up
+  before writing. With prompted tools the reminder shows the call itself, on a line of its own:
+  `<tool_call>{"name": "search_history", "args": {"query": "one or two key words"}}</tool_call>`.
+- **Words, not meaning.** The search matches words and their roots, ignoring case: `караван` finds
+  `каравана` and `караваном`, `caravans` finds `caravan`. Every word must match. A few very common
+  words (`the`, `a`, `of`, `и`, `в`, `на`) are skipped. Quotes keep a phrase together: `"north road"`.
+- **Only this path.** Swipes you did not keep, other branches and hidden messages are never searched.
+
+### Native or prompted
+
+The banner says how the narrator calls its tools:
+
+```
+session s_4c55fe7e · Mira · narrator ollama:qwen3:14b (tools: native) · ctx 16384
+```
+
+- **`native`:** the server's own tool calling (the `tools` field of the OpenAI API). Hosted models,
+  llama.cpp started with `--jinja`, and Ollama models whose template knows tools.
+- **`prompted`:** the tools are described in the prompt, and the model writes its calls as
+  `<tool_call>{…}</tool_call>` lines of text. rp-core takes them out of the answer, runs them and
+  sends the results back. This works with any model that follows instructions well enough. A call
+  written with the tool's own name as the tag, `<search_history>брат</search_history>`, counts too:
+  small models reach for that form.
+- **`off`:** no tools.
+
+The value comes from what rp-core knows about the model. [`rp-core probe --active`](#active-probes)
+finds out by trying; `tools = "native"`, `"prompted"` or `"none"` under `[caps."conn:model"]` in
+`config.toml` sets it by hand and wins over any probe. A model that writes tool calls as text while
+set to `native` still works: those calls are recognised and run, and the markup never reaches the
+answer.
+
+Small local models often do not look anything up in a roleplay prompt, even when told to: in the M3
+demo and its reruns, Mag-Mell 12B (prompted) and gemma4:26b (native) answered from the visible chat,
+often with a made-up name ([`docs/M3-DEMO.md`](docs/M3-DEMO.md)). For local models the planned path
+is recall before the answer (M5), which does not wait for the model to ask.
+
+### Rounds
+
+One answer can take several calls to the model:
+
+1. The model asks for a lookup, or writes its answer straight away.
+2. rp-core runs the lookups and sends back the results. The model asks again or writes.
+3. The last round asks for text only. It comes after `max_rounds` rounds (`[narrator] max_rounds` in
+   `config.toml`, default 4, at most 8), when the same lookup keeps coming back, or when the room
+   for results runs out.
+
+An answer never takes more than 12 model calls, retries included. In the chat each lookup is one dim
+line, and the text after it continues the same answer:
+
+```
+you  › What became of the caravan?
+  ⋯ search_history "caravan" → 3 hits
+  ⋯ read_history from=41 to=44 → #41 to #44
+Mira › *She sets the glass down.* "It never reached the pass…"
+```
+
+- **The tool room.** When tools are offered, a quarter of the prompt's part of the window stays free
+  for their results, so the history is trimmed a little further. A result too long for what is left
+  is cut, and says so.
+- **Broken arguments.** Models sometimes write broken JSON. What can be repaired safely (a trailing
+  comma, a missing bracket) is repaired and noted in `/trace`; anything else goes back to the model as
+  an error that asks for one valid object. A missing value is never made up.
+- **A preset prefill.** A reply prefill (a preset that starts the answer with `*She`) and tools do
+  not mix. By default (`[narrator] prefill_vs_tools = "prefill"`) the prefill is sent and the tools
+  are off for that answer: the status line says `tools: off (prefill)`. With `"tools"` the prefill
+  is skipped instead.
+- **Ctrl+C** keeps what was written. Lookups that were still running are recorded as cancelled.
+- **DeepSeek's reasoners** want their own earlier reasoning back once tools are involved. Each
+  earlier answer is sent with the reasoning it was written with; one that has none (a greeting, an
+  answer from another model, one written with thinking off) is sent with a one-space placeholder
+  in its place. DeepSeek is expected to accept that, but it has not been tried against the live API
+  yet. If DeepSeek refuses such a request, a notice says how to turn the tools off for that model:
+  `tools = "none"` under `[caps."conn:model"]`.
+- **`rp-core send`** prints the same lookup lines on stderr; stdout stays the answer alone. With
+  `--json` they are `tool` events with the round they came from.
+
+### Searching yourself
+
+`/search` runs the same search as `search_history` and prints what the narrator would get:
+
+```
+you  › /search caravan
+#44 Mira: …the caravan never reached the pass; the snow came early that year… (in context)
+#41 Levi: Where did the caravan go after Tal Dara?
+… 8 more …
+(older matches: /search caravan before=12)
+```
+
+`#n` is the message's number on the path (as `read_history` counts, the greeting is `#1`), then who
+wrote it (the character, or your persona's name) and the words around the first match. `(in context)` means the last answer's prompt already
+held that message. Ten hits at a time, newest first; `before=n` shows the older ones.
+
+### What /trace and /preview show
+
+```
+trace of 7c1e09ab · ollama:qwen3:14b
+  window 16384 · reserve 1024 · prompt ~11840 tok · 31 messages sent
+  trimmed: 4f1a2b3c … 9e8d7c6b · prefill: none
+  …
+  calls: narrator ollama:qwen3:14b 3.1s, narrator ollama:qwen3:14b 2.4s
+  rounds: 2 · native tools · ended: answer · tool room 412 of 3840 tok used
+  tool calls: 1
+    round 0 · search_history · ok · 380 chars
+```
+
+- **`rounds`:** the model calls of the answer, how the tools were called, why the lookups stopped
+  (`answer`: the model wrote its answer; `max_rounds`; `ceiling`: 12 calls; `guard`: the same call
+  kept coming back; `room`: the tool room ran out; `stopped`; `error`), and how much of the tool room
+  the results took.
+- **One line per lookup:** its round, the tool, `ok`, `error` (the tool said what was wrong, for
+  example an unknown message number) or `refused` with the reason, the repairs made to its
+  arguments, the size of the result and `cut` when it was shortened.
+- **`/preview`** shows the `core:tools` message, which tells the narrator how to use its tools, like
+  any other message, and the tools line names them with the transport:
+  `tools: read_history, search_history (native)`.
+
+## Notes
+
+A note is something you want the narrator to keep in mind: a name, a promise, a place. It has a
+title, keys and a text, and works like a small lorebook entry that belongs to the story.
+
+```
+/memory add Brother | Yan, brother | Mira's brother Yan sails the north road and owes Levi a favour.
+```
+
+- **When it fires.** When one of its keys comes up in the last 4 messages, the narrator gets the note
+  4 messages from the end, as `[Memory: Brother]` followed by its text. Keys match by word roots
+  and ignore case (`брат` matches `брата` and `братом`). A note without keys is keyed by its title.
+- **Budget.** Notes count against the lore budget, like any lorebook entry; `/trace` lists a note
+  that fired with the rest of the lore.
+- **Found anyway.** A note that did not fire can still be found by the narrator: `search_lore`
+  searches notes too.
+- **Saved in the session.** Each change is one line in the session's journal: nothing is deleted,
+  and the story itself does not change (no new swipe, no new version). A change is refused while an
+  answer is being written.
+
+| Command | What it does |
+|---|---|
+| `/memory` | Your notes, oldest first, each with its handle (`C1`, `C2`, …), its text and its keys; retired ones dimmed |
+| `/memory show <ref>` | One note: its keys, when it was written and last changed, and the exact text the narrator gets |
+| `/memory add <title> \| <keys> \| <text>` | A new note. Keys are separated by commas and may be left empty |
+| `/memory edit <ref> <title> \| <keys> \| <text>` | Change a note. An empty part keeps the old value: `/memory edit C1 \| \| new text` changes only the text. The note keeps its handle and its `note:…` key when its title changes; a note without keys then fires on the new title |
+| `/memory retire <ref> [reason]` | The note stops firing and leaves the search. It stays in the journal |
+| `/memory restore <ref>` | A retired note comes back |
+
+`<ref>` is the handle from `/memory`, the note's key (`note:brother`) or its title. A title with
+spaces goes in quotes for `edit` and `retire`: `/memory retire "Old lighthouse" it burnt down`.
+
+The narrator sees the same handles: in a lookup line such as `⋯ read_lore ids=C3`, `C3` is the note
+that `/memory show C3` prints. Lorebook entries are numbered `L1`, `L2`, … for one answer only, in
+the order the narrator's searches found them; the next answer numbers them again. The
+rest of `/memory` (`tree`, `recall`, `export`, …) comes with the Compendium in M5, which will also
+write notes of its own.
+
 ## Other servers
 
 Every server that speaks the OpenAI Chat Completions API works through the `openai-chat` dialect.
@@ -612,6 +797,64 @@ Fields that look like keys (`api_key`, `token`, `password`, …) are refused. Ke
 files, events or output. Error messages are fixed sentences, and a server's own words are shown only
 with `--debug`, with keys and header values replaced by `[redacted]`.
 
+## Active probes
+
+`rp-core probe` asks a server what it has. With `--active` it also tries one model with a few tiny
+calls, and tells you what the model really does:
+
+```bash
+rp-core probe "ollama:magmell-16k:latest" --active
+```
+
+```
+ollama  http://127.0.0.1:11434  server: ollama
+  …
+  active probes (3 calls):
+    stream       ok      answered (finish stop); no reasoning seen; usage in the stream (stream_options sent) (86907 ms)
+    tools        not ok  refused: the server refused the request (HTTP 400) (372 ms)
+    json_schema  ok      the schema was enforced (486 ms)
+    note: this model's template has no tools (ollama show <model> lists its capabilities)
+  probe facts: tools prompted · structured json_schema (confirmed by probe)
+  to keep them in config.toml instead (the user wins over any probe):
+    [caps."ollama:magmell-16k:latest"]
+    tools = "prompted"
+    structured_output = "json_schema"
+  …
+```
+
+This model's Ollama template has no tools, so Ollama refuses the `tools` field and the model gets
+the `prompted` transport. Ollama is asked for usage with `stream_options` from the start, so there
+is no separate usage probe and no usage fact; the first call took 87 s because Ollama was loading
+the model. A model that calls the tool shows `tools ok native call …` and a `tools_result` line for
+the round trip.
+
+- **What it tries.** A one-word reply (does streaming work, how does token usage arrive), a question
+  with one tool offered (does the model call it, write the call as text, or does the server refuse
+  tools: `native`, `prompted` or a hint), and a reply under a JSON schema (does the server enforce
+  it).
+- **What it costs.** At most 6 calls with a fixed short prompt. A ping may write 96 tokens; the
+  tool call may write 1024 and the tool result and JSON replies 512, so that a model that thinks
+  before it answers has room to (never more than the model's own output limit). Only a thinking
+  model uses that room. A run writes at most about 3 300 tokens: a fraction of a cent for most
+  models, a few cents up to about 25 cents for a thinking model on a premium API. It is not free,
+  so `--active` takes one `connection:model`, never a whole server.
+- **Keeping the result.** Without `--write` nothing is stored: the report ends with the lines to
+  paste into `config.toml` if you want them. With `--write` the facts go to
+  `~/.rp-core/caps-cache.json` next to the catalog, and new sessions and chats use them. A later
+  plain `rp-core probe --write` keeps them. `[caps."conn:model"]` in `config.toml` always wins.
+- **Each line says `ok`, `not ok` or `inconclusive`.** `not ok` is an answer: the server refused,
+  the model wrote the call as text, or it ignored the schema. `inconclusive` means the probe learned
+  nothing: a timeout, a server error, or a model that was still thinking when its reply was cut
+  off. An inconclusive probe stores nothing and keeps what an earlier run stored. A server error
+  (HTTP 5xx) is asked once more before it counts: llama.cpp without `--jinja` answers the tools
+  field with HTTP 500 every time, an Ollama runner that crashed once does not. Ollama says "no
+  tools" with HTTP 400, so a 500 from Ollama stays inconclusive even twice. A probe the run had no
+  call left for (repeats count) says `not run`.
+- **In the chat.** `/probe --active` probes the narrator's model; `/probe --active --write` stores
+  the facts, which the chat picks up the next time you open it. Ctrl+C stops the probe, and nothing
+  is stored then.
+- **`--json`** adds an `active` object to each result: the calls, what each showed, and the facts.
+
 ## config.toml reference
 
 `rp-core init` writes a commented file with every option. In short:
@@ -620,7 +863,7 @@ with `--debug`, with keys and header values replaced by `[redacted]`.
 |---|---|
 | `[connections.<name>]` | One per server. Fields: `dialect` (`"openai-chat"`), `base_url`, `key_env`, `key_cmd`, `max_in_flight` (1–64), `local` (overrides the guess from the URL), `headers` (header name → *name of the env variable* holding its value), `extra_body` (fields added to every request; `model`, `messages`, `stream`, `tools`, `tool_choice` are protected), `exclude_body`. Names may hold letters, digits, `_` and `-`, never `:` |
 | `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, and `director`/`recorder`/`recall` (later milestones; they may say `"narrator"`). A session keeps its own copy; `/model` changes it there |
-| `[narrator]` | `max_rounds` (tool rounds, M3) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
+| `[narrator]` | `max_rounds` (rounds of lookups per answer, 1–8, default 4; see [Rounds](#rounds)) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
 | `[director]`, `[compendium]` | Reserved for M4 and M5 |
 | `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, … Override only after checking (`rp-core probe` shows the current values) |
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
@@ -651,8 +894,9 @@ rp-core send "$id" "Hello there"
 | `rp-core show "$id"` | The active path; safe to run while another process plays |
 | `rp-core preview "$id" --draft "Hi"` | The request a reply to "Hi" would send; nothing is sent |
 
-- **`--json`** prints events: `start`, then `text`… deltas, then `changed` and `done`, or `stopped` /
-  `failed`. These are the events a UI will consume.
+- **`--json`** prints events: `start`, then `text`… deltas (and `tool` events when the narrator looks
+  something up), then `changed` and `done`, or `stopped` / `failed`. These are the events a UI will
+  consume. In text mode the lookups are one line each on stderr.
 - **Piped input** to `chat` works as a script: each line waits for the previous answer.
 
   ```bash
@@ -669,7 +913,11 @@ rp-core send "$id" "Hello there"
   ```
 
   The step types are `text`, `reasoning`, `delay` (ms), `pause`, `error`, `usage`, `cut` (end the
-  stream abruptly) and `finish`. Each process starts the script from its first line.
+  stream abruptly), `finish`, `tool` (a native tool call: `{"tool": {"name": "search_history",
+  "args": {"query": "caravan"}}}`) and `replay`. Each process starts the script from its first line.
+  The scripted model has no tools unless the file's first line gives it some, as capabilities over
+  the defaults: `{"caps": {"tools": "native"}}` or `{"caps": {"tools": "prompted"}}` (a prompted
+  model writes its calls as `<tool_call>…</tool_call>` text steps).
 
 ## Recording and replaying a chat
 
@@ -719,7 +967,7 @@ a temporary folder that is removed at exit.
 ```
 ~/.rp-core/
   config.toml          connections, roles, overrides, prices (no secrets)
-  caps-cache.json      what `probe --write` learned
+  caps-cache.json      what `probe --write` learned (the catalog, and with --active the probe facts)
   library/characters/  imported cards in the native format
   library/presets/     imported presets
   library/lorebooks/   imported world info and lorebooks
@@ -738,6 +986,7 @@ edit and hidden message is still there. Back it up by copying the file.
 | notice `context_truncated_by_server` | The server cut the prompt: its real window is smaller than rp-core thinks | Set `[caps."conn:model"] context_length` to the server's window |
 | answers stop mid-sentence, status says `length` | The reply hit the token cap | `/c` continues; raise `--max-tokens` for new sessions |
 | `no_connection` | The session's binding names a connection that is not in `config.toml` | Check the connection name, or `/model narrator <conn:model>` |
+| `model_not_found` | The server has no model by the name the session is bound to (not pulled, or a typo) | `rp-core models <conn>` lists what it has; `/model narrator <conn>:<model>` in the chat switches. `[roles]` in `config.toml` only sets new sessions |
 | `session_locked` | Another process has the session open | Close the other chat. A lock left by a crashed process is taken over automatically |
 | `the server refused the API key` / `key_unavailable` | Wrong key, unset `key_env`, or a failing `key_cmd` | Check the variable or command; `--debug` shows the server's words, redacted |
 | `/e` opens vi and keys do nothing | A terminal editor inside the chat in a terminal like Warp | Unset `$EDITOR` to edit in place, or use a graphical editor ([details](#using-an-editor)) |
@@ -757,7 +1006,7 @@ redacted.
 | `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info or a character_book into the library; prints its id |
 | `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
 | `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |
-| `probe [conn[:model]] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only) and the caps a model gets; `--write` stores it |
+| `probe [conn[:model]] [--active] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only) and the caps a model gets; `--active` also tries one model with a few tiny calls ([details](#active-probes)); `--write` stores what was learned |
 | `models <conn> [--json]` | The connection's model ids |
 | `sessions [--json]` | Sessions, newest first |
 | `show <session> [--json]` | The active path with markers `[interrupted]`, `[stopped]`, `[hidden]`, `[edited]`. Never takes the lock |
@@ -791,27 +1040,32 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite, about 2100 tests |
+| `bun test` | The full suite, about 3300 tests |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
+| `RP_CORE_LIVE=1 bun test test/live/m3-ollama.test.ts` | The M3 demo question on a real Ollama with prompted or native tools (up to 3 tries of 3 calls). Set the model with `RP_CORE_OLLAMA_M3_MODEL` (default `magmell-16k:latest`), its window with `RP_CORE_OLLAMA_CTX` (default 16384), the transport with `RP_CORE_OLLAMA_TOOLS` (`prompted`, the default, or `native`), the reply cap with `RP_CORE_OLLAMA_MAX_TOKENS` (default 300; a thinking model's thinking counts against it) and the URL with `RP_CORE_OLLAMA_URL`. A thinking model with native tools: `RP_CORE_LIVE=1 RP_CORE_OLLAMA_M3_MODEL=gemma4:26b RP_CORE_OLLAMA_CTX=4096 RP_CORE_OLLAMA_TOOLS=native RP_CORE_OLLAMA_MAX_TOKENS=1024 bun test test/live/m3-ollama.test.ts` |
 
 **Code layout:**
 
 | Folder | Holds |
 |---|---|
-| `src/engine` | Turns, recovery, scheduling |
+| `src/engine` | Turns and the narrator's tool loop, recovery, scheduling |
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
 | `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
 | `src/formats` | Cards, presets, world info, library |
 | `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
+| `src/tools` | The narrator's tools, their arguments, prompted calls and leak recovery |
+| `src/text` | Word folding and light stemming for search and note keys |
+| `src/agents` | The Compendium; in M3, your notes |
 | `src/config` | Config and keys |
 | `src/cli` | Commands and the chat |
 
-The design and its decisions (D-1…D-89) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
+The design and its decisions (D-1…D-97) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md),
-[`docs/M1B-DEMO.md`](docs/M1B-DEMO.md) and [`docs/M2-DEMO.md`](docs/M2-DEMO.md). How rp-core differs
+[`docs/M1B-DEMO.md`](docs/M1B-DEMO.md), [`docs/M2-DEMO.md`](docs/M2-DEMO.md) and
+[`docs/M3-DEMO.md`](docs/M3-DEMO.md). How rp-core differs
 from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](docs/PARITY-RC.md) and
 [`test/golden/st/README.md`](test/golden/st/README.md).
 

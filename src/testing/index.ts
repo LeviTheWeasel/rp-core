@@ -3,5 +3,5 @@
 //
 // Test helpers exported as `rp-core/testing` (M9 grows this: record/replay, RecordStore conformance).
 
-export { createScriptedProvider, parseScript, hashRequest, SCRIPT_CAPS } from '../providers/scripted.ts';
+export { createScriptedProvider, parseScript, parseScriptFile, scriptCapsWith, hashRequest, SCRIPT_CAPS } from '../providers/scripted.ts';
 export type { ScriptCall, ScriptStep, ScriptedProvider } from '../providers/scripted.ts';

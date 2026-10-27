@@ -10,16 +10,12 @@
       "dialect": "openai-chat",
       "as_of": "2026-10-26",
       "src": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
-      "note": "System messages and roles go through the model's own chat template, so a template that enforces alternation (Mistral, Gemma) is narrowed back by models.json. A trailing assistant message is continued (prefill). The last stream chunk carries `timings` (prompt_n, predicted_n, cache_n) whether or not stream_options is sent. cache_prompt:true keeps the slot's KV prefix (agents never send false, §7.4.7). response_format json_schema is turned into a grammar. Capacity is NOT taken from -np / total_slots [D-84].",
+      "note": "System messages and roles go through the model's own chat template, so a template that enforces alternation (Mistral, Gemma) is narrowed back by models.json. A trailing assistant message is continued (prefill). The last stream chunk carries `timings` (prompt_n, predicted_n, cache_n) whether or not stream_options is sent. cache_prompt:true keeps the slot's KV prefix (agents never send false, §7.4.7). response_format json_schema is said to become a grammar, but a local server's structured output counts only once a probe (rp-core probe --active) or the user confirms it (§7.2), so it is not claimed here. Capacity is NOT taken from -np / total_slots [D-84].",
       "caps": {
         "midSystem": "native",
         "alternation": "free",
         "prefill": "assistant-last",
         "parallelToolCalls": "send-true",
-        "structuredOutput": {
-          "mode": "json_schema",
-          "confirmedBy": "host"
-        },
         "samplers": {
           "accepted": [
             "temperature",
@@ -54,14 +50,10 @@
       "dialect": "openai-chat",
       "as_of": "2026-10-26",
       "src": "https://docs.ollama.com/api/openai-compatibility",
-      "note": "/v1/chat/completions supports model, messages, frequency_penalty, presence_penalty, response_format, seed, stop, stream, stream_options.include_usage, temperature, top_p, max_tokens, tools, reasoning_effort / reasoning.effort; tool_choice, logit_bias, user and n are unsupported. top_k / min_p / repeat_penalty exist only as options of the native /api/chat, so they are not claimed here. 'The OpenAI API does not have a way of setting the context size': the window is num_ctx (Modelfile PARAMETER num_ctx or the server default), not model_info context_length (see probe.ts).",
+      "note": "/v1/chat/completions supports model, messages, frequency_penalty, presence_penalty, response_format, seed, stop, stream, stream_options.include_usage, temperature, top_p, max_tokens, tools, reasoning_effort / reasoning.effort; tool_choice, logit_bias, user and n are unsupported. top_k / min_p / repeat_penalty exist only as options of the native /api/chat, so they are not claimed here. 'The OpenAI API does not have a way of setting the context size': the window is num_ctx (Modelfile PARAMETER num_ctx or the server default), not model_info context_length (see probe.ts). response_format json_schema is documented, but a local server's structured output counts only once a probe (rp-core probe --active) or the user confirms it (§7.2).",
       "caps": {
         "toolChoiceHonored": false,
         "prefill": "assistant-last",
-        "structuredOutput": {
-          "mode": "json_schema",
-          "confirmedBy": "host"
-        },
         "samplers": {
           "accepted": [
             "temperature",
@@ -149,12 +141,8 @@
       "dialect": "openai-chat",
       "as_of": "2026-10-26",
       "src": "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html",
-      "note": "Extra sampling parameters (top_k, min_p, repetition_penalty) are accepted next to the OpenAI ones; structured outputs through response_format json_schema; automatic prefix caching is on by default.",
+      "note": "Extra sampling parameters (top_k, min_p, repetition_penalty) are accepted next to the OpenAI ones; structured outputs through response_format json_schema are documented, but count only once a probe (rp-core probe --active) or the user confirms them (§7.2); automatic prefix caching is on by default.",
       "caps": {
-        "structuredOutput": {
-          "mode": "json_schema",
-          "confirmedBy": "host"
-        },
         "samplers": {
           "accepted": [
             "temperature",

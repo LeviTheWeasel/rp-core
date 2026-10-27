@@ -10,6 +10,8 @@ export type {
   CreateSessionInput,
   EngineHandle,
   EngineOptions,
+  PreviewOptions,
+  PreviewResult,
   RefusalCode,
   RunTurnOptions,
   SessionHandle,
@@ -26,6 +28,7 @@ export type {
   Generation,
   SessionConfig,
   SessionHeader,
+  ToolTraceRow,
   Trace,
   TurnKind,
   VarsDiff,
@@ -38,7 +41,9 @@ export type {
   ModelRequest,
   PromptMsg,
   Provider,
+  Replay,
   StreamEv,
+  ToolSpec,
   Usage,
 } from './providers/types.ts';
 export { ProviderError } from './providers/types.ts';
@@ -57,3 +62,16 @@ export { buildConnections, CONFIG_TEMPLATE, ConfigError, configPath, loadConfig,
 export type { ConnectionConfig, PriceRow, RpConfig } from './config/config.ts';
 export { createSecretResolver, scrub } from './config/secrets.ts';
 export type { SecretResolver, SecretSpec } from './config/secrets.ts';
+
+// M3: tools and search. The built-in tools and their types (the narrator's loop offers them; a host
+// can run them itself, e.g. for its own search UI), what SessionHandle.search returns, the notes
+// (SessionHandle.notes and the memory* verbs), lore verdicts (PreviewResult.verdicts) and the
+// active probe the CLI's `probe --active` runs.
+export type { Tool, ToolCall, ToolCallOutcome, ToolCtx, ToolOutput } from './tools/types.ts';
+export { DEFAULT_TOOL_OUTPUT } from './tools/types.ts';
+export { HISTORY_TOOLS, LORE_TOOLS, toolSpecs } from './tools/builtin/index.ts';
+export type { HistoryHit, HistorySearch } from './tools/builtin/history.ts';
+export type { CEntry, CompendiumView, MemEntry, MemOp } from './agents/compendium/types.ts';
+export type { LoreVerdict } from './lore/engine.ts';
+export { ACTIVE_PROBE_MAX_CALLS, ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS, runActiveProbes } from './providers/probe-active.ts';
+export type { ActiveProbeInput, ActiveProbeResult, ProbeName, ProbeObservation, ProbeVerdict } from './providers/probe-active.ts';

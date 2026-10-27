@@ -190,8 +190,8 @@ describe('effective settings: entry → book → SillyBunny defaults', () => {
     expect(whys(runBook([entry('e', { keys: ['dragon'], wholeWords: true })], s, {}, { wholeWords: false }))).toEqual({ e: '-no-key-match' });
   });
 
-  test("book match 'stem' is matched as literal in M2", () => {
-    expect(whys(runBook([entry('e', { keys: ['караван'] })], ['Levi: у каравана'], {}, { match: 'stem' }))).toEqual({ e: '-no-key-match' });
+  test("book match 'stem' matches by stems (M3)", () => {
+    expect(whys(runBook([entry('e', { keys: ['караван'] })], ['Levi: у каравана'], {}, { match: 'stem' }))).toEqual({ e: '+key' });
     expect(whys(runBook([entry('e', { keys: ['караван'] })], ['Levi: наш караван'], {}, { match: 'stem' }))).toEqual({ e: '+key' });
   });
 

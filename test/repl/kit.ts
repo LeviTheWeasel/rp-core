@@ -6,7 +6,7 @@ import type { RpConfig } from '../../src/config/config.ts';
 import type { Character, Persona } from '../../src/formats/native.ts';
 import { memoryChannel } from '../../src/cli/io.ts';
 import { runReplWith, type ReplDeps } from '../../src/cli/repl.ts';
-import type { Provider } from '../../src/providers/types.ts';
+import type { ModelCaps, Provider } from '../../src/providers/types.ts';
 import { createScriptedProvider, SCRIPT_CAPS, type ScriptCall, type ScriptedProvider, type ScriptStep } from '../../src/providers/scripted.ts';
 import { readSessionFile, type SessionLog, openSessionLog } from '../../src/session/log.ts';
 import type { DeepPartial, Entry, SessionConfig } from '../../src/session/entries.ts';
@@ -116,6 +116,8 @@ export interface ReplRigOptions {
   wire?: boolean;
   /** The config.toml the REPL sees (default CONFIG). */
   rpConfig?: RpConfig;
+  /** M3: the caps of the scripted connections (default SCRIPT_CAPS, tools 'none'); the REPL sees them through capsOf. */
+  caps?: ModelCaps;
 }
 
 export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Promise<ReplRig> {
@@ -124,7 +126,8 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
   if (o.wire) {
     (provider as Provider).wire = (req) => ({ url: 'http://127.0.0.1:9/v1/chat/completions', body: { model: req.model.model, max_tokens: req.maxTokens, n: req.messages.length } });
   }
-  const conn: Connection = { id: 'script', provider, caps: SCRIPT_CAPS, origin: 'script:script', local: true };
+  const caps = o.caps ?? SCRIPT_CAPS;
+  const conn: Connection = { id: 'script', provider, caps, origin: 'script:script', local: true };
   const engine = await Engine.open({
     home,
     connections: { script: conn, alt: { ...conn, id: 'alt', origin: 'script:alt' } },
@@ -159,6 +162,8 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
         return o.editor ? o.editor(initial) : null;
       },
       color: o.color ?? false,
+      // The banner's tools word and /preview's transport: the engine's connections' caps.
+      capsOf: (c) => (c === 'script' || c === 'alt' ? caps : null),
       ...(o.windowOf ? { windowOf: o.windowOf } : {}),
       ...o.deps,
     },

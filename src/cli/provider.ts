@@ -5,7 +5,8 @@
 // Kintsu K4). `new`, `chat`, `send` and `preview` take it.
 // - script: a scripted connection replaces every role's connection for this process
 //   (EngineOptions.providerOverride). The script is read from the start on every run, so each
-//   one-shot `send` plays the file's calls in order.
+//   one-shot `send` plays the file's calls in order. M3: a first line {"caps": {...}} gives the
+//   connection those caps over SCRIPT_CAPS (tools 'native' or 'prompted' for a tool-round script).
 // - record: every connection built from config.toml keeps working as configured, wrapped so each
 //   model call is appended to <file> as one JSONL line (providers/record.ts), with the secrets the
 //   runtime knows (keys, header values) scrubbed.
@@ -24,7 +25,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Connection } from '../engine/api.ts';
 import { createRecordingProvider, createReplayProvider, parseRecording, type RecordedCall } from '../providers/record.ts';
-import { createScriptedProvider, parseScript, SCRIPT_CAPS } from '../providers/scripted.ts';
+import { createScriptedProvider, parseScriptFile, SCRIPT_CAPS, scriptCapsWith } from '../providers/scripted.ts';
 import type { ModelCaps } from '../providers/types.ts';
 import { UsageError } from './args.ts';
 import type { Runtime } from './runtime.ts';
@@ -68,19 +69,25 @@ function readFile(path: string, file: string, what: string): string {
   }
 }
 
-/** Build the script override connection: id 'script', origin 'script:<absolute file>', local, SCRIPT_CAPS. */
+/**
+ * Build the script override connection: id 'script', origin 'script:<absolute file>', local. Its caps
+ * are SCRIPT_CAPS, with the file's leading `{"caps": {...}}` line merged over them when it has one
+ * (M3: a script can give the connection tools, e.g. {"caps": {"tools": "prompted"}}).
+ */
 export function scriptConnection(spec: string, command = 'send'): Connection {
   const { scheme, file } = parseProviderSpec(spec, command);
   if (scheme !== 'script') throw new UsageError(`expected script:<file>, got ${JSON.stringify(spec)}`, command);
   const path = resolve(file);
   const text = readFile(path, file, 'script');
-  let calls;
+  let parsed: ReturnType<typeof parseScriptFile>;
+  let caps;
   try {
-    calls = parseScript(text);
+    parsed = parseScriptFile(text);
+    caps = scriptCapsWith(parsed.caps);
   } catch (e) {
     throw new ScriptFileError(`${file}: ${errText(e)}`);
   }
-  return { id: 'script', provider: createScriptedProvider(calls), caps: SCRIPT_CAPS, origin: `script:${path}`, local: true };
+  return { id: 'script', provider: createScriptedProvider(parsed.calls), caps, origin: `script:${path}`, local: true };
 }
 
 /** A recording file, parsed (ScriptFileError naming the line on bad input). */
@@ -211,6 +218,7 @@ export function prepareProvider(spec: string, command = 'send', opts: { interact
         spec: parsed,
         attach: (rt) => {
           rt.connections = recordingConnections(rt.connections, parsed.file, () => rt.secrets.known());
+          rt.recording = resolve(parsed.file);
         },
       };
     }

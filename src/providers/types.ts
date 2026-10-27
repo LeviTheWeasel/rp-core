@@ -277,6 +277,12 @@ export type StreamEv =
   | { t: 'tool_args'; i: number; d: string }
   | { t: 'tool_end'; i: number }
   | { t: 'usage'; u: Usage }
+  /**
+   * M3 (§8.6): a verbatim provider payload the next round of the SAME tool loop must send back
+   * (OpenRouter reasoning_details, per-call extras). Yielded before `finish`, at most once per kind.
+   * Kept in memory only (PromptMsg.replay of the round's wire message), never stored.
+   */
+  | { t: 'replay'; r: Replay }
   | { t: 'finish'; reason: FinishReason; raw: string; model?: string }
   | { t: 'error'; err: ProviderError; afterOutput: boolean };
 

@@ -39,14 +39,19 @@ import { Writable } from 'node:stream';
 import { Refusal, type EngineHandle, type PreviewOptions, type SessionHandle, type TurnHandle, type TurnOutcome } from '../engine/api.ts';
 import { ConfigError, type RpConfig } from '../config/config.ts';
 import { listLibrary } from '../formats/library.ts';
-import { CARD_BOOK_KEY, PERSONA_BOOK_KEY } from '../lore/engine.ts';
+import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
+import { NOTES_BOOK_KEY, noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
+import type { CEntry } from '../agents/compendium/types.ts';
+import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { Event } from '../protocol/events.ts';
+import { ACTIVE_PROBE_MAX_CALLS, ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS } from '../providers/probe-active.ts';
+import type { ModelCaps } from '../providers/types.ts';
 import type { DeepPartial, Roles, SessionConfig, Trace } from '../session/entries.ts';
 import { readSessionFile } from '../session/log.ts';
 import type { MessageView, PathView } from '../session/view.ts';
-import type { Io } from './io.ts';
+import { memoryChannel, type Io } from './io.ts';
 import { addLoreId, bookRows, entryTitles, resolveLoreRef, resolvePresetRef } from './refs.ts';
-import { describeEvent, hasServerWords, messageText, redactEvent } from './render.ts';
+import { describeEvent, hasServerWords, messageText, modelNotFoundHint, redactEvent } from './render.ts';
 import { EXIT_SIGINT } from './signals.ts';
 import {
   commandClass,
@@ -83,7 +88,10 @@ import {
   renderImported,
   renderLoreBooks,
   renderNote,
+  renderNoteCard,
+  renderNoteList,
   renderNumberedPath,
+  renderSearch,
   presetCapText,
   renderPresets,
   renderPreview,
@@ -139,6 +147,20 @@ export interface ReplDeps {
    */
   windowOf?: (conn: string, model: string) => number | null;
   /**
+   * M3: the resolved caps of a binding (what its turns use), or null when unknown. The banner reads
+   * caps.tools ("tools: native|prompted|off"), /preview the transport. Optional: without it the banner
+   * says "tools: off".
+   */
+  capsOf?: (conn: string, model: string) => ModelCaps | null;
+  /**
+   * M3 `/probe --active [--write]`: run cmdProbe with `active` on `target` (conn:model), printing its
+   * report to `io`; `signal` is Ctrl+C (the probe then rejects with the abort and stores nothing).
+   * Resolves the exit code and whether --write stored anything. Absent where the REPL cannot probe
+   * (under --provider record:, a host without a runtime): /probe --active then says to probe from
+   * the shell.
+   */
+  probe?: (a: { target: string; write: boolean; io: Io; signal: AbortSignal }) => Promise<{ code: number; written: boolean }>;
+  /**
    * The chat plays a script or a recording (--provider script: / replay:): a turn that failed makes
    * the REPL end with exit 3 instead of 0, so a CI job running a piped replay notices a changed
    * request. Without a person at the keyboard the REPL also stops at the first replay_mismatch or
@@ -150,7 +172,7 @@ export interface ReplDeps {
    * (what the answers' traces name), what it plays (for the wording of a stop) and its window for a
    * model. The banner and /preset then take the window from it, not from config.toml's caps.
    */
-  override?: { conn: string; plays: 'script' | 'recording'; windowOf(model: string): number | null };
+  override?: { conn: string; plays: 'script' | 'recording'; windowOf(model: string): number | null; capsOf?(model: string): ModelCaps | null };
 }
 
 /** Knobs outside the fixed contract (tests and hosts that inject their own input). */
@@ -425,6 +447,8 @@ class Repl {
   private failedTurns: string[] = [];
   /** Set while /e edits in place: the next line (or null on Ctrl+C / end of input) is the result. */
   private editing: ((line: string | null) => void) | null = null;
+  /** Set while /probe --active runs: Ctrl+C stops the probe. */
+  private probing: AbortController | null = null;
   /** $HOME for `~/` in /preset and /lore add files. */
   private readonly env: Record<string, string | undefined>;
 
@@ -627,6 +651,11 @@ class Repl {
       this.leaveNow?.(EXIT_SIGINT);
       return;
     }
+    if (this.probing) {
+      // Ctrl+C during /probe --active stops the probe (its calls can wait minutes on a busy server).
+      this.probing.abort(new Error('the probe was stopped'));
+      return;
+    }
     // At the prompt with typed text: Ctrl+C clears the line, as a shell does.
     if (this.source.pending() !== '') {
       this.disarmExit();
@@ -720,7 +749,8 @@ class Repl {
     }
     // The model's window unknown: the preset's (or the session's) limit still bounds it.
     const cap = limits.length > 0 ? Math.min(...limits) : undefined;
-    this.say(bannerLine(header, narrator, window, this.style, cap));
+    // M3: whether the narrator can use tools at all is its route's caps (D-92 still decides per turn).
+    this.say(bannerLine(header, narrator, window, this.style, cap, this.capsOf(narrator)?.tools ?? null));
     for (const ev of this.session.openEvents()) this.openEvent(ev);
     this.whereYouAre(view);
   }
@@ -801,10 +831,23 @@ class Repl {
     }
     if (outcome.type === 'failed') this.failedTurns.push(outcome.code);
     const answer = this.answerOf(outcome, turn, printer.kept);
-    if (answer) this.say(statusLine(answer, this.style));
+    if (answer) this.say(statusLine(answer, this.style, this.traceOf(answer.id)));
+    if (outcome.type === 'failed' && outcome.code === 'model_not_found' && !this.deps.override) {
+      // The banner named the binding long ago; this names it again with the way out.
+      this.say(this.style.dim(`  (${modelNotFoundHint(configOf(this.journal()).roles.narrator, undefined, outcome.route)})`));
+    }
     if (outcome.type === 'failed' && hasServerWords(outcome) && !this.deps.debugTap && !this.debugHinted) {
       this.debugHinted = true;
       this.say(this.style.dim(`  (rp-core chat ${this.session.id} --debug shows the server's own words)`));
+    }
+  }
+
+  /** The newest trace of answer `id` as the journal has it now (for the status line), or undefined. */
+  private traceOf(id: string): Trace | undefined {
+    try {
+      return latestTrace(this.journal(), id)?.trace;
+    } catch {
+      return undefined; // the status line simply goes without it
     }
   }
 
@@ -872,10 +915,16 @@ class Repl {
       case 'preview':
         return this.preview(c);
       case 'probe':
+        if (c.active) return this.probeActive(c.write === true);
         return this.say(
           'Probes run from the shell: rp-core probe <connection>[:<model>] [--write]. They ask the server for its models and\n' +
-            'limits (/models, /props, /api/show, OpenRouter supported_parameters); --write keeps the result for the next sessions.',
+            'limits (/models, /props, /api/show, OpenRouter supported_parameters); --write keeps the result for the next sessions.\n' +
+            "/probe --active [--write] also tests the narrator's model here: a tiny reply, one tool call, a JSON reply (a few short calls).",
         );
+      case 'memory':
+        return this.memory(c);
+      case 'search':
+        return this.search(c.query, c.before);
       case 'later':
         return this.say(this.style.dim(`/${c.command} arrives with ${c.when}`));
       case 'think':
@@ -1136,9 +1185,11 @@ class Repl {
 
   // ---- presets, lorebooks, preview (M2) -----------------------------------------------------------
 
-  /** Entry titles of every book a turn scans now, for /trace, /lore test and /preview. */
+  /** Entry titles of every book a turn scans now (M3: the notes too), for /trace, /lore test and /preview. */
   private titles(): Map<string, string> {
-    return entryTitles(this.deps.home, this.session.header().cast, configOf(this.journal()).lorebooks);
+    const titles = entryTitles(this.deps.home, this.session.header().cast, configOf(this.journal()).lorebooks);
+    for (const { entry } of this.noteRows()) titles.set(entryLabel(NOTES_BOOK_KEY, entry.key), entry.name);
+    return titles;
   }
 
   /**
@@ -1162,6 +1213,16 @@ class Repl {
     this.session.configure({ preset: r.id });
     const caps = presetCapText(r.value.context?.maxContext, model);
     this.say(this.style.dim(`preset → ${r.id}${r.value.name !== r.id ? ` "${r.value.name}"` : ''} (from the next turn${caps ? `; ${caps}` : ''})`));
+  }
+
+  /** The narrator route's caps (the --provider override's, when one is set), or null when unknown. */
+  private capsOf(narrator: { conn: string; model: string }): ModelCaps | null {
+    const o = this.deps.override;
+    try {
+      return o ? (o.capsOf?.(narrator.model) ?? null) : (this.deps.capsOf?.(narrator.conn, narrator.model) ?? null);
+    } catch {
+      return null; // a model the connection cannot resolve: the turn will say why
+    }
   }
 
   /** The narrator model's own window from its caps (the --provider override's, when one is set), or null. */
@@ -1289,6 +1350,136 @@ class Repl {
       }
       this.say(this.style.dim('(no wire form: this connection is an in-process provider; the messages follow)'));
     }
-    this.say(this.redact([renderPreview(r, this.style, titles), ...verdicts].join('\n')));
+    const transport = this.capsOf({ conn: r.model.connection, model: r.model.model })?.tools ?? null;
+    this.say(this.redact([renderPreview(r, this.style, titles, transport), ...verdicts].join('\n')));
+  }
+
+  // ---- notes, search, active probes (M3) ------------------------------------------------------------
+
+  /** The notes of the current path with their C<n> handles (creation order, live and retired). */
+  private noteRows(): { ref: string; entry: CEntry }[] {
+    return noteRefs(this.session.view().compendium);
+  }
+
+  /** A note's handle as /memory lists it now ('C?' when it is not on this path). */
+  private refOf(key: string): string {
+    return this.noteRows().find((r) => r.entry.key === key)?.ref ?? 'C?';
+  }
+
+  /** A note's handle and its current title, as a confirmation names it: `C2 "Old lighthouse"`. */
+  private named(key: string): string {
+    const row = this.noteRows().find((r) => r.entry.key === key);
+    return row ? `${row.ref} ${JSON.stringify(row.entry.name)}` : 'C?';
+  }
+
+  /** /memory, /memory show|add|edit|retire|restore (decision F6). A refusal is one red line. */
+  private memory(c: Extract<Command, { name: 'memory' }>): void {
+    const fail = (e: unknown): void => {
+      if (e instanceof Refusal) return this.say(this.style.red(`/memory ${c.action}: ${this.redact(e.message)}`));
+      throw e;
+    };
+    switch (c.action) {
+      case 'list':
+        return this.say(renderNoteList(this.noteRows(), this.style));
+      case 'show': {
+        const note = resolveNoteRef(this.session.view().compendium, c.ref);
+        if (!note) return this.say(this.style.red(`/memory show: no single note matches ${JSON.stringify(c.ref)} (use its C<n> as /memory lists it, or its key)`));
+        return this.say(renderNoteCard(this.refOf(note.key), note));
+      }
+      case 'add': {
+        let key: string;
+        try {
+          key = this.session.memoryAdd({ title: c.title, keys: c.keys, content: c.content }).key;
+        } catch (e) {
+          return fail(e);
+        }
+        const ref = this.refOf(key);
+        const keys = c.keys.length > 0 ? c.keys : [c.title];
+        const when = keys.length > 1 ? `${keys.slice(0, -1).join(', ')} or ${keys.at(-1)}` : keys[0];
+        return this.say(this.style.dim(`note ${ref} "${c.title}" added (${key}): from the next turn it is sent when ${when} comes up`));
+      }
+      case 'edit': {
+        let key: string;
+        try {
+          key = this.session.memoryEdit({
+            ref: c.ref,
+            ...(c.title !== undefined ? { title: c.title } : {}),
+            ...(c.keys !== undefined ? { keys: c.keys } : {}),
+            ...(c.content !== undefined ? { content: c.content } : {}),
+          }).key;
+        } catch (e) {
+          return fail(e);
+        }
+        const what = [c.title !== undefined ? 'title' : '', c.keys !== undefined ? 'keys' : '', c.content !== undefined ? 'text' : ''].filter(Boolean).join(', ');
+        return this.say(this.style.dim(`note ${this.named(key)} changed: ${what} (from the next turn)`));
+      }
+      case 'retire': {
+        let key: string;
+        try {
+          key = this.session.memoryRetire({ ref: c.ref, ...(c.reason !== undefined ? { reason: c.reason } : {}) }).key;
+        } catch (e) {
+          return fail(e);
+        }
+        return this.say(this.style.dim(`note ${this.named(key)} retired: it no longer fires (/memory restore ${this.refOf(key)} brings it back)`));
+      }
+      case 'restore': {
+        let key: string;
+        try {
+          key = this.session.memoryRestore({ ref: c.ref }).key;
+        } catch (e) {
+          return fail(e);
+        }
+        return this.say(this.style.dim(`note ${this.named(key)} restored: it fires again from the next turn`));
+      }
+    }
+  }
+
+  /** /search <query> [before=n] (§7.5): the narrator's search_history over this path; read-only. */
+  private search(query: string, before: number | undefined): void {
+    let r: HistorySearch;
+    try {
+      r = this.session.search({ query, ...(before !== undefined ? { before } : {}) });
+    } catch (e) {
+      if (e instanceof Refusal) return this.say(this.style.red(`/search: ${this.redact(e.message)}`));
+      throw e;
+    }
+    this.say(this.redact(renderSearch(query, r, before, this.style)));
+  }
+
+  /**
+   * /probe --active [--write] on the narrator binding: cmdProbe's active probes, their report printed
+   * here. The connections of this chat were built at start: facts written now apply from the next start.
+   */
+  private async probeActive(write: boolean): Promise<void> {
+    const o = this.deps.override;
+    if (o) {
+      return this.say(this.style.red(`/probe --active: this chat plays a ${o.plays} (--provider); probe from the shell: rp-core probe <connection>:<model> --active`));
+    }
+    if (!this.deps.probe) return this.say(this.style.red('/probe --active is not available in this chat; from the shell: rp-core probe <connection>:<model> --active'));
+    const { conn, model } = configOf(this.journal()).roles.narrator;
+    const problem = this.deps.connectionProblem?.(conn) ?? null;
+    if (problem !== null) return this.say(this.style.red(`/probe --active: ${problem}`));
+    const target = `${conn}:${model}`;
+    this.say(
+      this.style.dim(
+        `probing ${target}: a few short calls (at most ${ACTIVE_PROBE_MAX_CALLS}, replies of ${ACTIVE_PROBE_TOKENS.stream} to ${ACTIVE_PROBE_MAX_TOKENS} tokens; Ctrl+C stops)…`,
+      ),
+    );
+    const out = memoryChannel();
+    const err = memoryChannel();
+    const ctrl = new AbortController();
+    this.probing = ctrl;
+    let written: boolean;
+    try {
+      ({ written } = await this.deps.probe({ target, write, io: { out, err }, signal: ctrl.signal }));
+    } catch (e) {
+      if (!ctrl.signal.aborted) throw e;
+      return this.say(this.style.dim('(probe stopped; nothing stored)'));
+    } finally {
+      this.probing = null;
+    }
+    const text = `${out.text()}${err.text()}`.trimEnd();
+    if (text !== '') this.say(this.redact(text));
+    if (written) this.say(this.style.dim('(this chat keeps the caps it started with: the stored facts apply from the next rp-core chat)'));
   }
 }

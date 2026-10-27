@@ -12,6 +12,10 @@
 //   Unicode word boundary on both sides: (?<![\p{L}\p{N}\p{M}_])key(?![\p{L}\p{N}\p{M}_]) [D-46]
 //   (ST's own boundary is ASCII \W, which breaks Cyrillic); a key of several words, or one in a
 //   script without spaces, matches as a substring (as ST and Bunraku do).
+// - a stem key, in a book with match 'stem' (M3, §5.8 notes): the key's words must appear in a row
+//   in the text with equal stems (text/normalize.ts normalizeTerm), so «Мира» fires on «Мирой» but
+//   not on «мирный»; a key in a spaceless script is a folded substring. Case and wholeWords do not
+//   apply; '/re/' keys stay regex keys.
 // Literal keys are escaped before they reach a JS RegExp, so they cannot be slow; only '/re/' keys
 // go through re2js.
 // Sources (adapt): Bunraku src/core/lore/engine/key-word-boundary.ts, triggers-keyword.ts and
@@ -24,7 +28,7 @@
 // - a '/re/' key follows only its own flags (i, s, m; g/u/y mean nothing for a yes/no test), never
 //   the entry's caseSensitive; a key that re2js refuses (lookaround, backreferences, bad syntax)
 //   falls back to its pattern text matched as a literal under the entry's options (RoleCall's
-//   fallback), and the error is returned;
+//   fallback; in a stem book, as a stem key), and the error is returned;
 // - literal keys and the text are NFC-normalized first, so a decomposed 'й' matches a composed one;
 //   regex keys see the same NFC text;
 // - the boundary does not count letters of spaceless scripts (Han, Hiragana, Katakana, Thai) as
@@ -37,11 +41,13 @@
 
 import { RE2JS } from 're2js';
 import type { LoreEntry } from '../formats/native.ts';
-import { charAt, charBefore, gluesToLoreKey, hasSpacelessScript } from '../text/normalize.ts';
+import { charAt, charBefore, compileStemKey, extendStemText, gluesToLoreKey, hasSpacelessScript, matchStemKey, stemText, type StemKey, type StemText } from '../text/normalize.ts';
 
 export interface KeyOptions {
   caseSensitive: boolean;
   wholeWords: boolean;
+  /** The book's LoreBook.match: 'stem' matches non-regex keys by word stems (caseSensitive and wholeWords then do not apply). Default 'literal'. */
+  match?: 'literal' | 'stem';
 }
 
 export interface KeyMatch {
@@ -68,13 +74,16 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-type Compiled = { test(text: string): boolean; error?: string };
+/** A compiled key: a test on the NFC text, or (stem mode) a stem key; null stem = a key with no words, never matches. */
+type Compiled = { test?: (text: string) => boolean; stem?: StemKey | null; error?: string };
 
 /** Matches keys against scan text. Compiled keys are cached on the instance (one per lore run is enough). */
 export class KeyMatcher {
   private readonly compiled = new Map<string, Compiled>();
   /** NFC of recent scan texts: entries of one run share a handful of texts. */
   private readonly nfc = new Map<string, string>();
+  /** Words and stems of recent scan texts (stem mode), keyed like `nfc`. */
+  private readonly stems = new Map<string, StemText>();
 
   match(keys: readonly string[], text: string, opts: KeyOptions): KeyMatch {
     const out: KeyMatch = { matched: [], regexErrors: [] };
@@ -85,9 +94,24 @@ export class KeyMatcher {
       if (!key) continue;
       const c = this.compile(key, opts);
       if (c.error !== undefined) out.regexErrors.push({ key: raw, message: c.error });
-      if (c.test(norm)) out.matched.push(raw);
+      const hit = c.test ? c.test(norm) : c.stem ? matchStemKey(c.stem, this.stemmed(norm)) : false;
+      if (hit) out.matched.push(raw);
     }
     return out;
+  }
+
+  private stemmed(norm: string): StemText {
+    let t = this.stems.get(norm);
+    if (t !== undefined) return t;
+    // A deeper scan or a recursion loop's text is an earlier text + '\n' + more: reuse its words.
+    let head: string | undefined;
+    for (const p of this.stems.keys()) {
+      if (p.length < norm.length && (head === undefined || p.length > head.length) && norm.charCodeAt(p.length) === 10 && norm.startsWith(p)) head = p;
+    }
+    t = head === undefined ? stemText(norm) : extendStemText(this.stems.get(head) as StemText, norm.slice(head.length + 1));
+    if (this.stems.size >= 32) this.stems.clear();
+    this.stems.set(norm, t);
+    return t;
   }
 
   private normalized(text: string): string {
@@ -102,11 +126,14 @@ export class KeyMatcher {
 
   private compile(key: string, opts: KeyOptions): Compiled {
     const re = parseRegexKey(key);
-    // A regex key ignores the entry's options; a literal (and a regex's fallback) depends on them.
-    const id = re ? `/\u0000${key}\u0000${+opts.caseSensitive}${+opts.wholeWords}` : `${+opts.caseSensitive}${+opts.wholeWords}\u0000${key}`;
+    const stem = opts.match === 'stem';
+    // A regex key ignores the entry's options; a literal (and a regex's fallback) depends on them; a
+    // stem key depends on nothing but the mode.
+    const mode = stem ? 's' : `${+opts.caseSensitive}${+opts.wholeWords}`;
+    const id = re ? `/\u0000${key}\u0000${mode}` : `${mode}\u0000${key}`;
     let c = this.compiled.get(id);
     if (c === undefined) {
-      c = re ? compileRegex(re.source, re.flags, opts) : compileLiteral(key, opts);
+      c = re ? compileRegex(re.source, re.flags, opts) : stem ? { stem: compileStemKey(key) } : compileLiteral(key, opts);
       this.compiled.set(id, c);
     }
     return c;
@@ -123,13 +150,14 @@ function compileRegex(source: string, flags: string, opts: KeyOptions): Compiled
     const re = RE2JS.compile(source, f);
     return { test: (text) => re.matcher(text).find() };
   } catch (e) {
-    const literal = compileLiteral(source, opts);
-    return { test: literal.test, error: e instanceof Error ? e.message : String(e) };
+    const error = e instanceof Error ? e.message : String(e);
+    if (opts.match === 'stem') return { stem: compileStemKey(source), error };
+    return { test: compileLiteral(source, opts).test, error };
   }
 }
 
 /** A literal key: escaped JS RegExp with the 'u' flag ('i' unless case-sensitive), NFC like the text. */
-function compileLiteral(key: string, opts: KeyOptions): Compiled {
+function compileLiteral(key: string, opts: KeyOptions): { test: (text: string) => boolean } {
   const k = key.normalize('NFC');
   const flags = opts.caseSensitive ? 'u' : 'iu';
   // ST: a key of several words matches as a substring even with whole words on; so does a key in a

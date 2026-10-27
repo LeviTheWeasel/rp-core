@@ -6,12 +6,13 @@
 // attaches it). One place, so `new`, `chat`, `send`, `preview` and `probe` see the same connections.
 //
 // Nothing here touches the network: building a connection only resolves caps from data files and the
-// probe cache (<home>/caps-cache.json). Keys are resolved lazily at the first call that needs one.
+// caps cache (<home>/caps-cache.json: catalog facts and active-probe facts, each in its own resolveCaps
+// slot). Keys are resolved lazily at the first call that needs one.
 
 import type { Connection, EngineOptions } from '../engine/api.ts';
 import { buildConnections, loadConfig, type RpConfig } from '../config/config.ts';
 import { createSecretResolver, scrub, type SecretResolver } from '../config/secrets.ts';
-import type { ProviderError } from '../providers/types.ts';
+import type { ModelCaps, ProviderError } from '../providers/types.ts';
 import { readCapsCache, type CapsCacheRow } from '../providers/probe.ts';
 
 export interface Runtime {
@@ -26,6 +27,8 @@ export interface Runtime {
   secrets: SecretResolver;
   /** --provider script:<file> or replay:<file>: every role resolves to this one for this process. */
   provider?: Connection;
+  /** --provider record:<file>: the file every model call of `connections` is appended to. */
+  recording?: string;
   /**
    * --debug: where a raw provider failure goes (one line, already scrubbed of every known secret).
    * Read at the moment of the failure, so the REPL can route it through its own screen while it runs.
@@ -48,7 +51,7 @@ export function debugLine(i: { callKey: string; model: string; error: ProviderEr
 
 /**
  * Read config.toml (a missing file is an empty config), build its connections with keys from the
- * environment (key_env / key_cmd) and caps from the probe cache. Throws ConfigError (exit 64 in main).
+ * environment (key_env / key_cmd) and caps from the caps cache. Throws ConfigError (exit 64 in main).
  */
 export function loadRuntime(
   home: string,
@@ -72,8 +75,9 @@ export function loadRuntime(
 }
 
 /**
- * The connections again, over another probe cache (what `rp-core probe` shows: the caps a model
- * gets once the fresh catalog is stored). Same config, env and secret resolver.
+ * The connections again, over another caps cache (what `rp-core probe` shows: the caps a model gets
+ * once the fresh catalog, and with --active the probe facts, are stored; and the caps an active probe
+ * starts from). Same config, env and secret resolver.
  */
 export function connectionsWith(rt: Runtime, capsCache: Record<string, CapsCacheRow>): Record<string, Connection> {
   return buildConnections(rt.config, { env: rt.env, secrets: rt.secrets, capsCache }).connections;
@@ -110,6 +114,24 @@ export function windowOf(rt: Runtime, conn: string, model: string): number | nul
   if (rt.provider) return null;
   const c = Object.hasOwn(rt.connections, conn) ? rt.connections[conn] : undefined;
   return c ? connectionWindow(c, model) : null;
+}
+
+/**
+ * The caps a binding's turns use (M3: the banner's tools word, /preview's transport): the --provider
+ * override's for any binding, else the configured connection's for the model; null when unknown.
+ */
+export function bindingCaps(rt: Runtime, conn: string, model: string): ModelCaps | null {
+  const c = rt.provider ?? (Object.hasOwn(rt.connections, conn) ? rt.connections[conn] : undefined);
+  return c ? connectionCaps(c, model) : null;
+}
+
+/** A connection's caps for `model` (capsFor when it resolves per model), or null when they cannot be resolved. */
+export function connectionCaps(c: Connection, model: string): ModelCaps | null {
+  try {
+    return c.capsFor ? c.capsFor(model) : c.caps;
+  } catch {
+    return null;
+  }
 }
 
 /** The context window a connection's caps state for `model`, or null when they state none. */

@@ -15,19 +15,19 @@
 // Object.assign, applied last, and protected names are skipped and reported instead of thrown.
 
 import type { Block } from '../session/entries.ts';
-import type { FinishReason, PromptMsg } from './types.ts';
+import type { FinishReason, ModelRequest, PromptMsg } from './types.ts';
 
 // ---- tool protocol (§8.3 "Проверка протокола перед каждой отправкой") -------------------------------
 
 /** A tool name every dialect accepts (OpenAI function names; Bunraku/RoleCall rule). */
-const SAFE_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+export const SAFE_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 /**
  * A tool call id that is safe to echo into JSON and into prompted `<tool_result id="…">` markup:
  * 1-128 of letters, digits, '_', '-', '.', ':'. Kimi's "functions.name:0" passes; anything with
  * spaces, quotes, angle brackets or control characters does not. A dialect with a narrower rule
  * (Mistral's 9 alphanumerics) remaps first (remapToolIds).
  */
-const SAFE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+export const SAFE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -185,6 +185,41 @@ export function remapToolIds(messages: readonly PromptMsg[], format?: 'mistral9'
     taken.add(next);
   }
   return messages.map((m) => copy(m, (id) => map.get(id) ?? id));
+}
+
+// ---- the reasoning echo (§8.4, D-94 revised) --------------------------------------------------------
+
+/** The raw reasoning of a message's blocks (summaries and redactions are not the model's own text). */
+export function rawReasoningOf(blocks: readonly Block[]): string {
+  return blocks
+    .filter((b): b is Extract<Block, { k: 'reasoning' }> => b.k === 'reasoning' && (b.kind === undefined || b.kind === 'raw'))
+    .map((b) => b.text)
+    .filter((t) => t !== '')
+    .join('\n\n');
+}
+
+/** What of a request the echo rule reads. */
+export type EchoFields = Pick<ModelRequest, 'caps' | 'reasoning' | 'messages' | 'tools' | 'toolChoice'>;
+
+/**
+ * D-94 (revised): the request echoes reasoning on EVERY assistant message — its own raw reasoning,
+ * else a placeholder — when the model's caps.reasoning.echo is 'all-with-tools', thinking is on for
+ * the call (not `reasoning 'none'` on a model that can turn it off) and the request has tool traffic:
+ * native tools that go out (not dropped on a final round whose tool_choice the server ignores) or a
+ * tool_call block on the path. The one rule the openai-chat adapter and the engine's 400 notice share.
+ */
+export function echoesReasoning(req: EchoFields): boolean {
+  const caps = req.caps;
+  if (caps.reasoning.echo !== 'all-with-tools') return false;
+  if (req.reasoning === 'none' && caps.reasoning.canDisable) return false;
+  const toolsSent = caps.tools === 'native' && (req.tools?.length ?? 0) > 0 && !(req.toolChoice === 'none' && !caps.toolChoiceHonored);
+  return toolsSent || req.messages.some((m) => m.blocks.some((b) => b.k === 'tool_call'));
+}
+
+/** How many assistant messages of the request go out with the echo placeholder (0 when nothing is echoed). */
+export function echoPlaceholders(req: EchoFields): number {
+  if (!echoesReasoning(req)) return 0;
+  return req.messages.filter((m) => m.role === 'assistant' && rawReasoningOf(m.blocks) === '').length;
 }
 
 // ---- merging ------------------------------------------------------------------------------------------

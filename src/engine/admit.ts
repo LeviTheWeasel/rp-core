@@ -7,6 +7,7 @@
 
 import { Refusal, type Connection, type RunTurnOptions } from './api.ts';
 import type { EngineCtx } from './context.ts';
+import { MAX_TOOL_ROUNDS } from './narrate.ts';
 import { parseModelRef } from './route.ts';
 import { BUILTIN_PRESET, validatePreset, type Preset } from '../formats/native.ts';
 import { loadFromLibrary } from '../formats/library.ts';
@@ -77,6 +78,17 @@ export interface AdmittedTurn {
   rejected?: string;
   onError: 'drop' | 'keep';
   emptyReply: 'fail' | 'keep';
+  /** M3: config.narrator.maxRounds clamped to 1..MAX_TOOL_ROUNDS (D-55). */
+  maxRounds: number;
+  /** M3: the configured value when it was above MAX_TOOL_ROUNDS (the turn says so: tool_rounds_clamped). */
+  roundsClamped?: number;
+}
+
+/** D-55: tool rounds per turn, 1..MAX_TOOL_ROUNDS; `clamped` is the configured value when it was too high. */
+export function clampRounds(configured: unknown): { maxRounds: number; clamped?: number } {
+  const n = typeof configured === 'number' && Number.isFinite(configured) ? Math.floor(configured) : 1;
+  if (n > MAX_TOOL_ROUNDS) return { maxRounds: MAX_TOOL_ROUNDS, clamped: n };
+  return { maxRounds: Math.max(1, n) };
 }
 
 /** RunTurnOptions.onError (D-22), checked wherever a turn can be asked for (runTurn, submit). */
@@ -193,6 +205,7 @@ export function admitTurn(ctx: EngineCtx, s: AdmitState, opts: RunTurnOptions): 
   if (fallback && fallback.conn.id === primary.conn.id && fallback.model === primary.model) fallback = undefined;
 
   const preset = resolvePreset(ctx, config.preset);
+  const rounds = clampRounds(config.narrator?.maxRounds);
 
   const out: AdmittedTurn = {
     kind,
@@ -205,7 +218,9 @@ export function admitTurn(ctx: EngineCtx, s: AdmitState, opts: RunTurnOptions): 
     config,
     onError,
     emptyReply,
+    maxRounds: rounds.maxRounds,
   };
+  if (rounds.clamped !== undefined) out.roundsClamped = rounds.clamped;
   if (placed.target !== undefined) out.target = placed.target;
   if (fallback) out.fallback = fallback;
   if (fallbackMissing) out.fallbackMissing = fallbackMissing;

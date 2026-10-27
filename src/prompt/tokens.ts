@@ -5,9 +5,10 @@
 // M1b: the per-model EMA correction (emaFactor, D-50). M2: gpt-tokenizer o200k behind the same
 // functions (TokenCounter); the counter's id goes to trace.tokens.counter so the EMA only learns
 // from samples counted the same way. o200k loads on the first count and remembers recent counts.
+// M3: native tool declarations are estimated as their wire JSON (estimateToolSpecs).
 // CONTRACT FILE: signatures are fixed; the prompt agent implements the bodies.
 
-import type { PromptMsg } from '../providers/types.ts';
+import type { PromptMsg, ToolSpec } from '../providers/types.ts';
 import type { Block } from '../session/entries.ts';
 
 /** Characters per token for everything that is not Cyrillic. */
@@ -185,6 +186,18 @@ export function estimateMessages(messages: readonly PromptMsg[], counter?: Token
   let sum = 0;
   for (const m of messages) sum += estimateMessage(m, counter);
   return sum;
+}
+
+/**
+ * M3: the native tool declarations of a request, estimated like text: the JSON of the list as the
+ * openai-chat wire carries it (`{"type":"function","function":{name, description, parameters}}`
+ * per tool, in the order given). Chat templates render it into the prompt in their own wording; the
+ * EMA correction takes up the difference. No tools: 0.
+ */
+export function estimateToolSpecs(tools: readonly ToolSpec[], counter?: TokenCounter): number {
+  if (tools.length === 0) return 0;
+  const wire = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.schema } }));
+  return (counter ?? defaultCounter()).count(JSON.stringify(wire));
 }
 
 // ---- M1b [D-50] --------------------------------------------------------------------------------

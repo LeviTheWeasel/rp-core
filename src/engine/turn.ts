@@ -2,11 +2,11 @@
 // Copyright (C) 2026 Coneja-Chibi; changes Copyright (C) 2026 the rp-core authors.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// One turn, from `start` to its terminal event (ARCHITECTURE.md §6.2–§6.6, §7.1 M1a). Admission and
+// One turn, from `start` to its terminal event (ARCHITECTURE.md §6.2–§6.6, §7.1). Admission and
 // the `turn` line happen synchronously in session.ts; this file runs the rest:
 //
 //   [hook beforeAssemble] → assemble (pure) → shape (pure) → `prep` (fsync) → [hook transformRequest]
-//   → narrate: one streamed round, `chk` lines as text arrives, one retry, one fallback
+//   → narrate: the tool loop (every round streamed, `chk` lines as text arrives), one retry, one fallback
 //   → [hook transformReply] → commit (`msg` / `edit`, guarded by `base`) | `end`
 //
 // Port notes — Bunraku's turn rules, mapped onto the log: beginTurn → `turn`, the first
@@ -33,6 +33,16 @@
 // shape) live in request.ts, shared with preview, so a preview is what the turn sends. The lore
 // fires assemble puts in the trace ride `prep` and the commit (traceForSent keeps them), which is
 // where fold.ts reads the timers of later turns from (§5.10).
+//
+// M3 (.notes/m3-decisions.md B): step 8 is the tool loop (narrate.ts narrateRounds), one per route;
+// the retry and the fallback wrap the whole loop and only happen while nothing came out (in practice
+// round 0). A fallback with another tool transport, or whose reasoning echo differs from the
+// primary's (D-94 revised), gets its request rebuilt for itself (D-90); `prep` stays the primary's. Every
+// model call has its usage event and trace.calls row (callKey `<turn>:narrator:<round>`); gen.usage
+// is their sum, trace.tokens.reported round 0's (the EMA sample). Step 9 strips leaks from each text
+// block of a multi-round answer (the loop already left out the spans it turned into calls, §8.3);
+// tool rounds commit as interleaved blocks [§5.6]. A turn with no
+// visible text at all follows the M2 empty rules and commits nothing of its tool rounds.
 
 import { abortableDelay, abortWith, type AbortReason } from './abort.ts';
 import type { TurnOutcome } from './api.ts';
@@ -44,8 +54,19 @@ import { isoNow, type EngineCtx } from './context.ts';
 import { priceFor, usageCost } from './cost.ts';
 import { truncatedByServer } from './ema.ts';
 import { hookBeforeAssemble, hookTransformReply, hookTransformRequest, type HookCtx } from './hooks.ts';
-import { streamCall, timeoutsFor, type CallResult } from './narrate.ts';
-import { buildRequest, maxTokensFor, shapeRequest, type AssembledOk, type KeyedNotice, type ReplyLimits, type Shaped } from './request.ts';
+import { narrateRounds, storedSeparator, sumUsage, timeoutsFor, type RoundCall, type RoundsResult, type TurnTools } from './narrate.ts';
+import {
+  buildRequest,
+  echoRuleOf,
+  maxTokensFor,
+  shapeRequest,
+  type AssembledOk,
+  type BuiltRequest,
+  type KeyedNotice,
+  type ReplyLimits,
+  type RequestInput,
+  type Shaped,
+} from './request.ts';
 import { isRetryable, modelLabel, retryDelayMs } from './route.ts';
 import { traceForSent } from '../prompt/assemble.ts';
 import { continuationResult } from '../prompt/shape.ts';
@@ -77,14 +98,41 @@ interface Ending {
   terminal: EventBody;
 }
 
+type BuiltOk = Extract<BuiltRequest, { ok: true }>;
+
+/** One route's request: the primary's, a reshaped copy for a fallback, or a fallback's own (D-90). */
+interface Leg {
+  route: Route;
+  asm: AssembledOk;
+  shaped: Shaped;
+  tools: TurnTools | null;
+  reserve: number;
+  limits: ReplyLimits;
+}
+
 /** What the routed narration came to. */
 interface Narrated {
-  res: CallResult;
+  res: RoundsResult;
   active: Route;
+  /** The request the answer came from (the primary's, or the fallback's own). */
+  asm: AssembledOk;
   shaped: Shaped;
+  tools: TurnTools | null;
   route: NonNullable<Generation['route']>;
   calls: Trace['calls'];
 }
+
+/** Two echo rules (request.ts echoRuleOf) are the same: both off, or the same connection and model. */
+function sameEcho(a: { connection: string; model: string } | null, b: { connection: string; model: string } | null): boolean {
+  return a === null || b === null ? a === b : a.connection === b.connection && a.model === b.model;
+}
+
+/** A loop that never ran (stopped while waiting to retry). */
+function stoppedRounds(): RoundsResult {
+  return { blocks: [], text: '', reasoning: '', rounds: 0, ended: 'stopped', stopped: true, output: false, ms: 0, toolRows: [], roomLeft: 0 };
+}
+
+const isToolBlock = (b: Block): boolean => b.k === 'tool_call' || b.k === 'tool_result';
 
 const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -111,11 +159,13 @@ export class TurnRun {
    * null until the stream is over; the text events already sent may still show what was removed.
    */
   private answer: string | null = null;
+  /** M3: a multi-round answer's blocks after step 9 (null: one round, committed as M2 did). */
+  private roundBlocks: Block[] | null = null;
   /** The answer is in hand and being written: a failure now must keep the checkpoint (D-38). */
   private committing = false;
   private ended = false;
   /** traceForSent of the last shaped request: counted once, reused by the server check and the commit. */
-  private sentCache: { messages: readonly unknown[]; prefill: string | undefined; trace: Trace } | null = null;
+  private sentCache: { messages: readonly unknown[]; prefill: string | undefined; tools: TurnTools | null; trace: Trace } | null = null;
 
   constructor(
     private readonly host: TurnHost,
@@ -171,7 +221,7 @@ export class TurnRun {
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
 
     // Steps 4–5: assemble and shape for the primary model (request.ts, the same function preview runs).
-    const built = buildRequest({
+    const request: RequestInput = {
       home: this.ctx.home,
       sessionId: this.host.sessionId,
       header: this.host.header(),
@@ -183,10 +233,12 @@ export class TurnRun {
       timeZone: this.ctx.timeZone,
       counter: this.ctx.counter,
       placements,
-    });
+      ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
+    };
+    const built = buildRequest(request);
     this.keyedNotices(built.notices);
     if (!built.ok) return this.failEarly('request', built.code, built.message);
-    const { asm, shaped, reserve, limits, window } = built;
+    const { asm, shaped, window } = built;
     const primary = plan.primary;
 
     // Step 6: `prep`, durable, before anything is sent. vars ride the commit, not this line's
@@ -195,7 +247,7 @@ export class TurnRun {
     this.host.append({
       t: 'prep',
       turn: this.entry.turn,
-      trace: this.sentTrace(asm, shaped),
+      trace: this.sentTrace(asm, shaped, built.tools),
       // Recovery has nothing else to name the model of an interrupted answer by.
       model: { connection: primary.conn.id, model: primary.model },
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
@@ -212,18 +264,25 @@ export class TurnRun {
         message: `The narrator's fallback ${plan.fallbackMissing} names an unknown connection; there is no fallback this turn.`,
       });
     }
+    if (built.tools && plan.roundsClamped !== undefined && this.host.firstNotice('tool_rounds_clamped')) {
+      this.notice({
+        level: 'warn',
+        code: 'tool_rounds_clamped',
+        message: `narrator.maxRounds is ${plan.roundsClamped}; a turn runs at most ${plan.maxRounds} tool rounds, so ${plan.maxRounds} are used.`,
+      });
+    }
 
     // Step 7: the host's transformRequest gate, after `prep` (M9; a pass-through now).
     shaped.messages = await hookTransformRequest(this.ctx.hooks, shaped.messages, this.hookCtx);
 
-    // Step 8: narrate (one streamed round in M1a).
-    const narrated = await this.narrate(asm, shaped, reserve, limits);
+    // Step 8: narrate — the tool loop (§7.1), with one retry and one fallback around it.
+    const narrated = await this.narrate(request, built);
     // Every byte that arrived goes to a chk before anything can commit or crash (§6.2 step 8).
     this.chk.flush();
     const { res } = narrated;
-    this.checkServerWindow(asm, narrated, window);
+    this.checkServerWindow(narrated, window);
     // Step 9: post-processing, before anything commits or is handed back.
-    this.postProcess();
+    this.postProcess(res);
     if (res.tailError) {
       this.notice({
         level: 'warn',
@@ -231,22 +290,23 @@ export class TurnRun {
         message: `The answer was complete, but the stream failed after it (${res.tailError.code}); it is kept, its usage may be missing.`,
       });
     }
-    if (res.stopped) return this.onStopped(asm, narrated);
-    if (res.error) return this.onFailure(asm, narrated, res.error);
-    return this.onFinished(asm, narrated);
+    if (res.stopped) return this.onStopped(narrated);
+    if (res.error) return this.onFailure(narrated, res.error);
+    return this.onFinished(narrated);
   }
 
   /**
    * traceForSent for what this request sends, the prefill included (an EMA sample compares the
    * estimate with the prompt tokens the server counted, and a continue's prefill is the whole answer
-   * so far). Cached on the shaped messages: the prep line, the server check and the commit share one
-   * count of a long chat instead of three.
+   * so far), and the native tool declarations (the server counts them as prompt too). Cached on the
+   * shaped messages: the prep line, the server check and the commit share one count of a long chat
+   * instead of three.
    */
-  private sentTrace(asm: AssembledOk, shaped: Shaped): Trace {
+  private sentTrace(asm: AssembledOk, shaped: Shaped, tools: TurnTools | null): Trace {
     const c = this.sentCache;
-    if (c && c.messages === shaped.messages && c.prefill === shaped.prefill) return c.trace;
-    const trace = traceForSent(asm.trace, shaped.messages, shaped.prefill);
-    this.sentCache = { messages: shaped.messages, prefill: shaped.prefill, trace };
+    if (c && c.messages === shaped.messages && c.prefill === shaped.prefill && c.tools === tools) return c.trace;
+    const trace = traceForSent(asm.trace, shaped.messages, shaped.prefill, tools?.transport === 'native' ? tools.specs : undefined);
+    this.sentCache = { messages: shaped.messages, prefill: shaped.prefill, tools, trace };
     return trace;
   }
 
@@ -257,91 +317,122 @@ export class TurnRun {
     return out.shaped;
   }
 
-  /** One retry of the same model, then one fallback, both only before any output (§6.6). */
-  private async narrate(
-    asm: AssembledOk,
-    primaryShape: Shaped,
-    reserve: number,
-    limits: ReplyLimits,
-  ): Promise<Narrated> {
+  /**
+   * The fallback's request (§6.6, D-90): reshaped from the primary's when the tool transport and the
+   * reasoning echo are the same; rebuilt for the fallback (same view, seed and clock) when the
+   * transport differs, or when the request offers tools and the two routes' echo rules differ (D-94
+   * revised: the history must carry the echoing model's own reasoning, and another model's never,
+   * §8.6). `{code}` when the rebuilt request cannot be built.
+   */
+  private fallbackLeg(request: RequestInput, built: BuiltOk, fb: Route): Leg | { code: string } {
+    const primary = this.plan.primary;
+    const reasoning = this.plan.binding.reasoning;
+    const rebuild = fb.caps.tools !== primary.caps.tools || (built.tools !== null && !sameEcho(echoRuleOf(primary, reasoning), echoRuleOf(fb, reasoning)));
+    if (!rebuild) {
+      return { route: fb, asm: built.asm, shaped: this.shapeFor(fb, built.asm), tools: built.tools, reserve: built.reserve, limits: built.limits };
+    }
+    const own = buildRequest({ ...request, view: built.view, plan: { ...this.plan, primary: fb } });
+    this.keyedNotices(own.notices);
+    if (!own.ok) return { code: own.code };
+    return { route: fb, asm: own.asm, shaped: own.shaped, tools: own.tools, reserve: own.reserve, limits: own.limits };
+  }
+
+  /** One retry of the same model, then one fallback, both only before any output (§6.6, B1). */
+  private async narrate(request: RequestInput, built: BuiltOk): Promise<Narrated> {
     const { plan } = this;
-    const callKey = `${this.entry.turn}:narrator:0`;
+    const turnId = this.entry.turn;
     const route: NonNullable<Generation['route']> = [];
     const calls: Trace['calls'] = [];
-    const samplers = limits.samplers;
-    // The reserve (it already holds the binding's max_tokens and the primary's maxOutput); a fallback
-    // with a smaller output limit gets its own.
     this.chk.start();
 
-    const call = async (r: Route, shaped: Shaped): Promise<CallResult> => {
-      const label = modelLabel(r.conn.id, r.model);
-      const res = await streamCall({
+    const run = (leg: Leg): Promise<RoundsResult> => {
+      const r = leg.route;
+      const reasoning = plan.binding.reasoning;
+      return narrateRounds({
         conn: r.conn,
         model: r.model,
         caps: r.caps,
-        messages: shaped.messages,
-        ...(shaped.prefill !== undefined ? { prefill: shaped.prefill } : {}),
-        maxTokens: maxTokensFor(r, reserve),
-        samplers,
-        ...(plan.binding.reasoning ? { reasoning: plan.binding.reasoning } : {}),
-        callKey,
+        messages: leg.shaped.messages,
+        ...(leg.shaped.prefill !== undefined ? { prefill: leg.shaped.prefill } : {}),
+        // The reserve (it already holds the binding's max_tokens and the primary's maxOutput); a
+        // fallback with a smaller output limit gets its own.
+        maxTokens: maxTokensFor(r, leg.reserve),
+        samplers: leg.limits.samplers,
+        ...(reasoning ? { reasoning } : {}),
         turnSignal: this.ctrl.signal,
         sched: this.ctx.sched,
         fetch: this.ctx.fetch,
         timeouts: timeoutsFor(r.conn, this.ctx.timeouts),
         timers: this.ctx.timers,
         clock: this.ctx.clock,
+        turnId,
+        tools: leg.tools,
+        maxRounds: plan.maxRounds,
+        // B3: every narrator call of the turn counts toward CALL_CEILING, a retried round 0 too.
+        callsBefore: calls.length,
         onText: (delta) => {
           const offset = this.text.length;
           this.text += delta;
-          this.emit({ type: 'text', turnId: this.entry.turn, delta, offset });
+          this.emit({ type: 'text', turnId, delta, offset });
           this.chk.add(delta);
         },
         onReasoning: (delta) => {
           const offset = this.reasoning.length;
           this.reasoning += delta;
-          this.emit({ type: 'reasoning', turnId: this.entry.turn, delta, offset });
+          this.emit({ type: 'reasoning', turnId, delta, offset });
+        },
+        onTool: (ev) => {
+          this.emit({
+            type: 'tool',
+            turnId,
+            callId: ev.callId,
+            name: ev.name,
+            round: ev.round,
+            phase: ev.phase,
+            ...(ev.args !== undefined ? { args: ev.args } : {}),
+            ...(ev.ok !== undefined ? { ok: ev.ok } : {}),
+            ...(ev.summary !== undefined ? { summary: ev.summary } : {}),
+          });
+        },
+        onCall: (c) => this.recorded(c, r, calls),
+        onNotice: (code, message, key) => {
+          if (this.host.firstNotice(key ?? code)) this.notice({ level: 'warn', code, message });
         },
       });
-      // One usage event per call, with everything the call reported merged, so a cost from the
-      // price table is never computed from half a usage (§11).
-      if (res.usage) this.emitUsage(callKey, r, res.usage);
-      // The host's debug tap sees the raw failure (server words in error.detail); events never do.
-      for (const error of [res.error, res.tailError]) {
-        if (!error || !this.ctx.onProviderError) continue;
-        try {
-          this.ctx.onProviderError({ sessionId: this.host.sessionId, turnId: this.entry.turn, callKey, model: label, error });
-        } catch {
-          /* a debug sink must never break a turn */
-        }
-      }
-      calls.push({ callKey, agent: 'narrator', model: label, ms: res.ms, ...(res.usage ? { usage: res.usage } : {}) });
-      return res;
     };
-    const again = (res: CallResult): res is CallResult & { error: ProviderError } =>
+    const again = (res: RoundsResult): res is RoundsResult & { error: ProviderError } =>
       !res.stopped && !res.output && !this.ctrl.signal.aborted && isRetryable(res.error);
 
-    let active = plan.primary;
-    let shaped = primaryShape;
-    let res = await call(active, shaped);
+    let leg: Leg = {
+      route: plan.primary,
+      asm: built.asm,
+      shaped: built.shaped,
+      tools: built.tools,
+      reserve: built.reserve,
+      limits: built.limits,
+    };
+    let res = await run(leg);
 
     if (again(res)) {
       const err = res.error;
+      const active = leg.route;
       route.push({ model: modelLabel(active.conn.id, active.model), status: 'retry', code: err.code });
       const delayMs = retryDelayMs(err, this.ctx.retryMaxDelayMs, this.ctx.random);
-      this.emit({ type: 'retry', callKey, attempt: 1, delayMs, code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) });
+      this.emit({ type: 'retry', callKey: `${turnId}:narrator:0`, attempt: 1, delayMs, code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) });
       let waited = true;
       try {
         await abortableDelay(delayMs, this.ctrl.signal, this.ctx.timers);
       } catch {
         waited = false;
       }
-      // Stopped while waiting to retry: nothing was written, nothing streamed.
-      res = waited ? await call(active, shaped) : { text: '', reasoning: '', stopped: true, output: false, ms: 0 };
+      // Stopped while waiting to retry: nothing was written, nothing streamed. A retry re-runs the
+      // whole loop: nothing of the failed attempt came out.
+      res = waited ? await run(leg) : stoppedRounds();
     }
 
     if (again(res) && plan.fallback) {
       const err = res.error;
+      const active = leg.route;
       route.push({ model: modelLabel(active.conn.id, active.model), status: 'error', code: err.code });
       const fb = plan.fallback;
       this.notice({
@@ -349,16 +440,44 @@ export class TurnRun {
         code: 'fallback',
         message: `${modelLabel(active.conn.id, active.model)} failed (${err.code}); trying the fallback ${modelLabel(fb.conn.id, fb.model)}.`,
       });
-      active = fb;
-      // Re-shaped for the fallback's caps (prefill support may differ), through the same gate.
-      shaped = this.shapeFor(fb, asm);
-      shaped.messages = await hookTransformRequest(this.ctx.hooks, shaped.messages, this.hookCtx);
-      res = await call(active, shaped);
+      const next = this.fallbackLeg(request, built, fb);
+      if ('code' in next) {
+        // The fallback's own request cannot be built (its window is too small, say): the primary's
+        // failure stands, and the route says why the fallback never ran.
+        route.push({ model: modelLabel(fb.conn.id, fb.model), status: 'error', code: next.code });
+        return { res, active, asm: leg.asm, shaped: leg.shaped, tools: leg.tools, route, calls };
+      }
+      leg = next;
+      // Through the same gate as the primary's request.
+      leg.shaped.messages = await hookTransformRequest(this.ctx.hooks, leg.shaped.messages, this.hookCtx);
+      res = await run(leg);
     }
 
+    const active = leg.route;
     const last = modelLabel(active.conn.id, active.model);
     route.push(res.error ? { model: last, status: 'error', code: res.error.code } : { model: last, status: 'ok' });
-    return { res, active, shaped, route, calls };
+    return { res, active, asm: leg.asm, shaped: leg.shaped, tools: leg.tools, route, calls };
+  }
+
+  /**
+   * After every model call: one usage event with everything the call reported merged, so a cost
+   * from the price table is never computed from half a usage (§11); the host's debug tap; the
+   * trace.calls row.
+   */
+  private recorded(c: RoundCall, r: Route, calls: Trace['calls']): void {
+    const { res, callKey } = c;
+    if (res.usage) this.emitUsage(callKey, r, res.usage);
+    // The host's debug tap sees the raw failure (server words in error.detail); events never do.
+    const label = modelLabel(r.conn.id, r.model);
+    for (const error of [res.error, res.tailError]) {
+      if (!error || !this.ctx.onProviderError) continue;
+      try {
+        this.ctx.onProviderError({ sessionId: this.host.sessionId, turnId: this.entry.turn, callKey, model: label, error });
+      } catch {
+        /* a debug sink must never break a turn */
+      }
+    }
+    calls.push({ callKey, agent: 'narrator', model: label, ms: res.ms, ...(res.usage ? { usage: res.usage } : {}) });
   }
 
   // ---- outcomes -------------------------------------------------------------------------------
@@ -366,13 +485,14 @@ export class TurnRun {
   /**
    * The server reported far fewer prompt tokens than were sent: it cut the prompt to fit a smaller
    * window than the one budgeted for (Ollama does so silently at its num_ctx, keeping only the newest
-   * messages). Told once per session, with what to do; the call is no EMA sample (tokens.ts).
+   * messages). Told once per session, with what to do; the call is no EMA sample (tokens.ts). Round
+   * 0's usage against round 0's request: later rounds sent more than the estimate counts.
    */
-  private checkServerWindow(asm: AssembledOk, n: Narrated, window: number): void {
-    const reported = n.res.usage?.inputTotal;
+  private checkServerWindow(n: Narrated, window: number): void {
+    const reported = n.res.firstUsage?.inputTotal;
     if (reported === undefined) return;
     // The messages and the prefill the server counted, as the trace counts them.
-    const estimated = this.sentTrace(asm, n.shaped).tokens.estimated;
+    const estimated = this.sentTrace(n.asm, n.shaped, n.tools).tokens.estimated;
     if (!truncatedByServer(estimated, reported) || !this.host.firstNotice('context_truncated_by_server')) return;
     const label = modelLabel(n.active.conn.id, n.active.model);
     this.notice({
@@ -395,10 +515,45 @@ export class TurnRun {
    * §6.2 step 9 (D-57): leaked tool-call markup is cut out of the answer. Streamed `text` events may
    * have shown it; the committed message and every draft carry the stripped text. Told once per
    * session. Inline reasoning tags are split by the adapter, before the text reaches the engine.
+   * M3 (B6): an answer with tool rounds is stripped text block by text block (a block left empty
+   * goes), so the rounds keep their order; a one-round answer is stripped whole, as in M2. Spans the
+   * loop recovered into calls (§8.3) are already out of its blocks (RoundsResult.salvaged): they count
+   * toward the notice, and such an answer is taken block by block even without tool blocks (calls on
+   * a final round 0 are not stored), since its streamed text still holds them.
    */
-  private postProcess(): void {
-    const { text, stripped } = stripToolCallLeaks(this.text);
-    this.answer = text;
+  private postProcess(res: RoundsResult): void {
+    const salvaged = res.salvaged ?? 0;
+    // Markup a native round's stripper hid without running it never reached the text: counted here.
+    let stripped = salvaged + (res.hidden ?? 0);
+    if (!res.blocks.some(isToolBlock) && salvaged === 0) {
+      const out = stripToolCallLeaks(this.text);
+      this.answer = out.text;
+      stripped += out.stripped;
+    } else {
+      const blocks: Block[] = [];
+      let answer = '';
+      // The text blocks as the loop stored them, joined: it put D-55's separator in front of a block
+      // when this did not end in whitespace (narrate.ts storedSeparator).
+      let before = '';
+      for (const b of res.blocks) {
+        if (b.k !== 'text') {
+          blocks.push(b);
+          continue;
+        }
+        // The loop's separator goes, and the stripped body takes the one what is kept before it needs:
+        // a strip that took the whitespace at a block's end (or a whole block) never glues two rounds.
+        const sep = storedSeparator(before, b.text) !== '' && b.text.startsWith('\n') ? 1 : 0;
+        before += b.text;
+        const out = stripToolCallLeaks(b.text.slice(sep));
+        stripped += out.stripped;
+        if (out.text === '') continue;
+        const text = storedSeparator(answer, out.text) + out.text;
+        blocks.push({ k: 'text', text });
+        answer += text;
+      }
+      this.answer = answer;
+      this.roundBlocks = blocks;
+    }
     if (stripped > 0 && this.host.firstNotice('tool_markup_stripped')) {
       this.notice({
         level: 'info',
@@ -406,6 +561,11 @@ export class TurnRun {
         message: `Leaked tool-call markup was removed from the answer (${stripped} block${stripped === 1 ? '' : 's'}); the model wrote tool calls as text.`,
       });
     }
+  }
+
+  /** What commits for the answer in hand: the rounds' blocks, or M2's [reasoning?, text]. */
+  private answerBlocks(): Block[] {
+    return this.roundBlocks ?? answerBlocks(this.answerText, this.reasoning);
   }
 
   /** The addition a continue would commit ('' when nothing beyond an echo arrived). */
@@ -418,35 +578,39 @@ export class TurnRun {
     return this.plan.kind === 'continue' ? this.addition(n) !== '' : this.answerText.trim() !== '';
   }
 
-  /** §6.5: text in hand → commit as 'stopped'; nothing → end{stopped-empty}. */
-  private async onStopped(asm: AssembledOk, n: Narrated): Promise<Ending> {
+  /** §6.5: text in hand → commit as 'stopped' (tool calls paired with 'cancelled'); nothing → end{stopped-empty}. */
+  private async onStopped(n: Narrated): Promise<Ending> {
     if (!this.hasAnswerText(n)) return this.stoppedEmpty();
-    const placed = await this.commit(asm, n, answerBlocks(this.answerText, this.reasoning), 'stopped');
+    const placed = await this.commit(n, this.answerBlocks(), 'stopped');
     if (placed.kind === 'end') return this.lostToConflict(placed);
     const message = this.messageView(placed);
     return { outcome: { type: 'stopped', message }, terminal: { type: 'stopped', turnId: this.entry.turn, message } };
   }
 
   /** §6.6 / D-22: a failure. After output with onError 'keep' the text is committed as 'interrupted'. */
-  private async onFailure(asm: AssembledOk, n: Narrated, err: ProviderError): Promise<Ending> {
+  private async onFailure(n: Narrated, err: ProviderError): Promise<Ending> {
     const draft = this.answerText;
     if (n.res.output && this.plan.onError === 'keep' && this.hasAnswerText(n)) {
-      const placed = await this.commit(asm, n, answerBlocks(this.answerText, this.reasoning), 'interrupted');
+      const placed = await this.commit(n, this.answerBlocks(), 'interrupted');
       if (placed.kind === 'end') return this.lostToConflict(placed);
     } else {
       this.host.append({ t: 'end', ts: isoNow(this.ctx), turn: this.entry.turn, outcome: 'failed', code: err.code });
     }
-    return this.failed(err.category, err.code, err.message, draft);
+    return this.failed(err.category, err.code, err.message, draft, modelLabel(n.active.conn.id, n.active.model));
   }
 
-  /** The stream finished: commit, or one of the empty-answer failures (§6.4, §7.1, D-31). */
-  private async onFinished(asm: AssembledOk, n: Narrated): Promise<Ending> {
+  /**
+   * The stream finished: commit, or one of the empty-answer failures (§6.4, §7.1, D-31). With tool
+   * rounds the rules read the whole turn (B11): a final round without text after earlier text
+   * commits; a turn without any visible text fails as in M2 and its tool rounds are not kept.
+   */
+  private async onFinished(n: Narrated): Promise<Ending> {
     const finish: FinishReason = n.res.finish?.reason ?? 'end';
     if (this.plan.kind === 'continue') {
       if (this.addition(n) === '') {
         return this.endFailed('protocol', 'nothing_to_add', 'The model had nothing to add to this reply.', '');
       }
-      return this.done(await this.commit(asm, n, [], finish));
+      return this.done(await this.commit(n, [], finish));
     }
 
     let text = this.answerText;
@@ -467,44 +631,53 @@ export class TurnRun {
       if (this.plan.emptyReply !== 'keep') {
         return this.endFailed('protocol', 'reasoning_only', 'The model only reasoned and wrote no reply.', reasoning);
       }
-      return this.done(await this.commit(asm, n, [{ k: 'reasoning', text: reasoning }, { k: 'text', text: '' }], finish));
+      return this.done(await this.commit(n, [{ k: 'reasoning', text: reasoning }, { k: 'text', text: '' }], finish));
     }
     const reply = await hookTransformReply(this.ctx.hooks, text, this.hookCtx);
-    return this.done(await this.commit(asm, n, answerBlocks(reply.text, reasoning), finish));
+    if (this.roundBlocks === null || text !== this.answerText) return this.done(await this.commit(n, answerBlocks(reply.text, reasoning), finish));
+    // M9 may rewrite the reply; a rewritten multi-round answer keeps its tool blocks, text last.
+    const blocks = reply.text === text ? this.roundBlocks : [...this.roundBlocks.filter((b) => b.k !== 'text'), { k: 'text' as const, text: reply.text }];
+    return this.done(await this.commit(n, blocks, finish));
   }
 
   // ---- commit ---------------------------------------------------------------------------------
 
   /** Write the answer (§6.2 step 10) and announce `changed`. Throws only when the write itself fails. */
-  private async commit(
-    asm: AssembledOk,
-    n: Narrated,
-    blocks: Block[],
-    finish: FinishReason,
-  ): Promise<Placed> {
+  private async commit(n: Narrated, blocks: Block[], finish: FinishReason): Promise<Placed> {
     const { plan } = this;
-    const { res, active, shaped } = n;
+    const { res, active, shaped, asm, tools } = n;
+    // B13: gen.usage sums every call of the turn (retries included); a single call's is its own.
+    const usage = sumUsage(n.calls.flatMap((c) => (c.usage ? [c.usage] : [])));
     const gen: Generation = {
       kind: 'model',
       connection: active.conn.id,
       model: active.model,
       ...(res.served ? { served: res.served } : {}),
       finish,
-      ...(res.usage ? { usage: res.usage } : {}),
+      ...(usage ? { usage } : {}),
       ms: Math.max(0, this.ctx.clock().getTime() - this.t0),
       ...(res.ttftMs !== undefined ? { ttftMs: res.ttftMs } : {}),
-      transport: 'none',
-      rounds: 1,
+      transport: tools ? tools.transport : 'none',
+      rounds: res.rounds,
       preset: { name: plan.presetRef, hash: asm.trace.presetHash },
       ...(shaped.prefill !== undefined && plan.kind !== 'continue' ? { prefill: shaped.prefill } : {}),
       ...(plan.guidance ? { guidance: plan.guidance } : {}),
       route: n.route,
     };
-    const sent = this.sentTrace(asm, shaped);
+    // trace.blocks / tokens.estimated stay the round-0 request (preview --turn compares them 1:1);
+    // reported is round 0's prompt, the EMA's sample (B13). The loop rides trace.tools / rounds.
+    const sent = this.sentTrace(asm, shaped, tools);
+    const reported = res.firstUsage?.inputTotal;
     const trace: Trace = {
       ...sent,
-      tokens: { ...sent.tokens, ...(res.usage?.inputTotal !== undefined ? { reported: res.usage.inputTotal } : {}) },
+      tokens: { ...sent.tokens, ...(reported !== undefined ? { reported } : {}) },
       calls: n.calls,
+      ...(tools
+        ? {
+            ...(res.toolRows.length > 0 ? { tools: res.toolRows } : {}),
+            rounds: { n: res.rounds, transport: tools.transport, ended: res.ended, room: tools.roomTokens, roomLeft: res.roomLeft },
+          }
+        : {}),
     };
     this.committing = true;
     const placed = placeCommit(this.host, {
@@ -563,9 +736,10 @@ export class TurnRun {
     return this.failed(category, code, message, draft);
   }
 
-  private failed(category: Category, code: string, message: string, draft: string): Ending {
+  /** `route`: 'conn:model' of the model call that failed (TurnOutcome only; the terminal event is unchanged). */
+  private failed(category: Category, code: string, message: string, draft: string, route?: string): Ending {
     return {
-      outcome: { type: 'failed', category, code, message, draft },
+      outcome: { type: 'failed', category, code, message, draft, ...(route !== undefined ? { route } : {}) },
       terminal: { type: 'failed', turnId: this.entry.turn, category, code, message, draft },
     };
   }

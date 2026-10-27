@@ -5,8 +5,9 @@
 // changes Copyright (C) 2026 the rp-core authors.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The catalog half of rp-core probe (ARCHITECTURE.md §8.2 source 3, §15 M1b). Active probes (tools,
-// stream shape, json_schema) arrive in M3. A probe only ADVISES: it never raises capacity [D-84].
+// The catalog half of rp-core probe (ARCHITECTURE.md §8.2 source 3, §15 M1b) and the caps cache.
+// Active probes (tools, stream shape, json_schema) live in probe-active.ts (M3); the cache keeps
+// their facts apart from the catalog's. A probe only ADVISES: it never raises capacity [D-84].
 // Port sources: Bunraku src/kit/providers/models.ts (/models ladder, ~60 lines); RoleCall
 // apps/rc/src/lib/models/fetcher.ts parseCapabilities (lines 110-135).
 // CONTRACT FILE (M1b): signatures are fixed; the caps agent implements the bodies.
@@ -590,11 +591,20 @@ export async function fetchCatalog(
 // <home>/caps-cache.json
 // ---------------------------------------------------------------------------------------------------
 
-/** <home>/caps-cache.json: {"conn:model": {as_of, server, caps}}. Missing file → {}. Atomic writes. */
+/**
+ * <home>/caps-cache.json: {"conn:model": {as_of, server?, catalog?, probe?}}. Missing file → {}.
+ * Atomic writes. M3: catalog facts (the server's model list, /api/show, /props, OpenRouter
+ * metadata) and active-probe facts are kept apart so `caps.source` tells them apart: config.ts feeds
+ * `catalog` into resolveCaps' catalog slot and `probe` into its probe slot. A row written by M1b/M2
+ * (`caps` only) reads as catalog facts.
+ */
 export interface CapsCacheRow {
   as_of: string;
   server?: string;
-  caps: Partial<ModelCaps>;
+  catalog?: Partial<ModelCaps>;
+  probe?: Partial<ModelCaps>;
+  /** @deprecated M1b/M2 rows: read as `catalog`; never written from M3 on. */
+  caps?: Partial<ModelCaps>;
 }
 
 export function capsCachePath(home: string): string {
@@ -602,8 +612,25 @@ export function capsCachePath(home: string): string {
 }
 
 /**
+ * A row as it is kept: {as_of, server?, catalog?, probe?}, a legacy `caps` read as `catalog`, every
+ * part copied. Null when the row has no as_of string or no facts object at all.
+ */
+function normalizeRow(row: unknown): CapsCacheRow | null {
+  if (!isRecord(row) || typeof row['as_of'] !== 'string') return null;
+  const catalog = isRecord(row['catalog']) ? row['catalog'] : isRecord(row['caps']) ? row['caps'] : undefined;
+  const probe = isRecord(row['probe']) ? row['probe'] : undefined;
+  if (catalog === undefined && probe === undefined) return null;
+  const r: CapsCacheRow = { as_of: row['as_of'] };
+  if (typeof row['server'] === 'string') r.server = row['server'];
+  if (catalog !== undefined) r.catalog = structuredClone(catalog) as Partial<ModelCaps>;
+  if (probe !== undefined) r.probe = structuredClone(probe) as Partial<ModelCaps>;
+  return r;
+}
+
+/**
  * Read the cache. A missing file is {}; so is a file that is not JSON or not an object (it is a
- * cache: `rp-core probe` rebuilds it). Rows without an as_of string or a caps object are dropped.
+ * cache: `rp-core probe` rebuilds it). Rows without an as_of string or without any facts object
+ * (catalog, probe, or the M1b/M2 `caps`) are dropped. A legacy row's `caps` comes back as `catalog`.
  */
 export function readCapsCache(home: string): Record<string, CapsCacheRow> {
   let text: string;
@@ -622,21 +649,25 @@ export function readCapsCache(home: string): Record<string, CapsCacheRow> {
   if (!isRecord(parsed)) return {};
   const out: Record<string, CapsCacheRow> = {};
   for (const [key, row] of Object.entries(parsed)) {
-    if (!isRecord(row) || typeof row['as_of'] !== 'string' || !isRecord(row['caps'])) continue;
-    const r: CapsCacheRow = { as_of: row['as_of'], caps: row['caps'] as Partial<ModelCaps> };
-    if (typeof row['server'] === 'string') r.server = row['server'];
-    out[key] = r;
+    const r = normalizeRow(row);
+    if (r) out[key] = r;
   }
   return out;
 }
 
-/** Write the cache atomically: a temp file in the same directory, fsync, rename over the old one. Keys sorted. */
+/**
+ * Write the cache atomically: a temp file in the same directory, fsync, rename over the old one. Keys
+ * sorted. Rows go out as {as_of, server?, catalog?, probe?} (a legacy `caps` is written as `catalog`).
+ */
 export function writeCapsCache(home: string, cache: Record<string, CapsCacheRow>): void {
   mkdirSync(home, { recursive: true });
   const path = capsCachePath(home);
   const tmp = `${path}.tmp-${process.pid}`;
   const sorted: Record<string, CapsCacheRow> = {};
-  for (const key of Object.keys(cache).sort()) sorted[key] = cache[key]!;
+  for (const key of Object.keys(cache).sort()) {
+    const row = normalizeRow(cache[key]);
+    if (row) sorted[key] = row;
+  }
   const fd = openSync(tmp, 'w', 0o644);
   try {
     writeSync(fd, `${JSON.stringify(sorted, null, 2)}\n`);

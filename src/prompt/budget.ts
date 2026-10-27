@@ -147,3 +147,15 @@ export function loreBudget(window: number, reserve: number): number {
   const share = Number.isFinite(prompt) && prompt > 0 ? Math.round(LORE_SHARE * prompt) : 0;
   return share || 1;
 }
+
+/**
+ * M3: the share of the prompt part of the window kept free for tool rounds when tools are offered:
+ * calls, results and the narrator's text between rounds are appended to a request that is not
+ * rebuilt inside the turn (§7.1), so the room is reserved up front instead.
+ */
+export const TOOL_SHARE = 0.25;
+
+/** M3: the tool room in tokens: round(TOOL_SHARE × (window − reserve)), at least 0. */
+export function toolRoom(window: number, reserve: number): number {
+  return Math.max(0, Math.round(TOOL_SHARE * (window - reserve)));
+}

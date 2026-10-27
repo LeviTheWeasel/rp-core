@@ -17,11 +17,13 @@ import { readSessionFile } from '../session/log.ts';
 import type { Io } from './io.ts';
 import { EXIT, reportRefusal } from './oneshot.ts';
 import { entryTitles } from './refs.ts';
+import { NOTES_BOOK_KEY, noteRefs } from '../agents/compendium/notes.ts';
+import { entryLabel } from '../lore/engine.ts';
 import { describeEvent } from './render.ts';
 import { configOf, journalOf, resolveMessageId } from './repl-journal.ts';
 import { makeStyle, previewFailureText, renderPreview, renderVerdicts } from './repl-render.ts';
 import type { PreviewResult } from '../engine/api.ts';
-import { engineOptions, redactor, type Runtime } from './runtime.ts';
+import { bindingCaps, engineOptions, redactor, type Runtime } from './runtime.ts';
 
 export interface PreviewArgs {
   home: string;
@@ -103,6 +105,8 @@ export async function cmdPreview(a: PreviewArgs): Promise<number> {
     const header = session.header();
     const { entries } = readSessionFile(a.home, session.id);
     const titles = entryTitles(a.home, header.cast, configOf(journalOf(header, entries)).lorebooks);
+    // M3: a note that fired is named by its title too.
+    for (const { entry } of noteRefs(session.view().compendium)) titles.set(entryLabel(NOTES_BOOK_KEY, entry.key), entry.name);
     const verdicts = (ok: Extract<PreviewResult, { ok: true }>): string =>
       `lore verdicts:\n${renderVerdicts(ok.verdicts ?? [], ok.trace.lore, style, titles, Infinity, ok.loreUse)}`;
     if (a.wire) {
@@ -116,7 +120,7 @@ export async function cmdPreview(a: PreviewArgs): Promise<number> {
       }
       a.io.err.write('rp-core: this connection has no wire form (an in-process provider); printing the messages instead\n');
     }
-    let text = renderPreview(r, style, titles);
+    let text = renderPreview(r, style, titles, bindingCaps(a.rt, r.model.connection, r.model.model)?.tools ?? null);
     if (a.verdicts) text += `\n\n${verdicts(r)}`;
     a.io.out.write(`${redact(text)}\n`);
     return EXIT.done;

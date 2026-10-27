@@ -96,9 +96,69 @@ export function hasServerWords(ev: { category: string; code: string }): boolean 
   return PROVIDER_CATEGORIES.has(ev.category) && !OWN_WORDS.has(ev.code);
 }
 
+/**
+ * The way out of a model_not_found failure, in fixed words naming the session's own narrator binding
+ * (never the server's words, §13): where the server's model list is and how to switch. A session
+ * keeps its own copy of [roles], so editing config.toml does not help it. With `sessionId` (send),
+ * /model is reached through `rp-core chat`. With `failed` (TurnOutcome.route) naming another model
+ * than the narrator's, the failed call was the fallback's: the hint names that one instead.
+ */
+export function modelNotFoundHint(narrator: { conn: string; model: string }, sessionId?: string, failed?: string): string {
+  const { conn, model } = narrator;
+  // The call that failed was the fallback's (TurnOutcome.route): the narrator's own model is not the one missing.
+  if (failed !== undefined && failed !== `${conn}:${model}` && failed.includes(':')) {
+    const fconn = failed.slice(0, failed.indexOf(':'));
+    return `the fallback ${failed} is the model the server does not know (the narrator ${conn}:${model} failed first): rp-core models ${fconn} lists what that server has; [roles] narrator_fallback in config.toml names the fallback of new sessions`;
+  }
+  const how = sessionId === undefined ? `/model narrator ${conn}:<model> switches this chat` : `/model narrator ${conn}:<model> in rp-core chat ${sessionId} switches the session`;
+  return `the narrator is ${conn}:${model}: rp-core models ${conn} lists what the server has; ${how} (config.toml [roles] only sets new sessions)`;
+}
+
+const oneLine = (s: string, max: number): string => {
+  const flat = s.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+const scalarText = (v: unknown): string => {
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return v.map(scalarText).join(',');
+  try {
+    return JSON.stringify(v) ?? String(v);
+  } catch {
+    return String(v);
+  }
+};
+
+/**
+ * A tool call's arguments in a few words (M3): a string as it is; an object's first member, when it
+ * is a string, in quotes and the others as key=value (search_history {query, before} reads
+ * `"caravan" before=40`, read_lore {ids} reads `ids=L1,L3`). At most `max` characters.
+ */
+export function toolArgsText(args: unknown, max = 60): string {
+  if (args === undefined || args === null) return '';
+  if (typeof args !== 'object' || Array.isArray(args)) return oneLine(scalarText(args), max);
+  const parts = Object.entries(args as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v], i) => (i === 0 && typeof v === 'string' ? JSON.stringify(v) : `${k}=${scalarText(v)}`));
+  return oneLine(parts.join(' '), max);
+}
+
+/**
+ * The line of a finished tool call (§12.4 "Тулы — по одной приглушённой строке"):
+ * `⋯ search_history "caravan" → 2 hits`. null for the 'start' phase (the call is not done yet).
+ */
+export function toolLine(ev: Extract<Event, { type: 'tool' }>): string | null {
+  if (ev.phase !== 'done') return null;
+  const args = toolArgsText(ev.args);
+  const result = ev.summary !== undefined && ev.summary !== '' ? oneLine(ev.summary, 80) : ev.ok === false ? 'failed' : 'ok';
+  return `⋯ ${ev.name}${args ? ` ${args}` : ''} → ${result}`;
+}
+
 /** A human line (for stderr) about a non-text event, or null when there is nothing to say. */
 export function describeEvent(ev: Event): string | null {
   switch (ev.type) {
+    case 'tool':
+      return toolLine(ev);
     case 'notice':
       return `${ev.level}: ${ev.message} (${ev.code})`;
     case 'recovered':
@@ -129,7 +189,7 @@ export interface TurnRenderer {
 
 /**
  * Text mode for `send`: deltas go to stdout as they arrive and the answer ends with a newline;
- * notices, recoveries, retries and the ending go to stderr. With `debug`, failures and retries are
+ * notices, recoveries, retries, tool calls (M3) and the ending go to stderr. With `debug`, failures and retries are
  * also printed raw (as JSON) to stderr (the server's own words come through the engine's debug tap,
  * runtime.ts). Every message passes through `redact` when one is given.
  */
@@ -187,6 +247,13 @@ export function createTextRenderer(io: Io, opts: { debug: boolean; prefix?: stri
           endLine();
           say(describeEvent(ev)!);
           return;
+        case 'tool': {
+          // M3: one line per finished call. stdout stays the answer alone, so a call between two
+          // rounds starts its stderr line on a fresh line when the answer's line is still open.
+          const line = toolLine(ev);
+          if (line) io.err.write(`${printed !== '' && !printed.endsWith('\n') ? '\n' : ''}${prefix}${line}\n`);
+          return;
+        }
         default: {
           const line = describeEvent(ev);
           if (line) say(line);

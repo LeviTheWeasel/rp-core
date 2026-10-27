@@ -14,6 +14,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { unclosedTurnsHint } from '../../src/cli/commands.ts';
 import { tmpHome } from '../helpers.ts';
+import { EMPTY_COMPENDIUM } from '../../src/agents/compendium/types.ts';
 
 const SPEC: FlagSpec = {
   flags: { json: 'bool', kind: 'string', guidance: 'string', home: 'string' },
@@ -226,6 +227,7 @@ describe('render', () => {
       vars: {},
       fires: [],
       castNames: [],
+      compendium: EMPTY_COMPENDIUM,
     } satisfies PathView;
     const out = renderPath(view, { id: 's_1', title: 'Mira' });
     expect(out).toBe('Mira · s_1 · version 4\n\nassistant · a · swipe 1/1\n  one\n  two\n\nuser · b\n  (no text)\n\n(1 other branch off this path)\n');

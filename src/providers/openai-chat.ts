@@ -32,13 +32,17 @@
 //   "everything but 401 is backend_error"). EOF without finish and [DONE] is 'truncated_stream'.
 // - No non-streaming path and no whole-call timeout: the engine always streams and owns the
 //   first-byte and idle timers (§8.8).
+// - M3: the reader's replay payloads (reasoning_details, per-call extras) go out as StreamEv
+//   'replay' right before the finish; with the DeepSeek echo on (§8.4, D-94) every assistant message
+//   carries reasoning_content (its raw reasoning, else one space). The placeholder is an idea from
+//   SillyTavern's dummy reasoning_content for DeepSeek tool calls (Cohee, 9aff57c9c; no code taken).
 
 import { ProviderError, PROVIDER_ERROR_CATEGORY, providerMessage } from './types.ts';
 import type { ModelCaps, ModelRequest, PromptMsg, Provider, ProviderEnv, ProviderErrorCode, Replay, StreamEv, ToolSpec, Usage } from './types.ts';
 import type { Block } from '../session/entries.ts';
 import { bodyBytes, classifyHttpFailure, guardedFetch, isModerationError, originOf, type HttpRequest } from './http.ts';
 import { sseEvents } from './sse.ts';
-import { applyOverrides, normalizeFinish, remapToolIds, validateToolProtocol, type ConnectionOverrides } from './wire.ts';
+import { applyOverrides, echoesReasoning, normalizeFinish, rawReasoningOf, remapToolIds, validateToolProtocol, type ConnectionOverrides } from './wire.ts';
 import { createReasoningSplitter, DEFAULT_REASONING_TAGS, tagPairs } from './reasoning-tags.ts';
 
 export interface OpenAIChatOptions {
@@ -101,15 +105,6 @@ function textOf(blocks: readonly Block[]): string {
     .join('\n\n');
 }
 
-/** The raw reasoning of an assistant message, for the DeepSeek echo (summaries and redactions are not the model's own text). */
-function reasoningOf(blocks: readonly Block[]): string {
-  return blocks
-    .filter((b): b is Extract<Block, { k: 'reasoning' }> => b.k === 'reasoning' && (b.kind === undefined || b.kind === 'raw'))
-    .map((b) => b.text)
-    .filter((t) => t !== '')
-    .join('\n\n');
-}
-
 /** The replay payloads of a message that this connection and model produced (§8.6: never across models). */
 function replayFor(m: PromptMsg, req: ModelRequest, kind: Replay['kind']): unknown[] {
   return (m.replay ?? [])
@@ -124,6 +119,13 @@ interface RenderCtx {
 }
 
 /**
+ * What an echoed assistant message without reasoning of its own carries (D-94): DeepSeek wants the
+ * field on every assistant message once the echo is on and refuses an empty string (a third-party
+ * report, not verified against the API), so the placeholder is one space.
+ */
+export const ECHO_PLACEHOLDER = ' ';
+
+/**
  * One PromptMsg → wire messages (tool results become one 'tool' message each, before any text).
  * `orig` is the message before tool id remapping: replay payloads are keyed by the ids the server sent.
  */
@@ -135,8 +137,8 @@ function renderMessage(m: PromptMsg, orig: PromptMsg, ctx: RenderCtx): Rec[] {
     const calls = m.blocks.filter((b): b is Extract<Block, { k: 'tool_call' }> => b.k === 'tool_call');
     const origCalls = orig.blocks.filter((b): b is Extract<Block, { k: 'tool_call' }> => b.k === 'tool_call');
     if (ctx.echoField) {
-      const reasoning = reasoningOf(m.blocks);
-      if (reasoning !== '') wire[ctx.echoField] = reasoning;
+      const reasoning = rawReasoningOf(m.blocks);
+      wire[ctx.echoField] = reasoning !== '' ? reasoning : ECHO_PLACEHOLDER;
     }
     if (calls.length > 0) {
       // Extra keys the server sent on a call (Gemini's extra_content.google.thought_signature), by call id.
@@ -175,7 +177,7 @@ function renderMessage(m: PromptMsg, orig: PromptMsg, ctx: RenderCtx): Rec[] {
  * rendered in order (later system messages stay 'system': shape.ts already turned them into user
  * notes when caps.midSystem is 'as-user'), then the prefill per caps.prefill.
  */
-function wireMessages(req: ModelRequest, toolsSent: boolean): Rec[] {
+function wireMessages(req: ModelRequest): Rec[] {
   const caps = req.caps;
   const messages = remapToolIds(req.messages, caps.toolIdFormat);
   const out: Rec[] = [];
@@ -188,11 +190,12 @@ function wireMessages(req: ModelRequest, toolsSent: boolean): Rec[] {
   }
   if (i > 0) out.push({ role: 'system', content: head.join('\n\n') });
 
-  // DeepSeek thinking with tools needs reasoning_content on every past assistant turn, or 400 (§8.4).
-  // The core put only this model's reasoning on the path; the adapter only places it.
-  const toolTraffic = toolsSent || messages.some((m) => m.blocks.some((b) => b.k === 'tool_call'));
-  const echoField =
-    caps.reasoning.echo === 'all-with-tools' && toolTraffic ? (caps.reasoning.output === 'reasoning' ? 'reasoning' : 'reasoning_content') : null;
+  // DeepSeek thinking with tools needs reasoning_content on every past assistant turn, or 400 (§8.4,
+  // D-94 revised). The core put only this model's reasoning on the path; the adapter only places it, on
+  // every assistant message (a message without reasoning of its own gets the placeholder). With
+  // thinking off (reasoning 'none' on a model that can turn it off) nothing is echoed. The rule is
+  // wire.ts echoesReasoning, shared with the engine's notice for a refused placeholder.
+  const echoField = echoesReasoning(req) ? (caps.reasoning.output === 'reasoning' ? 'reasoning' : 'reasoning_content') : null;
   const ctx: RenderCtx = { req, echoField };
   for (; i < messages.length; i++) out.push(...renderMessage(messages[i]!, req.messages[i]!, ctx));
 
@@ -303,7 +306,7 @@ export function buildChatRequest(req: ModelRequest, o: OpenAIChatOptions, key: s
   const tools = toolsToSend(req);
   let body: Rec = {
     model: req.model.model,
-    messages: wireMessages(req, tools.length > 0),
+    messages: wireMessages(req),
     stream: true,
   };
   if (caps.streamUsage === 'stream_options') body.stream_options = { include_usage: true };
@@ -451,8 +454,8 @@ export interface ChatReader {
   readonly finished: boolean;
   /**
    * Verbatim payloads for replay inside the current tool loop (§8.6): 'reasoning_details' (the
-   * OpenRouter array, as streamed) and 'tool_extra' ({[callId]: {unknown call keys}}). StreamEv has
-   * no replay event yet (M3), so an aggregator reads them here.
+   * OpenRouter array, as streamed) and 'tool_extra' ({[callId]: {unknown call keys}}). The same
+   * payloads go out as StreamEv 'replay' right before the finish (M3).
    */
   replay(): Replay[];
 }
@@ -656,6 +659,8 @@ export function createChatReader(req: ModelRequest): ChatReader {
   function finishNow(out: StreamEv[]): void {
     settle(out);
     flushUsage(out);
+    // M3: the replay payloads, once per call and kind, before the finish (calls are closed by now).
+    for (const r of replay()) out.push({ t: 'replay', r });
     out.push({ t: 'finish', reason: normalizeFinish(finishRaw), raw: finishRaw ?? '', ...(model !== undefined ? { model } : {}) });
     finishSent = true;
   }

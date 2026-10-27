@@ -19,7 +19,9 @@ import { createCoalescer, type Coalescer } from '../protocol/coalesce.ts';
 import type { Event } from '../protocol/events.ts';
 import type { TurnKind } from '../session/entries.ts';
 import type { Io } from './io.ts';
-import { createTextRenderer, redactEvent } from './render.ts';
+import { createTextRenderer, modelNotFoundHint, redactEvent } from './render.ts';
+import { configOf, journalOf } from './repl-journal.ts';
+import { readSessionFile } from '../session/log.ts';
 import { engineOptions, redactor, type Runtime } from './runtime.ts';
 import { installTurnSignals, type SignalSource } from './signals.ts';
 
@@ -104,6 +106,12 @@ export function reportRefusal(io: Io, r: Refusal, json: boolean, rt?: Runtime): 
   return EXIT.refused;
 }
 
+/** modelNotFoundHint for the session's narrator binding as its journal has it now. */
+function narratorHint(home: string, sessionId: string, failed?: string): string {
+  const { header, entries } = readSessionFile(home, sessionId);
+  return modelNotFoundHint(configOf(journalOf(header, entries)).roles.narrator, sessionId, failed);
+}
+
 function startTurn(s: SessionHandle, o: SendOptions): TurnHandle {
   const expectedVersion = s.version();
   if (o.kind === 'reply') return s.submit({ text: o.text ?? '', expectedVersion, onError: 'keep' });
@@ -166,6 +174,9 @@ export async function runSend(o: SendOptions): Promise<number> {
     } finally {
       signals.dispose();
       sink.close();
+    }
+    if (!o.json && !o.provider && outcome.type === 'failed' && outcome.code === 'model_not_found') {
+      o.io.err.write(`rp-core: hint: ${narratorHint(o.home, open.id, outcome.route)}\n`);
     }
     return signals.exitOverride() ?? exitCodeOf(outcome);
   } finally {

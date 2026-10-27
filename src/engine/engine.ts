@@ -16,6 +16,7 @@ import { realTimers } from './abort.ts';
 import { EventBus } from './bus.ts';
 import { checkpointCadence } from './checkpoint.ts';
 import type { EngineCtx } from './context.ts';
+import type { ToolSets } from './request.ts';
 import { createScheduler } from './sched.ts';
 import { SessionImpl } from './session.ts';
 import { systemClock, systemRandom, systemTimeZone } from './system.ts';
@@ -32,10 +33,12 @@ export type EngineTuning = Pick<EngineOptions, 'timeouts' | 'timers'>;
 /**
  * Seams outside the library contract (EngineOptions), for tests: hosts never set them.
  * `counter` pins how prompts are counted (default defaultCounter(), o200k from M2); a test that
- * pins chars/3 numbers passes CHARS_COUNTER.
+ * pins chars/3 numbers passes CHARS_COUNTER. `toolSets` (M3) replaces the built-in narrator tools the
+ * request builder offers (request.ts ToolSets): the rules for when a set is offered stay the same.
  */
 export interface EngineSeams {
   counter?: TokenCounter;
+  toolSets?: ToolSets;
 }
 
 export class Engine {
@@ -60,6 +63,7 @@ export class Engine {
       ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
       ...(opts.prices ? { prices: { ...opts.prices } } : {}),
       ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
+      ...(opts.toolSets ? { toolSets: opts.toolSets } : {}),
     };
     return new EngineImpl(ctx);
   }

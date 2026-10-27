@@ -14,6 +14,7 @@ import { CHARS_COUNTER, type TokenCounter } from '../../../src/prompt/tokens.ts'
 import type { ModelCaps, PromptMsg } from '../../../src/providers/types.ts';
 import type { MessageView, PathView } from '../../../src/session/view.ts';
 import { fixturePreset, loadFixture, loadRecorded, rcCharacter, rcPersona, type RcFixture, type RcRecorded } from './convert.ts';
+import { EMPTY_COMPENDIUM } from '../../../src/agents/compendium/types.ts';
 
 /** A plain chat-completions model: system messages anywhere, free alternation, assistant prefill. */
 export const CAPS: ModelCaps = {
@@ -120,6 +121,7 @@ export function pathOf(f: RcFixture, cast: Cast): PathView {
     vars: {},
     fires: [],
     castNames: [cast.character.name, ...(cast.persona ? [cast.persona.name] : [])],
+    compendium: EMPTY_COMPENDIUM,
   };
 }
 

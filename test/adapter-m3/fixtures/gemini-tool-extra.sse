@@ -1,0 +1,12 @@
+data: {"id": "chatcmpl-g1", "object": "chat.completion.chunk", "created": 1793000000, "model": "gemini-3-pro-preview", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Let me check the archive."}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-g1", "object": "chat.completion.chunk", "created": 1793000000, "model": "gemini-3-pro-preview", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "fc_1", "type": "function", "function": {"name": "search_lore", "arguments": "{\"query\":"}, "extra_content": {"google": {"thought_signature": "c2lnLW9uZQ=="}}}]}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-g1", "object": "chat.completion.chunk", "created": 1793000000, "model": "gemini-3-pro-preview", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": " \"amber\"}"}}]}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-g1", "object": "chat.completion.chunk", "created": 1793000000, "model": "gemini-3-pro-preview", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "id": "fc_2", "type": "function", "function": {"name": "read_lore", "arguments": "{\"ids\":[\"L1\"]}"}, "extra_content": {"google": {"thought_signature": "c2lnLXR3bw=="}}}]}, "finish_reason": "tool_calls"}]}
+
+data: {"id": "chatcmpl-g1", "object": "chat.completion.chunk", "created": 1793000000, "model": "gemini-3-pro-preview", "choices": [], "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}}
+
+data: [DONE]
+

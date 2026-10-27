@@ -246,8 +246,9 @@ prefill_vs_tools = "prefill"     # prefill | tools: which wins when a turn wants
 # creativity = "moderate"        # subtle | moderate | dramatic
 
 # ---- Capability overrides ----------------------------------------------------------------
-# rp-core knows the common servers and models, and \`rp-core probe\` asks the server. Override a
-# field per "<connection>:<model>" only after checking it:
+# rp-core knows the common servers and models, \`rp-core probe\` asks the server and
+# \`rp-core probe <connection>:<model> --active\` asks the model. Override a field per
+# "<connection>:<model>" only after checking it (an override wins over any probe):
 # [caps."ollama:qwen3:14b"]
 # context_length = 16384         # the window the server really runs (Ollama: num_ctx)
 # tools = "native"               # native | prompted | none
@@ -263,10 +264,11 @@ prefill_vs_tools = "prefill"     # prefill | tools: which wins when a turn wants
 /**
  * Build engine Connections for every openai-chat connection: provider = createOpenAIChatProvider,
  * origin = originOf(base_url), local = isLocalOrigin unless overridden, caps = resolveCaps for model ''
- * and capsFor(model) = resolveCaps with host preset, model rows, catalog/probe cache rows for
- * "conn:model" and user overrides; resolveKey via the SecretResolver (lazy, memoised); header values
- * read from env at build time (a missing or unusable one makes that connection's resolveKey reject
- * with key_unavailable, naming the header and the variable; it never fails the whole config).
+ * and capsFor(model) = resolveCaps with host preset, model rows, the cache row of "conn:model"
+ * (its catalog part in the catalog slot, its probe part in the probe slot) and user overrides;
+ * resolveKey via the SecretResolver (lazy, memoised); header values read from env at build time (a
+ * missing or unusable one makes that connection's resolveKey reject with key_unavailable, naming the
+ * header and the variable; it never fails the whole config).
  * anthropic/gemini connections are skipped and reported in `skipped`.
  */
 export function buildConnections(
@@ -274,7 +276,8 @@ export function buildConnections(
   deps: {
     env: Record<string, string | undefined>;
     secrets: SecretResolver;
-    capsCache: Record<string, { server?: string; caps: Partial<ModelCaps> }>;
+    /** <home>/caps-cache.json rows by "conn:model" (probe.ts CapsCacheRow; a legacy `caps` counts as catalog). */
+    capsCache: Record<string, { server?: string; catalog?: Partial<ModelCaps>; probe?: Partial<ModelCaps>; caps?: Partial<ModelCaps> }>;
   },
 ): { connections: Record<string, Connection>; skipped: { id: string; why: string }[] } {
   return buildConnectionsWith(cfg, deps, {
@@ -358,8 +361,12 @@ export function buildConnectionsWith(
       const row = deps.capsCache[key];
       const server = row?.server ?? connServer;
       if (server !== undefined && server !== '') input.server = server;
-      // caps-cache.json is the `rp-core probe` cache (§8.2 source 4); in M1b it holds catalog facts.
-      if (row) input.probe = row.caps;
+      // caps-cache.json (rp-core probe): the catalog's facts go to the catalog slot (§8.2 source 3),
+      // the active probes' to the probe slot (source 4), so caps.source says which one spoke. A row
+      // written by M1b/M2 holds catalog facts under `caps`.
+      const catalog = row?.catalog ?? row?.caps;
+      if (catalog) input.catalog = catalog;
+      if (row?.probe) input.probe = row.probe;
       const user = cfg.caps[key];
       if (user) input.user = user;
       return input;

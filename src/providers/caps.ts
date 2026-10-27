@@ -367,9 +367,17 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 /**
+ * Server kinds that are self-hosted OpenAI-compatible servers: their `response_format` json_schema is
+ * confirmed only by a probe or the user, never by a host row (§7.2: "llama.cpp/Ollama always turn the
+ * schema into a grammar" is not taken on faith).
+ */
+export const LOCAL_SERVER_KINDS: readonly string[] = ['llama.cpp', 'ollama', 'lmstudio', 'koboldcpp', 'vllm'];
+
+/**
  * Problems in a caps-data file (empty when it is sound): missing as_of/src, a bad date, a match of the
  * wrong shape for its file, an unknown caps key, a sampler name the core does not have, a glob that
- * does not compile. Tests run it over both shipped files.
+ * does not compile, a local server's structured output confirmed by its host row (§7.2). Tests run
+ * it over both shipped files.
  */
 export function checkCapsRows(rows: readonly CapsRow[], kind: 'hosts' | 'models'): string[] {
   const problems: string[] = [];
@@ -384,6 +392,10 @@ export function checkCapsRows(rows: readonly CapsRow[], kind: 'hosts' | 'models'
         const m = row.match;
         if (m.hostname === undefined && m.server === undefined) problems.push(`${at}: match needs hostname or server`);
         if (m.port !== undefined && !isPositiveInt(m.port)) problems.push(`${at}: port must be a positive integer`);
+        const localServer = m.hostname === undefined && (m.server === undefined || LOCAL_SERVER_KINDS.includes(m.server));
+        if (localServer && isPlainObject(row.caps) && row.caps.structuredOutput?.confirmedBy === 'host') {
+          problems.push(`${at}: a local server's structured output needs a probe or the user, not confirmedBy 'host' (§7.2)`);
+        }
       }
       if (row.servers !== undefined) problems.push(`${at}: servers is a models.json field`);
     } else {

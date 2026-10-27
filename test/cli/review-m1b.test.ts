@@ -150,7 +150,8 @@ describe('probe --write and auth failures', () => {
       expect(good.code).toBe(0);
       expect(good.stdout).toContain('stored in');
       const before = readFileSync(join(home, 'caps-cache.json'), 'utf8');
-      expect(JSON.parse(before)['lc:m1']).toMatchObject({ server: 'llama.cpp', caps: { contextLength: 16384 } });
+      // M3: the catalog's facts are the row's catalog part (active-probe facts go to its probe part).
+      expect(JSON.parse(before)['lc:m1']).toMatchObject({ server: 'llama.cpp', catalog: { contextLength: 16384 } });
 
       const bad = await cli(['probe', 'lc:m1', '--write', '--home', home], {}); // LC_KEY not exported
       expect(bad.code).toBe(1);

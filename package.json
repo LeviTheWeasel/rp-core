@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "gpt-tokenizer": "4.1.0",
+    "jsonrepair": "3.14.0",
     "re2js": "2.9.0"
   },
   "devDependencies": {
