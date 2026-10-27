@@ -569,6 +569,11 @@ function isKeyLikeName(name: string): boolean {
 const KEY_LIKE_VALUE =
   /^(?:Bearer\s+\S{8,}|(?:sk|rk|pk)[-_][A-Za-z0-9_-]{16,}|(?:xai|gsk|hf|ghp|github_pat|nvapi|pplx|r8|csk)[-_][A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*)$/;
 
+/** Whether a string is shaped like a well-known API key (the test config.toml values get). */
+export function looksLikeKey(v: string): boolean {
+  return KEY_LIKE_VALUE.test(v.trim());
+}
+
 /**
  * Walk the whole tree: a key-like field name or a key-shaped string value anywhere → ConfigError,
  * which never repeats the value. Names that are user identifiers rather than fields (connection ids,

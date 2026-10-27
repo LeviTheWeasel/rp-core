@@ -492,7 +492,8 @@ mention, sizes, the generator, the seeding).
 alias rp-core='bun src/cli/main.ts'
 H=$(mktemp -d)
 printf '[connections.ollama]\nbase_url = "http://127.0.0.1:11434"\n\n[caps."ollama:magmell-16k:latest"]\ncontext_length = 16384\ntools = "prompted"\n' > $H/config.toml
-id=$(bun seed.ts $H)          # seed.ts as in §1, run from the repo
+bun tools/fixtures/seed-innkeeper.ts --home $H --model ollama:magmell-16k:latest --max-tokens 300 --max-rounds 2   # as §1; prints the session id
+id=s_…                        # the id it printed
 printf 'как, по словам трактирщицы, звали её брата?\n/trace\n/search брат\n/memory add Брат трактирщицы | брат | Её младшего брата зовут Тихон.\n/memory\n/lore test А где сейчас её брата искать?\n/quit\n' | rp-core --home $H chat $id
 rp-core --home $H probe ollama:magmell-16k:latest --active
 # the gated live test (up to 3 tries × 3 calls):
@@ -501,3 +502,62 @@ RP_CORE_LIVE=1 bun test test/live/m3-ollama.test.ts
 RP_CORE_LIVE=1 RP_CORE_OLLAMA_M3_MODEL=gemma4:26b RP_CORE_OLLAMA_CTX=4096 RP_CORE_OLLAMA_TOOLS=native \
   RP_CORE_OLLAMA_MAX_TOKENS=1024 bun test test/live/m3-ollama.test.ts
 ```
+
+### On a hosted model
+
+No hosted model has been tried yet. Both ways below run the same chat and question; they differ in
+what you see. The key stays in your shell: `config.toml` and the test only name the variable.
+
+**The test** (one command; a verdict and a JSON transcript with the answers, the lookups and the
+usage, with the cost when the API reports it):
+
+```bash
+export OPENROUTER_API_KEY=…   # or DEEPSEEK_API_KEY for api.deepseek.com
+RP_CORE_LIVE=1 RP_CORE_CLOUD_URL=https://openrouter.ai/api RP_CORE_CLOUD_MODEL=<model id> \
+  RP_CORE_CLOUD_KEY_ENV=OPENROUTER_API_KEY bun test test/live/m3-cloud.test.ts
+```
+
+- **First, the model list** (a free GET), as `rp-core probe --write` reads it: OpenRouter's facts
+  about the model (tools, `tool_choice`, reasoning) are used, a refused key stops the run before any
+  paid call, and an id the list lacks is reported with close ones.
+- **What it costs:** at most 9 answered calls (3 tries × 3 rounds; it stops at the first try that
+  searched and named Тихон). Each prompt stays under the window minus the reply reserve: 12 288
+  tokens with the defaults (window 16 384, reserve 4 096). A request the server refuses with 429 or
+  5xx is retried once; refused requests are usually not billed.
+- **Thinking models:** the reserve (`RP_CORE_CLOUD_MAX_TOKENS`, default 4096) holds the thinking
+  too; a try whose thinking uses all of it fails `reasoning_only` and stops the test. The test as a
+  whole has 30 minutes (`RP_CORE_CLOUD_TIMEOUT_MS`); each try is logged as it ends.
+- **DeepSeek's own API:** `RP_CORE_CLOUD_URL=https://api.deepseek.com/beta`,
+  `RP_CORE_CLOUD_KEY_ENV=DEEPSEEK_API_KEY`, a model id from its list. There (not through
+  OpenRouter) a thinking model with tools gets every earlier answer back with a one-space
+  placeholder for the reasoning it never had (D-94); this is that rule's first live check.
+
+**By hand in the chat** (what the narrator looks up, as it happens):
+
+```bash
+H=~/rp-m3-cloud; mkdir -p $H
+cat > $H/config.toml <<'TOML'
+[connections.openrouter]
+base_url = "https://openrouter.ai/api"
+key_env = "OPENROUTER_API_KEY"
+
+# The catalog (probe --write below) gives the model's own window, which holds the whole
+# 40k-token chat: nothing would be trimmed and no history tools offered. 16384 keeps the demo
+# a search, as the test runs it; this table wins over the catalog.
+[caps."openrouter:<model id>"]
+context_length = 16384
+TOML
+rp-core --home $H probe openrouter --write     # free: the model list, with tools and tool_choice
+bun tools/fixtures/seed-innkeeper.ts --home $H --model openrouter:<model id> --max-tokens 4096
+rp-core --home $H preview <session> --draft "как, по словам трактирщицы, звали её брата?"   # free: the request, not sent
+rp-core --home $H chat <session>
+```
+
+The banner should say `(tools: native)`. Without `probe --write` rp-core knows nothing of the model's
+tools on OpenRouter and offers them prompted (add `tools = "native"` to the table instead), and it
+assumes that OpenRouter ignores `tool_choice`, so a final round goes without the tool schemas; an
+Anthropic model behind OpenRouter may refuse that. In the chat, ask «как, по словам трактирщицы,
+звали её брата?». A lookup shows as `⋯ search_history "брат" → 2 hits` (#5 and your own question),
+`/trace` lists the rounds and the tokens, and `/r` asks again.
+`rp-core --home $H probe openrouter:<model id> --active` (at most 6 short calls) says first whether
+the model calls tools at all.
