@@ -7,7 +7,8 @@
 // subcommand. M1a: new, import, send, sessions, show. M1b: init, chat (the REPL), probe, models;
 // config.toml's connections behind every turn. M2: import of presets and world info, new --preset /
 // --lore, preview, --provider record:/replay:. M3: probe --active, a script's caps line, tool lines
-// in send's text mode. `--stdio` comes in M6.
+// in send's text mode. M4.5: tui and new --tui
+// (the full-screen host; OpenTUI is imported dynamically on that path only). `--stdio` comes in M6.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
@@ -53,6 +54,8 @@ const PROVIDER_HELP = `  --provider script:<file>  play a scripted provider (JSO
   --provider replay:<file>  play a recording back instead of the network; a request that differs
                             from the recorded one fails with replay_mismatch and a diff`;
 const PROVIDER_FLAG = '--provider script:<f>|record:<f>|replay:<f>';
+/** tui/run.ts NEEDS_TERMINAL, repeated here so main never loads OpenTUI to say it. */
+const NEEDS_TERMINAL = 'rp-core tui needs a terminal; use rp-core chat';
 
 const COMMANDS: Record<string, Command> = {
   init: {
@@ -72,11 +75,12 @@ unless the file exists, and prints its path. Edit [connections] and [roles] narr
       title: 'string',
       json: 'bool',
       'no-chat': 'bool',
+      tui: 'bool',
       provider: 'string',
       preset: 'string',
       lore: 'list',
     },
-    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <json file>] [--title text] [--no-chat] [--json] [${PROVIDER_FLAG}]`,
+    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <json file>] [--title text] [--tui | --no-chat] [--json] [${PROVIDER_FLAG}]`,
     summary: 'import a card and start a session (opens the chat on a terminal)',
     help: `Imports the card (PNG or JSON, CCv1/V2/V3) into the library and creates a session with its
 greetings; its config starts from config.toml ([roles], [narrator], [director]). On a terminal
@@ -93,6 +97,7 @@ the chat opens right away; otherwise (or with --no-chat / --json) the session id
   --persona <file>    a persona JSON {name, description, aliases?, book?}; book is a lorebook in
                       rp-core's own format, scanned before the card's
   --title <text>      the session title (default: the character's name)
+  --tui               open the new session full-screen (rp-core tui) instead of the line REPL
   --no-chat           only create the session and print its id
   --json              print {"sessionId","title","greetings":[{id,text}]} (implies --no-chat)
 ${PROVIDER_HELP}`,
@@ -111,6 +116,22 @@ previous answer.
 ${PROVIDER_HELP}
 Exit 0 at /quit or the end of input; 3 under --provider script: or replay: when an answer failed
 (a piped script or replay also stops at the first replay_mismatch, or when it runs out of calls).`,
+  },
+  tui: {
+    flags: { provider: 'string' },
+    usage: `rp-core tui <session> [${PROVIDER_FLAG}]`,
+    summary: 'open a session full-screen: models, chat and agents side by side (needs a terminal)',
+    help: `The same chat as rp-core chat (every slash command, held lines, Ctrl+C rules), on one screen:
+the models and hotkeys on the left, the chat in the middle, the agents and their tool calls on the
+right (the side panes fold away on narrow terminals; F2 toggles them). Enter sends; Shift+Enter,
+Alt+Enter or Ctrl+J start a new line. Hotkeys: Ctrl+R swipe, Ctrl+G guided re-roll, Ctrl+O continue,
+Ctrl+E edit the last message in the input (Enter saves, Esc cancels), Alt+Left/Right versions,
+PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off. Ctrl+C
+stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
+Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes
+and scripts use rp-core chat.
+${PROVIDER_HELP}
+Exit 0 at /quit; 3 under --provider script: or replay: when an answer failed; 64 without a terminal.`,
   },
   import: {
     flags: { as: 'string', json: 'bool' },
@@ -338,15 +359,31 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const card = str(p, 'card');
       if (card === undefined) throw new UsageError('--card <file> is required', name);
       const maxTokens = positiveInt(p, 'max-tokens', name);
+      const tui = bool(p, 'tui');
+      if (tui && (json || bool(p, 'no-chat'))) throw new UsageError(`--tui opens the chat; it cannot be combined with ${json ? '--json' : '--no-chat'}`, name);
+      if (tui && deps.tty !== true) {
+        io.err.write(`${NEEDS_TERMINAL}\n`);
+        return EXIT.usage;
+      }
       const chat = deps.tty === true && !json && !bool(p, 'no-chat');
       const rt = runtimeOf(home, deps, p, providerOf(p, name, chat));
+      // Loaded before the session exists: a TUI that cannot load must not leave a locked session.
+      const tuiModule = tui ? await import('./tui/index.ts') : null;
       return cmdNew({
         home: home.dir,
         card,
         json,
         io,
         rt,
-        ...(chat ? { chat: (engine, session) => runChat(engine, session, { rt, io, exitNow, ...chatExtras(deps) }) } : {}),
+        ...(tuiModule ? { reopen: 'tui' as const } : {}),
+        ...(chat
+          ? {
+              chat: (engine, session) =>
+                tuiModule
+                  ? tuiModule.runTui(engine, session, { rt, io, exitNow, env: deps.env, ...chatExtras(deps) })
+                  : runChat(engine, session, { rt, io, exitNow, ...chatExtras(deps) }),
+            }
+          : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
         ...(str(p, 'preset') !== undefined ? { preset: str(p, 'preset')! } : {}),
         ...(list(p, 'lore').length > 0 ? { lore: list(p, 'lore') } : {}),
@@ -361,6 +398,20 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       if (sessionId === undefined) throw new UsageError('which session? rp-core chat <session>', name);
       const rt = runtimeOf(home, deps, p, providerOf(p, name, deps.tty === true));
       return cmdChat({ rt, io, sessionId, exitNow, ...chatExtras(deps) });
+    }
+    case 'tui': {
+      noPositionals(p, name, 1);
+      const sessionId = p.positionals[0];
+      if (sessionId === undefined) throw new UsageError('which session? rp-core tui <session>', name);
+      // Checked before OpenTUI loads: a pipe never needs the native library.
+      if (deps.tty !== true) {
+        io.err.write(`${NEEDS_TERMINAL}\n`);
+        return EXIT.usage;
+      }
+      const rt = runtimeOf(home, deps, p, providerOf(p, name, true));
+      // T-2: OpenTUI is loaded on this path only.
+      const { cmdTui } = await import('./tui/index.ts');
+      return cmdTui({ rt, io, sessionId, exitNow, tty: true, env: deps.env, ...chatExtras(deps) });
     }
     case 'probe': {
       noPositionals(p, name, 2);

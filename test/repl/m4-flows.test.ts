@@ -4,6 +4,7 @@
 // Director's calls a row of their own. No turn runs with the Director on here (the engine's part).
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Engine } from '../../src/engine/engine.ts';
+import { renderDirective } from '../../src/agents/director/render.ts';
 import { emptyState } from '../../src/agents/director/state.ts';
 import type { ConfigEntry } from '../../src/session/entries.ts';
 import { recordFor, richState, msgInput, traceWith } from '../cli-m4/fixtures.ts';
@@ -78,9 +79,10 @@ describe('banner', () => {
 
 /**
  * A closed session: greeting → u1 → a1 (Director turn 1, no plan yet: failed no_output) → u2 → a2
- * (turn 40, the rich state, with Director calls in its trace) → head a2.
+ * (turn 40, the rich state, with Director calls in its trace) → head a2. `failedAfter`: then u3 → a3
+ * (turn 41 failed: timeout, the state kept with the authored directive of turn 40) → head a3.
  */
-async function sessionWithRecords(): Promise<{ home: string; id: string }> {
+async function sessionWithRecords(o: { failedAfter?: boolean } = {}): Promise<{ home: string; id: string }> {
   const home = tmpHome('rp-core-repl-m4-');
   const engine = await Engine.open({ home });
   const s = engine.createSession({ character: MIRA, persona: LEVI, config: { director: { enabled: true } } });
@@ -109,6 +111,10 @@ async function sessionWithRecords(): Promise<{ home: string; id: string }> {
         dir: recordFor(rich),
       }),
     );
+    if (!o.failedAfter) return;
+    log.append(msgInput('u1000003', 'a1000002', 'user', 'Open it.'));
+    const after = { ...rich, turn: 41 };
+    log.append(msgInput('a1000003', 'u1000003', 'assistant', 'The door sticks.', { dir: recordFor(after, { ok: false, code: 'timeout', directive: undefined, skipped: [] }) }));
   });
   return { home, id };
 }
@@ -124,7 +130,8 @@ describe('/director show over the path', () => {
     expect(out).toContain('· director script:default (auto) · ctx');
     expect(out).toContain("director on · script:default (the narrator's model) · profile auto · style the-balanced\nturn 40 · planned on a1000002 · structured · full · script:default · 2 skipped");
     expect(out).toContain('  seed-6 "The red ribbon" · epic · age 35/25 OVERDUE · 2 reinforcements · ripe for payoff');
-    expect(out).toContain('last directive (turn 40, as sent) mood "tense"');
+    // The directive in full, as the narrator got it (renderDirective of the record's), not a summary.
+    expect(out).toContain(`last directive (turn 40, as sent):\n${renderDirective(recordFor(richState()).directive!)}\nyou  › /usage`);
     // Priced from the kit's table (script:default: $1 / $2 per million).
     expect(out).toContain(
       [
@@ -136,5 +143,19 @@ describe('/director show over the path', () => {
     );
     // Rewound to a1: its own record (a failed first turn), nothing planned yet.
     expect(out).toContain('turn 1 · failed (no_output) on a1000001 · structured · full · script:default\nchapter none yet\narcs: none\nseeds: none\nhidden arcs: none\nno directive yet');
+  });
+
+  test('a failed turn at the head: the last directive sent before it on the path, in full, and whose it was', async () => {
+    const { home, id } = await sessionWithRecords({ failedAfter: true });
+    const r = await rig({ home, sessionId: id });
+    r.type('/director show');
+    r.end();
+    expect(await r.done).toBe(0);
+    const out = r.out();
+    expect(out).toContain('turn 41 · failed (timeout) on a1000003 · structured · full · script:default');
+    // a2's record (as sent: its ending hook and beats), not the state's authored copy (which has neither).
+    const sent = renderDirective(recordFor(richState()).directive!);
+    expect(out).toContain(`last directive (turn 40, as sent on a1000002; turn 41 sent none):\n${sent}`);
+    expect(sent).toContain('[Ending: A knock at the door.]');
   });
 });

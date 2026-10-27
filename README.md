@@ -8,9 +8,11 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
   koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
   it notes to remember. A Story Director can plan the story before each answer (off by default).
-- **Built with:** TypeScript on [Bun](https://bun.sh), with three small runtime dependencies:
-  `re2js` (regex lorebook keys), `gpt-tokenizer` (token counts) and `jsonrepair` (broken tool-call
-  arguments).
+  Besides the line chat there is a [full-screen TUI](#the-full-screen-tui) with the models, the chat
+  and the agents side by side.
+- **Built with:** TypeScript on [Bun](https://bun.sh), with four runtime dependencies: `re2js`
+  (regex lorebook keys), `gpt-tokenizer` (token counts), `jsonrepair` (broken tool-call arguments)
+  and `@opentui/core` (the full-screen TUI only).
 - **Licence:** AGPL-3.0-or-later.
 - **Design:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (in Russian).
 
@@ -21,24 +23,25 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 3. [Quick start with Ollama](#quick-start-with-ollama)
 4. [Connecting Ollama, in detail](#connecting-ollama-in-detail)
 5. [Playing in the chat](#playing-in-the-chat)
-6. [Editing messages and choosing an editor](#editing-messages-and-choosing-an-editor)
-7. [Presets and lorebooks](#presets-and-lorebooks)
-8. [Tools and search](#tools-and-search)
-9. [Notes](#notes)
-10. [The Story Director](#the-story-director)
-11. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-12. [Active probes](#active-probes)
-13. [config.toml reference](#configtoml-reference)
-14. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-15. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-16. [Where your data lives](#where-your-data-lives)
-17. [Troubleshooting](#troubleshooting)
-18. [Command reference](#command-reference)
-19. [Development](#development)
+6. [The full-screen TUI](#the-full-screen-tui)
+7. [Editing messages and choosing an editor](#editing-messages-and-choosing-an-editor)
+8. [Presets and lorebooks](#presets-and-lorebooks)
+9. [Tools and search](#tools-and-search)
+10. [Notes](#notes)
+11. [The Story Director](#the-story-director)
+12. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+13. [Active probes](#active-probes)
+14. [config.toml reference](#configtoml-reference)
+15. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+16. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+17. [Where your data lives](#where-your-data-lives)
+18. [Troubleshooting](#troubleshooting)
+19. [Command reference](#command-reference)
+20. [Development](#development)
 
 ## What works today
 
-**Works now (M4):**
+**Works now (M4, and the M4.5 TUI):**
 
 | Area | What you get |
 |---|---|
@@ -46,6 +49,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Presets | SillyTavern chat-completion presets: prompt order, markers, samplers, prefill, formats (`/preset`) |
 | Lorebooks | SillyTavern world info and card books, activated as in SillyTavern: keys and `/regex/` keys, secondary keys, recursion, inclusion groups, probability, sticky, cooldown, delay, positions and depths, the budget (`/lore`) |
 | Chat | A streaming chat in the terminal |
+| Full-screen TUI | `rp-core tui`: the models and the hotkeys, the chat, and the agents with their tool calls in three columns; the same commands as the chat, plus hotkeys, mouse scrolling and copying, `**bold**` and `*italic*` in answers without their asterisks, colours from your terminal's theme |
 | Story tree | Swipes and guided re-rolls, continue, edit, hide, rewind, branches (tails) and forks |
 | Models | Switch the model in the middle of a session (`/model`) |
 | Tools and search | The narrator looks up earlier messages and lore before it answers, with the server's own tool calling or with calls written as text; `/search` runs the same search for you |
@@ -65,10 +69,13 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
 ## Install
 
-You need **Bun 1.3 or newer** and this repository.
+You need **Bun 1.3 or newer** and this repository. The full-screen TUI needs **Bun 1.3.14 or newer**
+(its library, OpenTUI, asks for it; we test on 1.3.14).
 
-**1. Install the dependencies.** This fetches the three runtime dependencies (`re2js`,
-`gpt-tokenizer`, `jsonrepair`) and the dev tools for tests and the typecheck.
+**1. Install the dependencies.** This fetches the four runtime dependencies (`re2js`,
+`gpt-tokenizer`, `jsonrepair`, `@opentui/core`) and the dev tools for tests and the typecheck.
+OpenTUI is the big one: about 28 MB on disk on Linux x64 with its native libraries, plus
+`web-tree-sitter` (about 6 MB), which Bun installs with it. Only the TUI loads it.
 
 ```bash
 cd ~/Documents/AI/rp-core
@@ -136,7 +143,8 @@ rp-core new --card ~/cards/mira.png --model "ollama:hf.co/bartowski/MN-12B-Mag-M
 - **Write a message:** type and press Enter.
 - **Help:** `/help` lists the commands.
 - **Leave:** `/quit`.
-- **Come back later:** `rp-core chat <session>`. `rp-core sessions` lists the session ids.
+- **Come back later:** `rp-core chat <session>`, or `rp-core tui <session>` for the
+  [full-screen TUI](#the-full-screen-tui). `rp-core sessions` lists the session ids.
 
 ## Connecting Ollama, in detail
 
@@ -274,6 +282,7 @@ rp-core new --card <file or library id> [--model conn:model] [--preset <id or fi
 - **Reply length.** `--max-tokens` caps the length of the answers.
 - **Without opening the chat.** With `--no-chat`, or when not on a terminal, `new` only prints the
   session id.
+- **Full-screen.** With `--tui`, the new session opens in the [TUI](#the-full-screen-tui) instead.
 
 ### What you see
 
@@ -324,7 +333,7 @@ Maren Vell › …
 | `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, the tool rounds and calls |
 | `/search <words> [before=n]` | Find earlier messages of this path, newest first ([details](#tools-and-search)) |
 | `/memory`, `/memory show\|add\|edit\|retire\|restore` | Your notes for the narrator ([details](#notes)) |
-| `/director`, `/director show` | The Story Director's plan at this point of the story: chapter, arcs, seeds, hidden arcs, the last directive ([details](#the-story-director)) |
+| `/director`, `/director show` | The Story Director's plan at this point of the story: chapter, arcs, seeds, hidden arcs, and the last directive in full, as the narrator got it ([details](#the-story-director)) |
 | `/director on`, `/director off` | Let the Director plan every reply from the next turn, or stop it. Its plan is kept |
 | `/probe --active [--write]` | Test the narrator's model with a few tiny calls ([details](#active-probes)) |
 | `/sessions`, `/open <id>` | List sessions, switch to one |
@@ -352,9 +361,211 @@ The story is a tree, and nothing is overwritten:
   `rp-core chat <session>` recovers that answer as `[interrupted]`. You lose at most about a second
   of text.
 
+## The full-screen TUI
+
+`rp-core tui` shows a session on one screen: the models and the hotkeys on the left, the chat in the
+middle, the agents and their tool calls on the right. It is the same chat as `rp-core chat`. Every
+slash command, held lines, refusals during an answer and the Ctrl+C rules work as described in
+[Playing in the chat](#playing-in-the-chat).
+
+### Starting it
+
+```bash
+rp-core tui <session>
+```
+
+```bash
+rp-core new --card ~/cards/mira.png --model "ollama:magmell-16k:latest" --tui
+```
+
+- **It needs a real terminal** on stdin and stdout. Without one it exits with code 64 and says
+  `rp-core tui needs a terminal; use rp-core chat`.
+- **The line chat stays.** `rp-core chat` is unchanged and is still what `new` opens by default.
+  Pipes, scripts and `--provider script:` runs use it. Both open the same session files, so you can
+  switch between them (not at the same time: the session is locked while one has it open).
+- **Refusals come first.** A locked or missing session is refused before the screen opens, as in
+  `chat` (exit 5).
+- **`--provider`** works on `tui` as on `chat`. `new --tui` cannot be combined with `--no-chat` or
+  `--json`.
+
+### What you see
+
+A real capture at 140 × 36 on a scripted model, with the empty rows cut:
+
+```
+┌─ Models ─────────────────┐┌─ Chat ───────────────────────────────────────────────────────────────────┐┌─ Agents ─────────────────────────┐
+│ Alice                    ││ Alice › Oh! Another adventurer! I was just about to head inside. Want to ││ Narrator · idle                  │
+│                          ││ join me?                                                                 ││   last 0.8s · end                │
+│ Narrator                 ││   [greeting 1/3]                                                         ││   1 round · tools off            │
+│ script:default           ││                                                                          ││                                  │
+│ ctx 8k · tools off       ││ you   › Привет, Алиса                                                    ││ Director · off                   │
+│ (script)                 ││                                                                          ││                                  │
+│                          ││   ⋯ thinking (21 chars)                                                  ││                                  │
+│ Director · off           ││ Alice › Алиса оборачивается. «Привет, путник. Пойдём?»                   ││                                  │
+│                          ││   [swipe 1/1 · 0.4s · end]                                               ││                                  │
+│ Enter      send          ││                                                                          ││                                  │
+│ Alt+Enter  new line      ││ you   › ещё                                                              ││                                  │
+│ Ctrl+C     stop / quit   ││                                                                          ││                                  │
+│ Ctrl+R     swipe         ││ Alice › Другая версия ответа.                                            ││                                  │
+│ Ctrl+G     guided reroll ││   [swipe 2/2 · 0.0s · end]                                               ││                                  │
+│ Ctrl+O     continue      ││                                                                          ││                                  │
+│ Ctrl+E     edit last     ││ you   › день?                                                            ││                                  │
+│ Alt+←/→    versions      ││                                                                          ││                                  │
+│ PgUp/PgDn  scroll        ││ Alice › Она смотрит в календарь: Monday / Morning — пора.                ││                                  │
+│ C-Home/End top/bottom    ││   [swipe 1/1 · 0.8s · end]                                               ││                                  │
+│ Ctrl+D     Director      ││                                                                          ││                                  │
+│ F1         help          ││                                                                          ││                                  │
+│ F2         side panes    ││                                                                          ││                                  │
+│ F3         mouse: on     ││                                                                          ││                                  │
+│ Shift+drag select        ││                                                                          ││                                  │
+│ Esc        cancel/clear  ││                                                                          ││                                  │
+│                          ││                                                                          ││ Usage                            │
+│                          ││ ready · Enter sends · F1 help                                            ││   3 calls · usage not reported   │
+│                          ││ you › Write your line… (Enter sends)                                     ││   cost unknown                   │
+└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────┘
+```
+
+- **Models (left, 28 columns).** The session title, the character and your persona. The narrator's
+  `connection:model`, its window and whether it can use tools; `(script)` or `(recording)` under
+  `--provider`. The Director: `off`, or its model (`follows narrator` when it uses the narrator's),
+  the profile of its last plan and its style. Then the hotkeys, one per row.
+- **Chat (middle, the rest).** The whole current path when the session opens, then the chat as it
+  goes: each message under its name, the status line under each answer, the tool and Director lines,
+  the replies of slash commands. Under it, one status row (`ready`, `answering…`, `working…`,
+  `sent 4 chars to the clipboard`, errors) and the input box.
+- **Agents (right, 36 columns).** See [The Agents pane](#the-agents-pane).
+
+**Narrow terminals.** At 120 columns or more you get all three columns. From 90 to 119 you get the
+chat and the Agents pane; below 90, the chat only. F2 hides both side panes at any width and brings
+them back; it cannot show a pane the width has no room for. When the left pane is not on screen,
+F1 (`/help`) lists the hotkeys under the commands.
+
+**Long sessions.** The newest 150 cards and rows stay separate; older ones are folded into blocks of
+50. On open the TUI builds only the newest part and up to 300 messages before it; a dim row at the
+top, `⋯ N earlier messages · Ctrl+Home loads more`, counts the rest, and each Ctrl+Home builds 300
+more. So a session with thousands of messages opens and scrolls fast.
+
+### Hotkeys
+
+The labels are those of the left pane.
+
+| Key | The pane says | What it does |
+|---|---|---|
+| Enter | send | Sends the line: a message or a slash command |
+| Alt+Enter (or Shift+Enter) | new line | A line break in the input. Alt+Enter and Ctrl+J need nothing special; Shift+Enter works only in terminals that report it (the kitty keyboard protocol), and the pane shows it only then |
+| Ctrl+C | stop / quit | Stops the answer and keeps what arrived; at the prompt it clears the input; twice within 2 seconds on an empty input it quits. It also cancels an edit in place |
+| Ctrl+R | swipe | `/r` |
+| Ctrl+G | guided reroll | Puts `/regen ` into the input; type the direction and press Enter |
+| Ctrl+O | continue | `/c` |
+| Ctrl+E | edit last | Puts the last message into the input to edit (`/e`) |
+| Alt+←/→ | versions | `/[` and `/]` |
+| PgUp/PgDn | scroll | Scrolls the chat a page |
+| C-Home/End | top/bottom | Ctrl+Home and Ctrl+End: the top and the bottom of the chat. In a long session Ctrl+Home also loads 300 older messages |
+| Ctrl+D | Director | `/director show` |
+| F1 | help | `/help` |
+| F2 | side panes | Hides or shows both side panes |
+| F3 | mouse: on | Mouse reporting on or off; the row shows the current state |
+| Shift+drag | select | The terminal's own text selection (see [Mouse](#mouse-selecting-and-copying)) |
+| Esc | cancel/clear | Cancels an edit in place, or clears the input |
+
+- **Hotkeys are typed lines.** A hotkey that stands for a command goes in as if you typed it, so the
+  chat's rules apply: during an answer it waits or is refused, as the typed command would be.
+- **On a Russian layout** the Ctrl+letter keys work as on the Latin one; see
+  [Troubleshooting](#troubleshooting).
+
+### Typing and editing
+
+- **Enter** sends. **Alt+Enter**, **Ctrl+J** or (where it works) **Shift+Enter** start a new line. The
+  input grows up to 6 rows.
+- **↑ / ↓ on an empty input** scroll the chat by 3 lines. With text in the input they move the
+  cursor.
+- **During an answer** you can type; a line you send waits until the answer ends. A slow command
+  (`/probe --active`, `/preview` of a big session) shows `working…` in the status row, and
+  `queued: N` counts the lines that wait.
+- **Editing in place.** `/e [n]` and Ctrl+E put the message into the input with its real line
+  breaks, labelled `edit ›`. Enter saves; Esc or Ctrl+C cancels. The TUI does not use `$VISUAL` or
+  `$EDITOR`. If the input already holds text, Ctrl+E does nothing and the status row says
+  `send or clear the input first (Esc)`.
+- **`*italic*` and `**bold**`.** In answers, `*actions*` show in italics and `**bold**` in bold, both
+  without their asterisks, as rendered markdown, also while the answer streams. Speech inside an
+  action stays upright; `*emphasis*` inside speech is italic. A `*` opens italics only before a
+  non-blank character with no letter or digit right before it, and closes them only after a
+  non-blank character with no letter or digit right after it; any other `*` is drawn as it is
+  (`5 * 3`, `f*ck`, `* item`, a lone `*`). `***both***` is bold italic. A span still open at a line
+  break ends there, without its opening `*`. The line chat (`rp-core chat`) keeps both kinds of
+  asterisks on screen.
+
+### Mouse: selecting and copying
+
+- **The mouse is on by default.** The wheel scrolls the chat. F3 turns mouse reporting off (the row
+  then says `mouse: off`) and on again. With it off, the terminal handles the mouse; most terminals
+  then turn the wheel into ↑ / ↓, which still scroll the chat while the input is empty.
+- **Shift+drag** selects text the terminal's own way, while the mouse is on. Copy it as you usually
+  do in that terminal.
+- **A plain drag** selects inside the TUI. When you let go, the text is sent to the clipboard with
+  OSC 52, and the status row says `sent N chars to the clipboard`. Whether it arrives is up to the
+  terminal: Warp, kitty, WezTerm and iTerm2 say they accept OSC 52 (we have not checked each), and
+  the TUI cannot see the answer. GNOME Terminal and other VTE terminals (Tilix, Terminator) ignore
+  OSC 52; there the TUI sends nothing, and the status row says so and points to Shift+drag.
+
+### Colours
+
+The TUI uses your terminal's colours: text in its default colour, accents from its 16-colour
+palette, no background of its own. A light or a dark theme works without a setting. With `NO_COLOR`
+set (to any non-empty value), text has no colours, only bold, dim and italic; a mouse selection
+still shows on palette grey.
+
+### The Agents pane
+
+- **Narrator.** Its state: `idle`, `waiting…`, `thinking (N chars)`, `writing…`, `tool <name>`,
+  `retry <code>`, `stopped` or `failed (<code>)`. Then its last 6 tool calls, newest first, each
+  with its time, and the last answer: tokens, seconds, why it ended, rounds and the tool transport.
+- **Director.** `off`, `planning…`, `planned`, `reused`, `skipped` or `failed (<code>)`, with the
+  time it took and the plan's summary. Then the stored plan: turn, profile, transport, model, the
+  last attempts, the chapter, live arcs and seeds due.
+- **Usage** at the bottom: calls, tokens in and out, and the cost (as `/usage`).
+
+From a live session on Ollama with the Director on:
+
+```
+Director · planned · 42.2s
+  seeds ~1
+  turn 3 · lite · tagged
+  ollama:magmell-16k:latest
+  tagged ok · 42.2s · 511 tok
+  chapter 1 "A Warm Welcome"
+  0 live arcs · 0 seeds due
+```
+
+### Logs, leaving and signals
+
+- **Logs.** While the screen is up, nothing is printed to the terminal. The chat's own lines
+  (command output, notices, errors) and the `--debug` lines also go to `<home>/logs/tui.log`
+  (`~/.rp-core/logs/tui.log`); the answers do not. An unexpected error shows in red in the status
+  row and goes to the log.
+- **Leaving.** `/quit`, or Ctrl+C twice on an empty input, restores the terminal and exits with 0.
+  Lines the TUI could not show any more, and why it ended on exit 1, 3 or 130, are printed in the
+  restored terminal.
+- **Closing the terminal** (SIGHUP), SIGTERM, SIGQUIT and the other exit signals end it cleanly: the
+  partial answer is kept, the lock is released, and the exit code is 128 + the signal's number
+  (SIGHUP 129, SIGTERM 143). A second signal leaves at once.
+
+### Limits
+
+- **Tested by us** in a headless renderer and in a real pseudo-terminal. Warp and GNOME Terminal were
+  tried by hand, before the latest fixes. What we have not verified: Warp's own behaviour
+  (Shift+Enter, Shift+drag), OSC 52 copying in each terminal, input methods (IME), and Ctrl+Z
+  (suspending the TUI is not supported).
+- **Emoji in Warp.** Warp sizes joined emoji differently, so under Warp the TUI drops emoji joiners,
+  VS16 and skin-tone marks from the text it shows.
+- **Size.** OpenTUI brings a native library of about 5 MB per platform and about 28 MB on disk in
+  all (see [Install](#install)). No other command loads it.
+- **No external editor**, no images and no settings screen in this version.
+
 ## Editing messages and choosing an editor
 
-`/e [n]` edits message *n* (default: the last). How depends on whether you named an editor.
+`/e [n]` edits message *n* (default: the last). How depends on whether you named an editor. In the
+full-screen TUI it always edits in the input box ([details](#typing-and-editing)).
 
 ### Default: editing in place
 
@@ -881,8 +1092,9 @@ The codes of `failed (<code>)`:
 
 ### /director show
 
-`/director` (or `/director show`) prints the plan at the current point of the story. From the live
-run on Mag-Mell 12B, after four Russian turns:
+`/director` (or `/director show`) prints the plan at the current point of the story. From the second
+live run on Mag-Mell 12B, after four Russian turns (printed by today's code from that run's journal;
+[`docs/M4-DEMO.md`](docs/M4-DEMO.md) §3):
 
 ```
 director on · ollama:magmell-16k:latest (the narrator's model) · profile auto · style the-balanced
@@ -893,9 +1105,34 @@ seeds: 1 waiting
   seed-1 "The old map" · long · age 3/10 · 0 reinforcements
 hidden arcs: none
 intentions:
-  must · next: Demonstrate Marfa's hospitality and care for Elisey's wellbeing by offering a safe, alternative pat…
-  should · eventually: Plant the idea of a hidden, potentially secret route that could factor into Elisey's journey, hinti…
-last directive (turn 4, as sent) mood "warm and inviting" · goal "Establish Marfa as a knowledgeable and …" · setting "A cozy, dimly-lit inn room wi…" · tension 3/10 · 1 arc direction · 1 character beat · hook "Marfa leans in closer, her voice barely…"
+  must · next: Demonstrate Marfa's hospitality and care for Elisey's wellbeing by offering a safe, alternative path, building her character arc as a knowledgeable and caring host.
+  should · eventually: Plant the idea of a hidden, potentially secret route that could factor into Elisey's journey, hinting at future story developments.
+last directive (turn 4, as sent):
+[DIRECTOR CONSTRAINTS - BINDING THIS TURN]
+The following are non-negotiable scene constraints decided by the Story Director.
+They take precedence over any internal planning, director framework, or evaluation
+protocol you may otherwise apply to arc/callback/character-beat decisions.
+Your job is to render these constraints as excellent prose. Do NOT second-guess
+which arc to advance, which callback to weave in, or which character beat to hit -
+the Director has already made those decisions. Execute them.
+
+Mood: warm and inviting
+
+Scene Guidance:
+  Setting: A cozy, dimly-lit inn room with a crackling fireplace
+  Atmosphere: Intimate, with the scent of herbs and honey
+  Tension: mild (3/10)
+
+Narrative Goal: Establish Marfa as a knowledgeable and caring host who looks out for travelers' safety
+
+Story Arc Directions:
+  - "Marfa's Concern for Travelers" (moderate): Show Marfa offering Eлиsey a safe, alternative route out of concern for his wellbeing
+
+Character Beats:
+  - Marfa: Expresses worry about the state of the roads and bridges
+
+[Ending: Marfa leans in closer, her voice barely above a whisper]
+[/DIRECTOR CONSTRAINTS]
 ```
 
 - **First line:** on or off, the model, the profile, the style.
@@ -908,7 +1145,19 @@ last directive (turn 4, as sent) mood "warm and inviting" · goal "Establish Mar
 - **Seeds:** hint, payoff horizon, `age N/T` (T: the age at which the payoff is due; `OVERDUE` from
   then on), reinforcements, and `ripe for payoff` (age 30 or more with 2 or more reinforcements).
 - **Hidden arcs:** id, title, status, type, `age N/T` (with `OVERDUE`) and the number of clues.
-- **Last directive:** a summary of what the narrator got.
+- **Intentions:** what the Director means to do next, by priority and target.
+- **Last directive:** the whole `[DIRECTOR CONSTRAINTS - BINDING THIS TURN]` …
+  `[/DIRECTOR CONSTRAINTS]` block, exactly as the narrator got it (after the persona filter), dim and
+  not indented, so a copy is the exact text. This holds in `rp-core chat` and in the TUI (Ctrl+D). The
+  heading says where it comes from:
+  - `last directive (turn 4, as sent):` the plan of the answer at the head;
+  - `last directive (turn 4, reused from <id>, as sent):` a swipe that reused the plan of `<id>`;
+  - `last directive (turn 2, as sent on <id>; turn 4 sent none):` the head's plan failed, so this is
+    the last block sent before it on this path, on answer `<id>`;
+  - `last directive (turn 2, as the Director wrote it; turn 4 sent none):` no answer on this path
+    carries a sent block; this is the Director's own copy, as it wrote it (before the persona filter);
+  - `no directive yet`, and `…: empty (the narrator got no Director block)` for a plan that left
+    nothing to send.
 
 Before the first plan it says "The Director has not planned yet." With the Director off, it says so
 and still shows the kept plan.
@@ -1205,6 +1454,7 @@ a temporary folder that is removed at exit.
   library/lorebooks/   imported world info and lorebooks
   sessions/<id>.jsonl  one session = one append-only journal
   sessions/<id>.lock   held while a process has the session open
+  logs/tui.log         what the full-screen TUI said and logged
 ```
 
 A session file is plain JSONL that only ever grows. Everything in it stays recoverable: every swipe,
@@ -1254,6 +1504,12 @@ That is a copy of the M4 live session (6 answers with the Director on). A second
 | `⋯ director: failed (undecodable)` | The Director's plan was cut off at its reply limit or its JSON was broken, also after the correction. The answer still came, without a directive | One now and then is harmless: the next turn plans again. On every turn the model does not manage the plan's format: give the Director a larger model (`/model director <conn:model>`), or `/director off` |
 | `⋯ director: failed (no_room)` and notice `director_no_room` | The Director's window cannot hold its shortened prompt and 600 tokens for a plan; nothing was sent | Give its model a bigger window and set `context_length` ([Small windows](#small-windows)); 4 096 is too small |
 | `⋯ director: failed (timeout)` | The Director did not answer within `timeout_sec` (default 660 s on a local server, 180 s on a remote one) | Raise `timeout_sec` under `[director]` for new sessions; check that the model is not loading or spilling to the CPU (`ollama ps`) |
+| `rp-core tui needs a terminal; use rp-core chat` (exit 64) | `tui` or `new --tui` was run with stdin or stdout not a terminal (a pipe or a script) | Run it in a terminal window, or use `rp-core chat` |
+| TUI: white text on a white background, or text missing on a light theme | An early build of the TUI drew text in OpenTUI's bright white | Update rp-core. The TUI now takes every colour from the terminal's theme ([Colours](#colours)) |
+| TUI: text cannot be selected, or a selection does not reach the clipboard | The mouse is on (the default), so a plain drag is the TUI's own selection, copied with OSC 52; some terminals (GNOME Terminal, other VTE ones) ignore OSC 52, and there the status row says so | Hold Shift while you drag for the terminal's own selection, or press F3 to turn the mouse off ([details](#mouse-selecting-and-copying)) |
+| TUI: the wheel moves the cursor in the input instead of scrolling | The mouse is off (F3), and the terminal sends the wheel as ↑ / ↓ | Clear the input (Esc): with an empty input ↑ / ↓ scroll the chat. Or press F3 to turn the mouse on |
+| TUI: hotkeys do nothing on a Russian layout | They should work: the TUI matches Ctrl+letter by the key, not the letter. It accepts the Latin key, the base key that terminals with the kitty keyboard protocol report, and, without it, the letter's place on the standard ЙЦУКЕН layout (Ctrl+К is Ctrl+R) | If one still does nothing, type its command instead (`/r`, `/c`, `/e`, `/director show`). Arrows, PgUp/PgDn and F1–F3 do not depend on the layout |
+| TUI: Shift+Enter sends instead of starting a new line | The terminal does not report Shift+Enter apart from Enter | Use Alt+Enter or Ctrl+J; the left pane shows the newline key that works |
 
 Add `--debug` to any command to see raw server errors and stack traces on stderr; secrets are
 redacted.
@@ -1263,8 +1519,9 @@ redacted.
 | Command | What it does |
 |---|---|
 | `init [--json]` | Writes the starter `config.toml` unless one exists; prints its path |
-| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--no-chat] [--json] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal, else prints the id (`--json`: `{sessionId, title, greetings}`) |
+| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--tui \| --no-chat] [--json] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal (`--tui`: the full-screen TUI), else prints the id (`--json`: `{sessionId, title, greetings}`) |
 | `chat <session> [--provider …]` | The chat on a session (lock and crash recovery first) |
+| `tui <session> [--provider …]` | The same chat full-screen: models, chat and agents side by side ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
 | `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info or a character_book into the library; prints its id |
 | `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
 | `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |
@@ -1296,6 +1553,7 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `5` | refused before the turn opened (`send`, `chat` and `preview` on a missing session: `session_not_found`), or a preview that cannot be built (`--turn` naming no message: `not_found`), or a `compact` that cannot run (`session_locked`, `turn_open`, `draft_recovered`, `session_not_found`); stderr ends with `{"type":"refusal","code":…,"message":…}` |
 | `64` | usage or `config.toml` error |
 | `130`, `143` | SIGINT, SIGTERM |
+| `129`, `131`, … | `tui` only: SIGHUP (the terminal closed), SIGQUIT and the other exit signals, 128 + the signal's number |
 
 ## Development
 
@@ -1303,7 +1561,8 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite: 4257 tests in 199 files (4254 pass), about two minutes; the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
+| `bun test` | The full suite: 4544 tests in 215 files (4541 pass), about two and a half minutes; the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
+| `bun test test/tui` | The full-screen TUI (268 tests in 15 files, about 11 seconds) on a headless OpenTUI renderer with a scripted model: the layout at several widths, typing and streaming, Ctrl+C, every slash command, hotkeys (also on a Russian layout), the mouse and copying, colours, signals and the lock. The frame-time checks run only with `RP_CORE_PERF=1` |
 | `bun test test/demo-m4` | The M4 demos on a scripted model (5 tests, a few seconds): 30 turns with chapters, arcs, seeds and hidden arcs; swipe reuse, `/regen` and rollback; a broken plan on a small window; 300 verbose Russian turns under the state cap. They print what they did ([`docs/M4-DEMO.md`](docs/M4-DEMO.md)) |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
@@ -1311,6 +1570,12 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `RP_CORE_LIVE=1 bun test test/live/m3-ollama.test.ts` | The M3 demo question on a real Ollama with prompted or native tools (up to 3 tries of 3 calls). Set the model with `RP_CORE_OLLAMA_M3_MODEL` (default `magmell-16k:latest`), its window with `RP_CORE_OLLAMA_CTX` (default 16384), the transport with `RP_CORE_OLLAMA_TOOLS` (`prompted`, the default, or `native`), the reply cap with `RP_CORE_OLLAMA_MAX_TOKENS` (default 300; a thinking model's thinking counts against it) and the URL with `RP_CORE_OLLAMA_URL`. A thinking model with native tools: `RP_CORE_LIVE=1 RP_CORE_OLLAMA_M3_MODEL=gemma4:26b RP_CORE_OLLAMA_CTX=4096 RP_CORE_OLLAMA_TOOLS=native RP_CORE_OLLAMA_MAX_TOKENS=1024 bun test test/live/m3-ollama.test.ts` |
 | `RP_CORE_LIVE=1 RP_CORE_CLOUD_URL=… bun test test/live/m3-cloud.test.ts` | The same M3 demo on a hosted API (OpenRouter, DeepSeek, …). It costs money: at most 9 answered calls, each prompt under the window minus the reply reserve (12 288 tokens with the defaults); a request refused with 429/5xx is retried once. It reads the server's model list first (free), as `probe --write` does, so a refused key stops it before any paid call. Set the base URL with `RP_CORE_CLOUD_URL` (as `base_url` in `config.toml`; the test is skipped without it), the model id with `RP_CORE_CLOUD_MODEL`, and the *name* of the variable that holds the key with `RP_CORE_CLOUD_KEY_ENV` (never the key itself). Optional: `RP_CORE_CLOUD_CTX` (default 16384, smaller than the chat, so the history is trimmed and the history tools are offered), `RP_CORE_CLOUD_TOOLS` (`native`, the default, or `prompted`), `RP_CORE_CLOUD_MAX_TOKENS` (default 4096; a thinking model's thinking counts), `RP_CORE_CLOUD_TIMEOUT_MS` (default 30 minutes). The logged transcript has the answers, the lookups and the usage (with the cost, when the API reports it); see [`docs/M3-DEMO.md`](docs/M3-DEMO.md#on-a-hosted-model) |
 | `bun tools/fixtures/seed-innkeeper.ts [--home <dir>] [--model conn:model] [--max-tokens n] [--max-rounds n]` | Puts the M3 demo chat (199 messages, no model called) into a home as a new session, to play the demo by hand in `rp-core chat`; the connection must be in that home's `config.toml` ([`docs/M3-DEMO.md`](docs/M3-DEMO.md#how-to-rerun)) |
+
+**Temporary files.** The test run makes one temporary folder under `$TMPDIR` (else `/tmp`) and points
+`RP_CORE_HOME` and `TMPDIR` inside it, so the homes, sessions and child processes of every test land
+there, and no test touches `~/.rp-core`. The folder is removed when the run ends. If `/tmp` is a small
+RAM disk, give the run another place: `TMPDIR=$HOME/.cache bun test` (the counts above come from such a
+run).
 
 **Code layout:**
 
@@ -1326,9 +1591,9 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `src/text` | Word folding and light stemming for search and note keys |
 | `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and your notes (the Compendium arrives in M5) |
 | `src/config` | Config and keys |
-| `src/cli` | Commands and the chat |
+| `src/cli` | Commands and the chat; the full-screen TUI in `src/cli/tui` |
 
-The design and its decisions (D-1…D-124; the M4 ones are D-98…D-124) are in
+The design and its decisions (D-1…D-139; the M4 ones are D-98…D-124, the TUI's D-125…D-139) are in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md), [`docs/M1B-DEMO.md`](docs/M1B-DEMO.md),
 [`docs/M2-DEMO.md`](docs/M2-DEMO.md), [`docs/M3-DEMO.md`](docs/M3-DEMO.md) and
 [`docs/M4-DEMO.md`](docs/M4-DEMO.md). How rp-core differs

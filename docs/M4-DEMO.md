@@ -266,6 +266,12 @@ chapter 1 "The Story Begins" · active · 1 turn
 …
 ```
 
+The `last directive` line above is the one-line summary `/director show` printed on that day. Today
+it prints intentions and next beats uncut, and the whole `[DIRECTOR CONSTRAINTS - BINDING THIS TURN]` … `[/DIRECTOR CONSTRAINTS]` block, as
+the narrator got it (D-139; README, [/director show](../README.md#director-show)). Run on this
+session's journal today, the first `/director show` above heads it `last directive (turn 2, as sent
+on 0c6f3ee8; turn 4 sent none):` and prints turn 2's block below.
+
 What the session journal recorded for each answer (Director attempts: outcome, seconds, finish,
 output tokens):
 
@@ -355,6 +361,10 @@ seeds: 1 waiting
   seed-1 "The old map" · long · age 1/10 · 0 reinforcements
 …
 ```
+
+As in run 1, the `last directive` line is that day's summary. Today's `/director show` prints the
+whole block there, under `last directive (turn 4, reused from 6af484fb, as sent):`; the README's
+[/director show](../README.md#director-show) shows the same block, printed from this run's journal.
 
 From the session journal:
 

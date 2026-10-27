@@ -321,3 +321,21 @@ the fixtures `test/fixtures/scripts/director-{reply,broken}.jsonl` (scripted Dir
 Bunraku's scene-turn-director.test.ts drives its own store and planner; the behaviours it pins that
 still apply (no directive after a failure, never on continue, the state at the answered message) are
 covered by the new tests. No new dependency.
+
+M4.5 (the full-screen TUI) adds, fresh, with no ported code: `src/cli/repl-view.ts` (the `ReplView` /
+`TurnView` / `BannerInfo` ports and the default `LineView`, the REPL's own screen and turn printer moved
+as they were); `src/cli/tui/{agents,agents-pane,app,index,io,keys,models-pane,run,sanitize,sgr,source,
+theme,transcript,turn-view,types,view}.ts` (OpenTUI used only through its public API; the Warp rule in
+`sanitize.ts` that drops ZWJ, VS16 and skin-tone modifiers follows the report opencode#58028, no code
+taken; the ЙЦУКЕН key table in `keys.ts` is the standard layout); the M4.5 changes to
+`src/cli/{repl,chat,commands,main}.ts` (`LineSource` with `inline`, `multiline` and the `prompt`
+mode `line` / `edit`, `InterruptSource`, `ReplOptions.source` / `view` / `command`, `bannerInfo()`,
+`chatDeps`, `onChatTerm`, `endChat`, the `reopen` hint of `new`, the `tui` command and `new --tui`);
+`test/preload.ts` (`TMPDIR` inside the test root, removed after the run); and the tests `test/tui/*`
+and `test/repl/ports.test.ts`. New dependency: `@opentui/core` 0.7.0 (anomalyco, MIT), pinned exactly
+(no caret; `bun.lock` records it). Its native library comes as one package per platform
+(`@opentui/core-<platform>-<arch>[-musl]`, MIT, about 5 MB, shipping the licences of its own
+third-party parts: Ghostty, libwebp, lcms2, stb, wuffs). It is imported only by `src/cli/tui`, which
+`src/cli/main.ts` loads with a dynamic `import()` on the `tui` and `new --tui` paths, and by
+`test/tui` (with `@opentui/core/testing` for the headless renderer). Its peer dependency `web-tree-sitter` 0.25.10 (MIT) is
+installed by Bun with it and is not imported by rp-core.

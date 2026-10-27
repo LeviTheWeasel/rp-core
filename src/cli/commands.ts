@@ -152,6 +152,8 @@ export interface NewArgs {
   rt?: Runtime;
   /** Open the REPL on the new session instead of printing its id (a terminal, no --json/--no-chat). */
   chat?: (engine: EngineHandle, session: SessionHandle) => Promise<number>;
+  /** The command the "reopens it" hint names when `chat` runs (default 'chat'; `new --tui` says 'tui'). */
+  reopen?: 'chat' | 'tui';
   engine?: Partial<EngineOptions>;
 }
 
@@ -280,7 +282,7 @@ export async function cmdNew(a: NewArgs): Promise<number> {
     title = session.header().title;
     if (a.chat) {
       const how = card.imported ? `card imported as library character ${card.libraryId}` : `library character ${card.libraryId}`;
-      a.io.err.write(`rp-core: created session ${sessionId} (${how}); \`rp-core chat ${sessionId}\` reopens it\n`);
+      a.io.err.write(`rp-core: created session ${sessionId} (${how}); \`rp-core ${a.reopen ?? 'chat'} ${sessionId}\` reopens it\n`);
       handedOver = true;
       return await a.chat(engine, session);
     }

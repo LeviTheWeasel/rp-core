@@ -17,6 +17,7 @@
     "typecheck": "bunx tsc --noEmit -p ."
   },
   "dependencies": {
+    "@opentui/core": "0.7.0",
     "gpt-tokenizer": "4.1.0",
     "jsonrepair": "3.14.0",
     "re2js": "2.9.0"

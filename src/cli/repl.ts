@@ -29,6 +29,11 @@
 // line clear: cursor to column 1, clear to the end of the screen, "you › …") would otherwise land in
 // the middle of the answer, erase the streamed line and glue the player's keys into it. When the turn
 // ends, the prompt comes back with whatever was typed, cursor where it was.
+//
+// Ports (TUI decisions T-3). Input comes through a LineSource and Ctrl+C through an InterruptSource
+// (readline by default, an injected iterator in tests, a host's own pair via ReplOptions.source);
+// output goes through a ReplView (repl-view.ts: LineView over io.out by default, a host's own via
+// ReplOptions.view). The rules above live here, whatever the ports are.
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,6 +47,7 @@ import { listLibrary } from '../formats/library.ts';
 import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
 import { NOTES_BOOK_KEY, noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
 import { directorAt } from '../agents/director/state.ts';
+import type { NarratorDirective } from '../agents/director/types.ts';
 import type { CEntry } from '../agents/compendium/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { Event } from '../protocol/events.ts';
@@ -49,6 +55,7 @@ import { ACTIVE_PROBE_MAX_CALLS, ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS } 
 import type { ModelCaps } from '../providers/types.ts';
 import type { DeepPartial, Roles, SessionConfig, Trace } from '../session/entries.ts';
 import { readSessionFile } from '../session/log.ts';
+import type { TreeIndex } from '../session/tree.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { memoryChannel, type Io } from './io.ts';
 import { addLoreId, bookRows, entryTitles, resolveLoreRef, resolvePresetRef } from './refs.ts';
@@ -78,8 +85,6 @@ import {
   type Journal,
 } from './repl-journal.ts';
 import {
-  bannerLine,
-  formatMessage,
   labels,
   makeStyle,
   noticeText,
@@ -105,11 +110,9 @@ import {
   renderUsage,
   renderVerdicts,
   renderWire,
-  Screen,
-  statusLine,
-  TurnPrinter,
   type Style,
 } from './repl-render.ts';
+import { LineView, type BannerInfo, type ReplView, type ReplViewContext, type TurnView } from './repl-view.ts';
 
 export interface ReplDeps {
   engine: EngineHandle;
@@ -195,6 +198,23 @@ export interface ReplOptions {
   terminal?: { stdin: NodeJS.ReadableStream & { isTTY?: boolean; isRaw?: boolean; setRawMode?(mode: boolean): unknown }; stdout: NodeJS.WritableStream & { columns?: number; rows?: number; isTTY?: boolean } };
   /** Environment for $VISUAL / $EDITOR / NO_COLOR (default process.env). */
   env?: Record<string, string | undefined>;
+  /**
+   * The input port: a host's own line source and Ctrl+C source (a full-screen TUI's input box and key
+   * handler). Preferred over deps.input / deps.onInterrupt and readline, which are then not used;
+   * `interactive` and `terminal` above are ignored too (the source says whether it is interactive).
+   */
+  source?: { source: LineSource; interrupts: InterruptSource };
+  /**
+   * The output port: builds the view everything is shown through. Default: LineView over io.out (the
+   * line REPL, byte for byte).
+   */
+  view?: (ctx: ReplViewContext) => ReplView;
+  /**
+   * The command the person runs this chat with, as the Repl's hints name it (`rp-core <command> <id>
+   * --debug …`, `… from the next rp-core <command>`). Default 'chat' (the line REPL's bytes); the
+   * full-screen host passes 'tui'.
+   */
+  command?: 'chat' | 'tui';
 }
 
 /** The exit code of a chat whose replayed or scripted turns failed (ReplDeps.failExit): oneshot's EXIT.failed. */
@@ -212,14 +232,34 @@ export function runReplWith(deps: ReplDeps, opts: ReplOptions = {}): Promise<num
 
 // ---- input sources --------------------------------------------------------------------------------
 
-interface LineSource {
+/**
+ * The input port (ReplOptions.source): where lines come from and how the input line is shown. The
+ * Repl reads next() in its own loop and judges each line as it arrives (held, refused, queued).
+ */
+export interface LineSource {
   next(): Promise<IteratorResult<string>>;
   /** Lines may arrive while a turn runs (a person typing). */
   readonly interactive: boolean;
   /** The source shows the prompt and echoes typing itself (readline on a TTY). */
   readonly echoes: boolean;
-  /** Show the prompt, with any text typed and not yet sent after it. */
-  prompt(text: string): void;
+  /**
+   * The source has an input line the Repl can label and prefill (readline on a TTY, a TUI's input
+   * box): inline /e puts the message there, and the prompt label is set through prompt() even when
+   * the source does not echo. Absent: false.
+   */
+  readonly inline?: boolean;
+  /**
+   * Show the prompt (`you › `, or `edit › ` while /e edits in place, styled like the Repl's other
+   * strings), with any text typed and not yet sent after it. `mode` says which: 'edit' while an
+   * in-place edit waits for its line (a TUI then keeps command hotkeys out of the box and lets Esc
+   * cancel), 'line' otherwise. Sources that only show a label may ignore it.
+   */
+  prompt(text: string, mode?: 'line' | 'edit'): void;
+  /**
+   * The input holds real line breaks (a TUI's multi-line box): inline /e prefills the text as is,
+   * needs no ⏎ stand-in and never refuses a message for containing ⏎. Absent: false.
+   */
+  readonly multiline?: boolean;
   /** Mute (true) or restore (false) the source's own writes: its echo and redraws (a turn streams). */
   mute(on: boolean): void;
   readonly muted: boolean;
@@ -227,14 +267,22 @@ interface LineSource {
   pending(): string;
   /** Throw the typed text away (Ctrl+C at the prompt). */
   clearPending(): void;
-  /** Put text into the input line as if typed (inline /e); no-op for sources that do not edit lines. */
+  /**
+   * Put text into the input line as if typed (inline /e). Line breaks arrive as INLINE_BREAK (⏎); a
+   * multi-line input may turn them back into \n (the saved line is split on ⏎ either way). No-op for
+   * sources that do not edit lines.
+   */
   prefill(text: string): void;
   /** Hand the terminal to a child process (the editor); returns the function that takes it back. */
   suspend(): () => void;
   close(): void;
 }
 
-type InterruptSource = (handler: () => void) => () => void;
+/**
+ * The Ctrl+C port: subscribes the Repl's handler (each call is one press) and returns the function
+ * that unsubscribes it. The Repl decides what a press means (stop the turn, clear the line, quit).
+ */
+export type InterruptSource = (handler: () => void) => () => void;
 
 /** Real SIGINT only (piped stdin, an injected input without its own interrupt source). */
 const processInterrupts: InterruptSource = (handler) => {
@@ -287,6 +335,7 @@ function readlineInput(interactive: boolean | undefined, terminal?: ReplOptions[
     next: () => it.next(),
     interactive: interactive ?? tty,
     echoes: tty,
+    inline: tty,
     prompt(text: string): void {
       if (closed) return;
       rl.setPrompt(text);
@@ -346,6 +395,7 @@ function injectedInput(input: AsyncIterable<string> & { close?(): void }, intera
     next: () => it.next(),
     interactive,
     echoes: false,
+    inline: false,
     prompt: () => {},
     mute: () => {},
     muted: false,
@@ -417,6 +467,22 @@ function editorRunner(source: LineSource, env: Record<string, string | undefined
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * /director show of a record that sent no directive (a failed plan, reply `from`): the last directive
+ * the narrator got before it, the nearest record on the path above `from` that planned one.
+ */
+function sentBefore(tree: TreeIndex, from: string): { turn: number; from: string; directive: NarratorDirective } | undefined {
+  let cur = tree.msgs.get(from)?.parent ?? null;
+  // Each step starts above the record found by the one before it; the bound only guards a hand-made index.
+  for (let steps = 0; cur !== null && steps <= tree.msgs.size; steps++) {
+    const at = directorAt(tree, cur);
+    if (!at.record || at.from === undefined) return undefined;
+    if (at.record.ok && at.record.directive) return { turn: at.record.turn, from: at.from, directive: at.record.directive };
+    cur = tree.msgs.get(at.from)?.parent ?? null;
+  }
+  return undefined;
+}
+
 // ---- the REPL ---------------------------------------------------------------------------------------
 
 type Item = { t: 'line'; line: string; during: boolean } | { t: 'end' } | { t: 'quit' };
@@ -424,7 +490,8 @@ type Item = { t: 'line'; line: string; during: boolean } | { t: 'end' } | { t: '
 class Repl {
   private session: SessionHandle;
   private readonly style: Style;
-  private readonly screen: Screen;
+  /** The output port: LineView (io.out) unless the host gave its own (ReplOptions.view). */
+  private readonly view: ReplView;
   private readonly source: LineSource;
   private readonly interrupts: InterruptSource;
   private readonly editText: (initial: string) => Promise<string | null>;
@@ -436,7 +503,8 @@ class Repl {
   private queue: Item[] = [];
   private wake: (() => void) | null = null;
   private turn: TurnHandle | null = null;
-  private printer: TurnPrinter | null = null;
+  /** The running turn's view (a TurnPrinter on the line terminal). */
+  private turnView: TurnView | null = null;
   private exitTimer: ReturnType<typeof setTimeout> | null = null;
   /** Ctrl+C presses during the running turn (1: stop asked). */
   private stopPresses = 0;
@@ -454,6 +522,8 @@ class Repl {
   private probing: AbortController | null = null;
   /** $HOME for `~/` in /preset and /lore add files. */
   private readonly env: Record<string, string | undefined>;
+  /** ReplOptions.command: what the hints call this chat's command. */
+  private readonly commandName: 'chat' | 'tui';
 
   constructor(
     private readonly deps: ReplDeps,
@@ -461,10 +531,14 @@ class Repl {
   ) {
     const env = opts.env ?? process.env;
     this.env = env;
+    this.commandName = opts.command ?? 'chat';
     this.session = deps.session;
     this.style = makeStyle(deps.color ?? (process.stdout.isTTY === true && !env.NO_COLOR));
-    this.screen = new Screen((s) => deps.io.out.write(s));
-    if (deps.input) {
+    this.view = opts.view ? opts.view({ style: this.style, bannerInfo: () => this.bannerInfo() }) : new LineView((s) => deps.io.out.write(s), this.style);
+    if (opts.source) {
+      this.source = opts.source.source;
+      this.interrupts = opts.source.interrupts;
+    } else if (deps.input) {
       this.source = injectedInput(deps.input, opts.interactive ?? false);
       this.interrupts = deps.onInterrupt ?? processInterrupts;
     } else {
@@ -492,7 +566,7 @@ class Repl {
       void this.readLoop();
       code = await Promise.race([this.loop(), forced]);
     } catch (e) {
-      this.screen.line(this.style.red(`error: ${errorMessage(e)}`));
+      this.view.line(this.style.red(`error: ${errorMessage(e)}`));
       code = 1;
     } finally {
       this.finished = true;
@@ -508,7 +582,7 @@ class Repl {
           // Stops a turn still running (only after an internal error), keeps its partial text, unlocks.
           await this.session.close();
         } catch (e) {
-          this.screen.line(this.style.red(`error while closing the session: ${errorMessage(e)}`));
+          this.view.line(this.style.red(`error while closing the session: ${errorMessage(e)}`));
           code = code || 1;
         }
       }
@@ -521,7 +595,11 @@ class Repl {
 
   private async loop(): Promise<number> {
     for (;;) {
-      if (this.queue.length === 0) this.prompt();
+      if (this.queue.length === 0) {
+        // Nothing left to run: the view may refresh what commands changed (configure() has no event).
+        this.view.idle?.();
+        this.prompt();
+      }
       const item = await this.take();
       if (item.t !== 'line') return this.endCode();
       await this.process(item);
@@ -579,7 +657,7 @@ class Repl {
   /** A line from the input, judged at arrival (§12.4 "Ввод"). */
   private receive(line: string): void {
     // The Enter moved the cursor, unless readline was muted (a turn streams; its newline never showed).
-    if (this.source.echoes && !this.source.muted) this.screen.markLineStart();
+    if (this.source.echoes && !this.source.muted) this.view.cursor?.markLineStart();
     this.disarmExit();
     if (this.editing) {
       this.editing(line);
@@ -673,8 +751,8 @@ class Repl {
     }
     this.exitTimer = setTimeout(() => this.disarmExit(), this.exitWindowMs);
     (this.exitTimer as { unref?: () => void }).unref?.();
-    if (this.source.echoes) this.screen.write('\n'); // the cursor sits after the prompt
-    this.screen.line(this.style.dim('(press Ctrl+C again to quit, or type /quit)'));
+    if (this.source.echoes) this.view.cursor?.write('\n'); // the cursor sits after the prompt
+    this.view.line(this.style.dim('(press Ctrl+C again to quit, or type /quit)'));
     if (this.wake) this.prompt();
   }
 
@@ -685,20 +763,22 @@ class Repl {
 
   // ---- output helpers ------------------------------------------------------------------------------
 
+  /** The prompt label, on a source that shows one (readline on a TTY echoes; a TUI's input box is inline). */
   private prompt(): void {
-    if (!this.source.echoes || this.finished) return;
-    this.screen.newline();
-    this.source.prompt(prefix(this.names.user, this.style));
+    if ((!this.source.echoes && !this.source.inline) || this.finished) return;
+    this.view.cursor?.newline();
+    this.source.prompt(prefix(this.names.user, this.style), 'line');
   }
 
   /** A report line; mid-answer it first ends the streamed line so the two never glue. */
   private say(text: string): void {
-    this.printer?.interject();
-    this.screen.line(text);
+    this.turnView?.interject();
+    this.view.line(text);
   }
 
   private echo(line: string): void {
-    this.say(`${prefix(this.names.user, this.style)}${line.trim()}`);
+    this.turnView?.interject();
+    this.view.echo(line.trim());
   }
 
   private notice(n: { level: string; code: string; message: string }): void {
@@ -718,9 +798,10 @@ class Repl {
     else this.say(this.style.red(`error: ${this.redact(errorMessage(e))}`));
   }
 
-  private printMessage(m: MessageView): void {
-    this.say(formatMessage(m, this.names, this.style));
-    if (m.role === 'assistant') this.say(statusLine(m, this.style));
+  /** A whole message; with `withStatus` an answer's status line follows it. */
+  private printMessage(m: MessageView, withStatus = true): void {
+    this.turnView?.interject();
+    this.view.message(m, withStatus);
   }
 
   /** The session's journal as it is on disk now (read-only; the session holds the lock). */
@@ -731,11 +812,23 @@ class Repl {
 
   /** Banner, what happened while opening, and where the story stands. */
   private greet(): void {
+    const info = this.bannerInfo();
+    this.names = info.names;
+    this.showReasoning = info.config.reasoningShown;
+    this.turnView?.interject();
+    this.view.banner(info);
+    for (const ev of this.session.openEvents()) this.openEvent(ev);
+    this.whereYouAre(this.session.view());
+  }
+
+  /**
+   * The banner's facts for the session open now (ReplViewContext.bannerInfo; the greeting). Reads the
+   * journal and the preset and changes nothing, so a host may call it whenever it needs fresh facts.
+   */
+  private bannerInfo(): BannerInfo {
     const header = this.session.header();
-    this.names = labels(header.cast.character.name);
     const j = this.journal();
     const config = configOf(j);
-    this.showReasoning = config.reasoningShown;
     const view = this.session.view();
     const narrator = config.roles.narrator;
     // The preset and the session config may only shrink the model's window (§10.2, budget.ts).
@@ -755,9 +848,19 @@ class Repl {
     // M3: whether the narrator can use tools at all is its route's caps (D-92 still decides per turn).
     // M4: the Director's binding while it is on (D-113).
     const director = config.director.enabled ? { ...directorBinding(config.roles), profile: config.director.profile } : null;
-    this.say(bannerLine(header, narrator, window, this.style, cap, this.capsOf(narrator)?.tools ?? null, director));
-    for (const ev of this.session.openEvents()) this.openEvent(ev);
-    this.whereYouAre(view);
+    return {
+      session: this.session,
+      header,
+      names: labels(header.cast.character.name),
+      config,
+      journal: j,
+      narrator,
+      window,
+      ...(cap !== undefined ? { cap } : {}),
+      tools: this.capsOf(narrator)?.tools ?? null,
+      director,
+      ...(o ? { override: o } : {}),
+    };
   }
 
   private openEvent(raw: Event): void {
@@ -776,7 +879,7 @@ class Repl {
     if (head.role === 'assistant') return this.printMessage(head);
     const before = view.path.at(-2);
     if (before?.role === 'assistant') this.printMessage(before);
-    this.say(formatMessage(head, this.names, this.style));
+    this.printMessage(head, false);
     this.say(this.style.dim('(your message has no answer yet: /r asks for one, or type more)'));
   }
 
@@ -814,36 +917,34 @@ class Repl {
     this.turn = turn;
     // readline keeps reading keys (typing ahead, Ctrl+C) but must not draw into the answer.
     this.source.mute(true);
-    const printer = new TurnPrinter({
-      screen: this.screen,
-      style: this.style,
+    const tv = this.view.turn({
       label: this.names.char,
       showReasoning: () => this.showReasoning,
       notice: (n) => this.notice(n),
       ...(continueFrom !== undefined ? { continueFrom } : {}),
     });
-    this.printer = printer;
+    this.turnView = tv;
     let outcome: TurnOutcome;
     try {
-      for await (const ev of turn.events) printer.push(redactEvent(ev, this.deps.redact));
+      for await (const ev of turn.events) tv.push(redactEvent(ev, this.deps.redact));
       outcome = await turn.result;
     } finally {
-      printer.finish();
-      this.printer = null;
+      tv.finish();
+      this.turnView = null;
       this.turn = null;
       this.stopPresses = 0;
       this.source.mute(false);
     }
     if (outcome.type === 'failed') this.failedTurns.push(outcome.code);
-    const answer = this.answerOf(outcome, turn, printer.kept);
-    if (answer) this.say(statusLine(answer, this.style, this.traceOf(answer.id)));
+    const answer = this.answerOf(outcome, turn, tv.kept);
+    if (answer) this.view.status(answer, this.traceOf(answer.id));
     if (outcome.type === 'failed' && outcome.code === 'model_not_found' && !this.deps.override) {
       // The banner named the binding long ago; this names it again with the way out.
       this.say(this.style.dim(`  (${modelNotFoundHint(configOf(this.journal()).roles.narrator, undefined, outcome.route)})`));
     }
     if (outcome.type === 'failed' && hasServerWords(outcome) && !this.deps.debugTap && !this.debugHinted) {
       this.debugHinted = true;
-      this.say(this.style.dim(`  (rp-core chat ${this.session.id} --debug shows the server's own words)`));
+      this.say(this.style.dim(`  (rp-core ${this.commandName} ${this.session.id} --debug shows the server's own words)`));
     }
   }
 
@@ -1013,20 +1114,29 @@ class Repl {
    * Ctrl+C cancels. Line breaks show as ⏎ (one line of input cannot hold them) and come back on save.
    */
   private inlineEdit(initial: string): Promise<string | null> {
-    if (initial.includes(INLINE_BREAK)) {
+    // A multi-line input (the TUI) holds real line breaks: no ⏎ stand-in, nothing to refuse.
+    const multiline = this.source.multiline === true;
+    if (!multiline && initial.includes(INLINE_BREAK)) {
       this.say(this.style.yellow(`this message contains ${INLINE_BREAK} itself; set $EDITOR to edit it in an editor`));
       return Promise.resolve(null);
     }
-    this.say(this.style.dim(`editing in place: Enter saves · Ctrl+C cancels · ${INLINE_BREAK} is a line break · set $EDITOR to use an editor`));
+    this.say(
+      this.style.dim(
+        multiline
+          ? 'editing in place: Enter saves · Esc or Ctrl+C cancels'
+          : `editing in place: Enter saves · Ctrl+C cancels · ${INLINE_BREAK} is a line break · set $EDITOR to use an editor`,
+      ),
+    );
     return new Promise<string | null>((resolve) => {
       this.editing = (line) => {
         this.editing = null;
-        resolve(line === null ? null : line.split(INLINE_BREAK).join('\n'));
+        resolve(line === null ? null : multiline ? line : line.split(INLINE_BREAK).join('\n'));
       };
-      if (!this.source.echoes) return; // piped input: the next line is the new text
-      this.screen.newline();
-      this.source.prompt(prefix('edit', this.style));
-      this.source.prefill(initial.replace(/\r?\n/g, INLINE_BREAK));
+      // Piped input: the next line is the new text. A source with an input line gets it prefilled.
+      if (!this.source.echoes && !this.source.inline) return;
+      this.view.cursor?.newline();
+      this.source.prompt(prefix('edit', this.style), 'edit');
+      this.source.prefill(multiline ? initial : initial.replace(/\r?\n/g, INLINE_BREAK));
     });
   }
 
@@ -1047,7 +1157,7 @@ class Repl {
     this.session.edit({ messageId: m.id, text: edited, expectedVersion: this.session.version() });
     this.say(this.style.dim(`edited message ${pos}`));
     const now = this.session.view().path.find((x) => x.id === m.id);
-    if (now) this.say(formatMessage(now, this.names, this.style));
+    if (now) this.printMessage(now, false);
   }
 
   private hide(n: number, hidden: boolean): void {
@@ -1157,6 +1267,8 @@ class Repl {
     const d = config.director;
     if (action === 'show') {
       const at = directorAt(j.tree, this.session.view().head);
+      // A record that sent no directive (a failed plan): the last one sent before it on this path.
+      const sent = at.record && !(at.record.ok && at.record.directive) && at.from !== undefined ? sentBefore(j.tree, at.from) : undefined;
       return this.say(
         renderDirector(
           {
@@ -1168,6 +1280,7 @@ class Repl {
             invalid: at.invalid,
             ...(at.record ? { record: at.record } : {}),
             ...(at.from !== undefined ? { from: at.from } : {}),
+            ...(sent ? { sentBefore: sent } : {}),
           },
           this.style,
         ),
@@ -1527,6 +1640,6 @@ class Repl {
     }
     const text = `${out.text()}${err.text()}`.trimEnd();
     if (text !== '') this.say(this.redact(text));
-    if (written) this.say(this.style.dim('(this chat keeps the caps it started with: the stored facts apply from the next rp-core chat)'));
+    if (written) this.say(this.style.dim(`(this chat keeps the caps it started with: the stored facts apply from the next rp-core ${this.commandName})`));
   }
 }

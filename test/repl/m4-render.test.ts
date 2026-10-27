@@ -1,10 +1,12 @@
-// M4 CLI output (D-113, D-101): /director show (renderDirector, directiveSummary), the banner's
+// M4 CLI output (D-113, D-101): /director show (renderDirector; the last directive in full, as sent), the banner's
 // Director part, /usage rows per agent, and the Director's stderr line of `send`'s text mode.
 import { describe, expect, test } from 'bun:test';
 import { emptyState } from '../../src/agents/director/state.ts';
 import { memoryChannel } from '../../src/cli/io.ts';
 import { createTextRenderer, describeEvent, directorLine } from '../../src/cli/render.ts';
-import { bannerLine, directiveSummary, makeStyle, renderDirector, renderUsage, sideLine, stripAnsi, type DirectorShow } from '../../src/cli/repl-render.ts';
+import { DIRECTOR_FOOTER, DIRECTOR_HEADER, renderDirective } from '../../src/agents/director/render.ts';
+import type { NarratorDirective } from '../../src/agents/director/types.ts';
+import { bannerLine, makeStyle, renderDirector, renderUsage, sideLine, stripAnsi, type DirectorShow } from '../../src/cli/repl-render.ts';
 import type { Event, EventBody } from '../../src/protocol/events.ts';
 import type { MessageView } from '../../src/session/view.ts';
 import { recordFor, richState } from '../cli-m4/fixtures.ts';
@@ -48,9 +50,75 @@ describe('/director show', () => {
         '  hidden-8 "The Ledger Conspiracy" · approaching_player · conspiracy · age 4/5 · 2 clues',
         'intentions:',
         '  must · next: Let the red ribbon turn up again.',
-        'last directive (turn 40, as sent) mood "tense" · pace fast · goal "The keeper lies about the letter." · 1 arc direction · 2 character beats · hook "A knock at the door."',
+        'last directive (turn 40, as sent):',
+        DIRECTOR_HEADER,
+        'The following are non-negotiable scene constraints decided by the Story Director.',
+        'They take precedence over any internal planning, director framework, or evaluation',
+        'protocol you may otherwise apply to arc/callback/character-beat decisions.',
+        'Your job is to render these constraints as excellent prose. Do NOT second-guess',
+        'which arc to advance, which callback to weave in, or which character beat to hit -',
+        'the Director has already made those decisions. Execute them.',
+        '',
+        'Mood: tense',
+        'Pacing: Keep things moving. Punchy sentences. Action-oriented.',
+        '',
+        'Narrative Goal: The keeper lies about the letter.',
+        '',
+        'Story Arc Directions:',
+        '  - "The Locked Room" (moderate): A knock.',
+        '',
+        'Character Beats:',
+        '  - Mira: She hides the key.',
+        '  - The keeper: He looks away.',
+        '',
+        '[Ending: A knock at the door.]',
+        DIRECTOR_FOOTER,
       ].join('\n'),
     );
+  });
+
+  test('the last directive is the whole block the narrator got: long fields are never cut', () => {
+    const state = richState();
+    const hook = `Daigorou looks at you with a mix of excitement and dread, ${'and the samurai armour creaks, '.repeat(6)}waiting.`;
+    const setting = 'Your bedroom, with the samurai armour standing in the corner under a sheet';
+    const directive: NarratorDirective = { pacing: 'medium', sceneGuidance: { setting, tension_level: 4 }, endingHook: hook, include: { foreshadowing: ['a', 'b'] } };
+    const out = renderDirector(show({ state, record: recordFor(state, { directive }) }), plain);
+    const lines = out.split('\n');
+    const at = lines.indexOf('last directive (turn 40, as sent):');
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at + 1).join('\n')).toBe(renderDirective(directive));
+    expect(lines).toContain(`  Setting: ${setting}`);
+    expect(lines).toContain(`[Ending: ${hook}]`);
+    expect(out).not.toContain('…');
+  });
+
+  test('intentions and next beats are shown in full, never cut (Levi, 27.10: "…pat…" read as a bug)', () => {
+    const state = richState();
+    const long = `Demonstrate Marfa's hospitality and care for Elisey's wellbeing by offering a safe, alternative path around the broken bridge at Горелая балка.`;
+    expect(long.length).toBeGreaterThan(100);
+    state.nextIntentions = [{ type: 'story', description: long, priority: 'must', targetTurn: 'next' }];
+    const arc = state.arcs.find((a) => a.nextBeat?.status === 'pending')!;
+    arc.nextBeat = { ...arc.nextBeat!, description: `${long} Then a knock.` };
+    const lines = renderDirector(show({ state, record: recordFor(state) }), plain).split('\n');
+    expect(lines).toContain(`  must · next: ${long}`);
+    expect(lines.some((l) => l.startsWith('    next: ') && l.includes(`${long} Then a knock.`))).toBe(true);
+    expect(lines.filter((l) => l.includes('…'))).toEqual([]);
+  });
+
+  test('a directive that renders nothing: the narrator got no block, and it says so', () => {
+    const state = richState();
+    const out = renderDirector(show({ state, record: recordFor(state, { directive: { pacing: 'medium' } }) }), plain);
+    expect(out.split('\n').at(-1)).toBe('last directive (turn 40, as sent): empty (the narrator got no Director block)');
+  });
+
+  test('colour: the heading and every line of the block dim, blank lines left bare', () => {
+    const out = renderDirector(show(), ansi);
+    const lines = out.split('\n');
+    const at = lines.indexOf('\x1b[2mlast directive (turn 40, as sent):\x1b[22m');
+    expect(at).toBeGreaterThan(0);
+    for (const l of lines.slice(at + 1)) expect(l === '' || (l.startsWith('\x1b[2m') && l.endsWith('\x1b[22m'))).toBe(true);
+    expect(lines.at(-1)).toBe(`\x1b[2m${DIRECTOR_FOOTER}\x1b[22m`);
+    expect(stripAnsi(out)).toBe(renderDirector(show(), plain));
   });
 
   test('no record on the path: "The Director has not planned yet."; unreadable records are counted', () => {
@@ -68,19 +136,33 @@ describe('/director show', () => {
     expect(never).toBe('director off (/director on lets it plan every reply; the plan below is kept meanwhile)\nThe Director has not planned yet.');
   });
 
-  test('a failed turn: failed (code), and the last directive the state kept (the authored one)', () => {
-    const state = richState();
+  test('a failed turn: failed (code); the last directive sent before it, in full, and which turn it was', () => {
+    const state = { ...richState(), turn: 41 };
+    const before: NarratorDirective = { pacing: 'slow', mood: 'quiet', endingHook: 'The lamp goes out.' };
+    const out = renderDirector(
+      show({ state, record: recordFor(state, { ok: false, code: 'timeout', directive: undefined, skipped: [] }), sentBefore: { turn: 40, from: 'a0000040', directive: before } }),
+      plain,
+    );
+    expect(out).toContain('turn 41 · failed (timeout) on a1b2c3d4 · structured · full · script:default');
+    expect(out).toContain(`last directive (turn 40, as sent on a0000040; turn 41 sent none):\n${renderDirective(before)}`);
+    expect(out.endsWith(DIRECTOR_FOOTER)).toBe(true);
+  });
+
+  test('a failed turn with no record of the last directive on the path: the one the Director wrote (the state keeps it)', () => {
+    const state = { ...richState(), turn: 41 };
     const out = renderDirector(show({ state, record: recordFor(state, { ok: false, code: 'timeout', directive: undefined, skipped: [] }) }), plain);
-    expect(out).toContain('turn 40 · failed (timeout) on a1b2c3d4 · structured · full · script:default');
-    expect(out).toContain('last directive (turn 40) mood "tense" · pace fast · goal "The keeper lies about the letter."');
+    expect(out).toContain(`last directive (turn 40, as the Director wrote it; turn 41 sent none):\n${renderDirective(state.lastDirective!.directive)}`);
+    expect(out).toContain('Narrative Goal: The keeper lies about the letter.');
     expect(out).not.toContain('as sent');
   });
 
-  test('a reused plan names the reply it came from; a binding of its own has no "(the narrator\'s model)"', () => {
+  test('a reused plan names the reply it came from, in the turn line and over the directive; a binding of its own has no "(the narrator\'s model)"', () => {
     const state = richState();
-    const out = renderDirector(show({ binding: { conn: 'dir', model: 'big', follows: false }, record: recordFor(state, { reusedFrom: 'feedbeef' }) }), plain);
+    const record = recordFor(state, { reusedFrom: 'feedbeef' });
+    const out = renderDirector(show({ binding: { conn: 'dir', model: 'big', follows: false }, record }), plain);
     expect(out.split('\n')[0]).toBe('director on · dir:big · profile auto · style the-balanced');
     expect(out).toContain('turn 40 · reused (the plan of feedbeef) on a1b2c3d4');
+    expect(out).toContain(`last directive (turn 40, reused from feedbeef, as sent):\n${renderDirective(record.directive!)}`);
   });
 
   test('an early state: no chapter, no arcs, no seeds, no directive', () => {
@@ -96,25 +178,6 @@ describe('/director show', () => {
     expect(out).toContain('\x1b[33mOVERDUE\x1b[39m');
     expect(out).toContain('\x1b[33mfailed (timeout)\x1b[39m');
     expect(stripAnsi(out)).toBe(renderDirector(show({ record: recordFor(state, { ok: false, code: 'timeout', directive: undefined }) }), plain));
-  });
-});
-
-describe('directiveSummary', () => {
-  test('the fields a directive sets, in one line; medium pace left out; empty → (empty)', () => {
-    expect(directiveSummary({ pacing: 'medium' })).toBe('(empty)');
-    expect(
-      directiveSummary({
-        pacing: 'slow',
-        mood: 'quiet',
-        sceneGuidance: { setting: 'the lighthouse', tension_level: 6.6 },
-        include: { characters: ['Yan'], themes: ['trust', 'debt'] },
-        avoid: { revelations: ['the letter'] },
-        dialogueGuidance: [{ character: 'Yan', tone: 'dry' }],
-        callbacks: [{ reference: 'the bell', instruction: 'ring once' }],
-      }),
-    ).toBe('mood "quiet" · pace slow · setting "the lighthouse" · tension 7/10 · 1 dialogue note · 1 callback · 3 things to include · 1 thing to avoid');
-    const long = directiveSummary({ pacing: 'medium', narrativeGoal: 'x'.repeat(100) });
-    expect(long).toBe(`goal "${'x'.repeat(39)}…"`);
   });
 });
 

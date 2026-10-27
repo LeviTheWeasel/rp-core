@@ -17,6 +17,7 @@ import type { ModelCaps, PromptMsg } from '../providers/types.ts';
 import type { CEntry } from '../agents/compendium/types.ts';
 import { NOTES_SCAN_DEPTH, noteText } from '../agents/compendium/notes.ts';
 import { MOMENTUM } from '../agents/director/momentum.ts';
+import { renderDirective } from '../agents/director/render.ts';
 import { ageOf, isFinishedArc, isFinishedHidden } from '../agents/director/state.ts';
 import { SURFACE_TURNS, type DirectorRecord, type DirectorState, type Horizon, type NarratorDirective } from '../agents/director/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
@@ -73,8 +74,9 @@ export interface ProseStyler {
   end(): string;
 }
 
-const OPEN_QUOTES = new Set(['“', '«']);
-const CLOSE_QUOTES = new Set(['”', '»']);
+/** The quotes that open / close speech besides `"` (which toggles); the TUI's chat styler reads them too. */
+export const OPEN_QUOTES: ReadonlySet<string> = new Set(['“', '«']);
+export const CLOSE_QUOTES: ReadonlySet<string> = new Set(['”', '»']);
 
 /**
  * Roleplay convention: *asterisks* mark actions, quotes mark speech. An action is italic; speech
@@ -1048,45 +1050,17 @@ export interface DirectorShow {
   from?: string;
   /** Unreadable records skipped on the way (directorAt's `invalid`). */
   invalid: number;
+  /**
+   * When `record` sent no directive (a failed plan): the last one the narrator got before it on this
+   * path, the nearest record above `from` that planned one, and its reply.
+   */
+  sentBefore?: { turn: number; from: string; directive: NarratorDirective };
 }
 
 const quoted = (s: string, max = 60): string => `"${gist(s, max)}"`;
 
 /** Seeds and hidden arcs are due SURFACE_TURNS[horizon] turns after they began (what the planner is told). */
 const dueAfter = (h: Horizon | undefined): number => (h !== undefined ? SURFACE_TURNS[h] : undefined) ?? SURFACE_TURNS.medium;
-
-/**
- * A directive in one line, the fields it sets: `mood "tense" · pace fast · goal "…" · 2 arc directions ·
- * 1 character beat · hook "…"`. 'pace medium' (the default) is left out; '(empty)' when nothing is set.
- */
-export function directiveSummary(d: NarratorDirective): string {
-  const parts: string[] = [];
-  const text = (label: string, v: string | undefined, max = 40): void => {
-    if (typeof v === 'string' && v.trim() !== '') parts.push(`${label} ${quoted(v, max)}`);
-  };
-  const count = (n: number | undefined, one: string, many?: string): void => {
-    if (typeof n === 'number' && n > 0) parts.push(plural(n, one, many));
-  };
-  text('mood', d.mood, 30);
-  if (d.pacing && d.pacing !== 'medium') parts.push(`pace ${d.pacing}`);
-  text('goal', d.narrativeGoal);
-  const sc = d.sceneGuidance;
-  if (sc) {
-    text('setting', sc.setting, 30);
-    if (typeof sc.tension_level === 'number' && Number.isFinite(sc.tension_level)) parts.push(`tension ${Math.round(sc.tension_level)}/10`);
-    else if (sc.atmosphere) text('atmosphere', sc.atmosphere, 30);
-  }
-  count(d.arcDirections?.length, 'arc direction');
-  count(d.characterBeats?.length, 'character beat');
-  count(d.dialogueGuidance?.length, 'dialogue note');
-  count(d.callbacks?.length, 'callback');
-  const inc = d.include;
-  count(inc ? (inc.characters?.length ?? 0) + (inc.themes?.length ?? 0) + (inc.sensoryDetails?.length ?? 0) + (inc.foreshadowing?.length ?? 0) : 0, 'thing to include', 'things to include');
-  const av = d.avoid;
-  count(av ? (av.topics?.length ?? 0) + (av.characters?.length ?? 0) + (av.revelations?.length ?? 0) : 0, 'thing to avoid', 'things to avoid');
-  text('hook', d.endingHook);
-  return parts.length > 0 ? parts.join(' · ') : '(empty)';
-}
 
 /** The record's outcome: planned, reused (from a reply), failed (code). */
 function recordResult(r: DirectorRecord, style: Style): string {
@@ -1098,8 +1072,9 @@ function recordResult(r: DirectorRecord, style: Style): string {
  * /director show (D-113): the setting, then the Director's state at the head — the last turn and how it
  * went, the chapter, the live arcs (status, priority, horizon, age, next beat), the unpaid seeds (age
  * against their horizon, OVERDUE past it; ripe for payoff by the momentum rule), the live hidden arcs,
- * the intentions and the last directive. Ages count from the state's own turn. Finished items are
- * only counted. "The Director has not planned yet." before its first turn on this path.
+ * the intentions and the last directive in full, the block the narrator got (renderDirective), dim.
+ * Ages count from the state's own turn. Finished items are only counted. "The Director has not
+ * planned yet." before its first turn on this path.
  */
 export function renderDirector(d: DirectorShow, style: Style): string {
   const lines: string[] = [];
@@ -1140,7 +1115,7 @@ export function renderDirector(d: DirectorShow, style: Style): string {
     if (still >= MOMENTUM.arcStale) parts.push(style.yellow(`stale: ${still} turns without progress`));
     lines.push(`  ${parts.join(' · ')}`);
     const b = a.nextBeat;
-    if (b?.status === 'pending') lines.push(`    ${label('next:')} ${gist(b.description, 100)}${typeof b.targetTurn === 'number' ? ` ${label(`(by turn ${b.targetTurn})`)}` : ''}`);
+    if (b?.status === 'pending') lines.push(`    ${label('next:')} ${gist(b.description, Infinity)}${typeof b.targetTurn === 'number' ? ` ${label(`(by turn ${b.targetTurn})`)}` : ''}`);
     else if (b?.status === 'delivered') lines.push(`    ${label(`next beat delivered${b.deliveredAtTurn !== undefined ? ` on turn ${b.deliveredAtTurn}` : ''}`)}`);
     else if (b?.status === 'abandoned') lines.push(`    ${label('next beat abandoned')}`);
     else lines.push(`    ${label('no next beat')}`);
@@ -1169,13 +1144,21 @@ export function renderDirector(d: DirectorShow, style: Style): string {
 
   if (s.nextIntentions.length > 0) {
     lines.push(label('intentions:'));
-    for (const i of s.nextIntentions) lines.push(`  ${i.priority} · ${i.targetTurn}: ${gist(i.description, 100)}`);
+    for (const i of s.nextIntentions) lines.push(`  ${i.priority} · ${i.targetTurn}: ${gist(i.description, Infinity)}`);
   }
 
-  // The directive as sent (after enrich and the persona filter) when this record planned one; else
-  // the last authored one the state keeps (a failed turn plans none).
-  if (r.ok && r.directive) lines.push(`${label(`last directive (turn ${r.turn}, as sent)`)} ${directiveSummary(r.directive)}`);
-  else if (s.lastDirective) lines.push(`${label(`last directive (turn ${s.lastDirective.turn})`)} ${directiveSummary(s.lastDirective.directive)}`);
+  // The last directive in full, dim, exactly as the narrator got it: renderDirective of the record's
+  // directive (after enrich and the persona filter). A turn that sent none (a failed plan) shows the
+  // last one sent before it on this path, or, when no record of it is on the path, the last one the
+  // Director wrote (the state keeps it as authored: before enrich and the filter).
+  const block = (head: string, directive: NarratorDirective): void => {
+    const text = renderDirective(directive);
+    if (text === '') lines.push(label(`${head}: empty (the narrator got no Director block)`));
+    else lines.push(label(`${head}:`), ...text.split('\n').map(label));
+  };
+  if (r.ok && r.directive) block(`last directive (turn ${r.turn}${r.reusedFrom !== undefined ? `, reused from ${r.reusedFrom}` : ''}, as sent)`, r.directive);
+  else if (d.sentBefore) block(`last directive (turn ${d.sentBefore.turn}, as sent on ${d.sentBefore.from}; turn ${r.turn} sent none)`, d.sentBefore.directive);
+  else if (s.lastDirective) block(`last directive (turn ${s.lastDirective.turn}, as the Director wrote it; turn ${r.turn} sent none)`, s.lastDirective.directive);
   else lines.push(label('no directive yet'));
   return lines.join('\n');
 }
