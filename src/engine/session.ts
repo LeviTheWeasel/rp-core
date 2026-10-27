@@ -5,9 +5,13 @@
 // PathView, the verbs, and at most one running turn. Every write goes through append() here, which
 // keeps version(session) current without re-reading the log. Admission (admit.ts) and the turn's
 // first line happen synchronously in runTurn; the rest of the turn runs in turn.ts. preview (M2)
-// runs the same admission and request.ts buildRequest, and writes nothing.
+// runs the same admission and request.ts buildRequest, and writes nothing. M4 (D-106): a preview never
+// calls the Director; it shows the directive the turn would carry when that is known (a swipe that
+// reuses the plan, a past answer's stored one), else a stub.
 
 import { normalizeName } from '../agents/compendium/apply.ts';
+import { directiveInsert, reusedRecord, stubInsert, swipeReuses } from '../agents/director/call.ts';
+import { checkRecord } from '../agents/director/state.ts';
 import { noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
 import type { CEntry } from '../agents/compendium/types.ts';
 import { searchHistory, type HistorySearch } from '../tools/builtin/history.ts';
@@ -21,7 +25,7 @@ import { recoverSession, type RecoverJournal } from './recover.ts';
 import { buildRequest, maxTokensFor } from './request.ts';
 import { TurnRun, type EventBody, type TurnHost } from './turn.ts';
 import { traceForSent } from '../prompt/assemble.ts';
-import { isInsertSrc } from '../prompt/depth.ts';
+import { isInsertSrc, type DepthInsert } from '../prompt/depth.ts';
 import { CONTINUE_CUE_SRC, POST_PROCESSING_PLACEHOLDER_SRC } from '../prompt/shape.ts';
 import { counterOf } from './ema.ts';
 import { createMacroRun } from '../prompt/macros.ts';
@@ -676,6 +680,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const plan = kind === undefined ? admitted : { ...admitted, kind, ...guided };
     seed ??= this.seedOfNextTurn();
     const explain = opts.explain === true;
+    const placements = this.previewDirective(tree, plan, opts.turn);
 
     const built = buildRequest({
       home: this.ctx.home,
@@ -688,8 +693,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       now,
       timeZone: this.ctx.timeZone,
       counter: this.ctx.counter,
-      // M4: the Director's stub directive goes here; the Director is never called by a preview.
-      placements: [],
+      // M4 (D-106): the Director is never called by a preview.
+      placements,
       ...(explain ? { explain: true } : {}),
       ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
     });
@@ -787,6 +792,22 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       }
     }
     return out;
+  }
+
+  /**
+   * M4 (D-106): the depth-1 directive a preview shows. A past answer (`turn`): its stored directive,
+   * re-rendered, so /trace and /preview --turn show what was sent (whatever the Director's setting is
+   * today). The next turn, while the Director is on: the replaced answer's directive when the swipe
+   * would reuse its plan, else the stub.
+   */
+  private previewDirective(tree: TreeIndex, plan: { kind: TurnKind; target?: string; guidance?: string; config: SessionConfig }, turn: string | undefined): DepthInsert[] {
+    if (turn !== undefined) return directiveInsert(checkRecord(tree.msgs.get(turn)?.dir)?.directive);
+    if (plan.config.director?.enabled !== true) return [];
+    if (plan.kind === 'swipe' && plan.target !== undefined && swipeReuses(plan.config, plan.guidance)) {
+      const reused = reusedRecord(tree, plan.target, this.log.header.cast.persona);
+      if (reused !== null) return directiveInsert(reused.directive);
+    }
+    return stubInsert();
   }
 
   configure(patch: DeepPartial<SessionConfig>): void {

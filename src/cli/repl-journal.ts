@@ -7,7 +7,7 @@
 // (/usage), and the last answer's trace (/trace). Pure functions over (header, entries); repl.ts
 // reads the file with session/log.ts readSessionFile (read-only, no lock).
 
-import type { Entry, Generation, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
+import type { Entry, Generation, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
 import { currentConfig } from '../session/fold.ts';
 import { buildTree, effectiveMessage, swipeSiblings, type TreeIndex } from '../session/tree.ts';
 import type { Usage } from '../providers/types.ts';
@@ -25,6 +25,16 @@ export function journalOf(header: SessionHeader, entries: readonly Entry[]): Jou
 /** The session's config now: header + every config patch (what the next turn reads). */
 export function configOf(j: Journal): SessionConfig {
   return currentConfig(j.header, j.entries);
+}
+
+/**
+ * The Director's binding [D-101]: `roles.director`, or the narrator's whole binding when it follows
+ * ('narrator' or unset). `follows` says which, for the banner and /director.
+ */
+export function directorBinding(roles: Roles): { conn: string; model: string; follows: boolean } {
+  const d = roles.director;
+  if (d !== undefined && typeof d !== 'string') return { conn: d.conn, model: d.model, follows: false };
+  return { conn: roles.narrator.conn, model: roles.narrator.model, follows: true };
 }
 
 /**
@@ -85,53 +95,88 @@ export function resolveMessageId(j: Journal, prefix: string): { ok: true; id: st
 
 // ---- usage and cost (§11) --------------------------------------------------------------------------
 
-export interface UsageSummary {
-  /** Generations counted: answers and continue additions on the path that recorded a gen. */
+/** Calls and tokens of one agent (or the narrator's generations) over a path. */
+export interface UsageCounts {
+  /** Narrator: generations (answers and continue additions with a gen). Other agents: model calls (trace.calls rows, retries included). */
   calls: number;
   inputTokens: number;
   outputTokens: number;
-  /** Generations whose usage the provider did not report. */
+  /** Generations / calls whose usage the provider did not report. */
   noUsage: number;
-  /** USD; null when no generation could be priced. */
+  /** USD; null when none could be priced. */
   costUsd: number | null;
-  /** Generations with usage but neither a provider cost nor a price row. */
+  /** With usage but neither a provider cost nor a price row. */
   unpriced: number;
 }
 
+/**
+ * The narrator's numbers at the top level (as before M4); `agents` holds every other agent that made
+ * calls on the path (M4: the Director, D-101), keyed by trace.calls' `agent`. Absent when none did.
+ */
+export interface UsageSummary extends UsageCounts {
+  agents?: Record<string, UsageCounts>;
+}
+
 export type PriceTable = Readonly<Record<string, { inPerM: number; outPerM: number }>>;
+
+const zeroCounts = (): UsageCounts => ({ calls: 0, inputTokens: 0, outputTokens: 0, noUsage: 0, costUsd: null, unpriced: 0 });
+
+/** Count one call or generation: provider cost first, else the price row of `model` ('conn:model'), else unpriced (never 0, §11). */
+function addUsage(sum: UsageCounts, u: Usage | undefined, model: string | undefined, prices: PriceTable): void {
+  sum.calls++;
+  if (!u || (u.inputTotal === undefined && u.outputTotal === undefined && u.cost === undefined)) {
+    sum.noUsage++;
+    return;
+  }
+  sum.inputTokens += u.inputTotal ?? 0;
+  sum.outputTokens += u.outputTotal ?? 0;
+  let cost: number | null = null;
+  if (typeof u.cost === 'number' && Number.isFinite(u.cost)) cost = u.cost;
+  else {
+    const row = model !== undefined && Object.hasOwn(prices, model) ? prices[model] : undefined;
+    if (row && u.inputTotal !== undefined && u.outputTotal !== undefined) {
+      cost = (u.inputTotal * row.inPerM + u.outputTotal * row.outPerM) / 1_000_000;
+    }
+  }
+  if (cost === null) sum.unpriced++;
+  else sum.costUsd = (sum.costUsd ?? 0) + cost;
+}
 
 /**
  * Usage over the path: each answer's own generation plus every continue that extended it (a
  * continue's gen replaces the message's gen in the view, so the view alone would lose the original
  * call). Cost: the provider-reported figure first, else the price table, else unpriced (never 0, §11).
+ * M4 (D-101): every trace.calls row of another agent (the Director) in those traces is counted under
+ * its agent and priced by the row's own model; the narrator's numbers come from its gens as before.
  */
 export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceTable): UsageSummary {
-  const sum: UsageSummary = { calls: 0, inputTokens: 0, outputTokens: 0, noUsage: 0, costUsd: null, unpriced: 0 };
+  const sum: UsageSummary = zeroCounts();
+  const agents = new Map<string, UsageCounts>();
   const add = (gen: Generation | undefined): void => {
     if (!gen || gen.kind !== 'model') return;
-    sum.calls++;
-    const u: Usage | undefined = gen.usage;
-    if (!u || (u.inputTotal === undefined && u.outputTotal === undefined && u.cost === undefined)) {
-      sum.noUsage++;
-      return;
+    addUsage(sum, gen.usage, gen.connection !== undefined && gen.model !== undefined ? `${gen.connection}:${gen.model}` : undefined, prices);
+  };
+  const addCalls = (trace: Trace | undefined): void => {
+    const rows: unknown = trace?.calls;
+    if (!Array.isArray(rows)) return;
+    for (const row of rows as Trace['calls']) {
+      if (typeof row !== 'object' || row === null || typeof row.agent !== 'string' || row.agent === 'narrator') continue;
+      let into = agents.get(row.agent);
+      if (!into) agents.set(row.agent, (into = zeroCounts()));
+      addUsage(into, row.usage, typeof row.model === 'string' ? row.model : undefined, prices);
     }
-    sum.inputTokens += u.inputTotal ?? 0;
-    sum.outputTokens += u.outputTotal ?? 0;
-    let cost: number | null = null;
-    if (typeof u.cost === 'number' && Number.isFinite(u.cost)) cost = u.cost;
-    else {
-      const row = gen.connection !== undefined && gen.model !== undefined ? prices[`${gen.connection}:${gen.model}`] : undefined;
-      if (row && u.inputTotal !== undefined && u.outputTotal !== undefined) {
-        cost = (u.inputTotal * row.inPerM + u.outputTotal * row.outPerM) / 1_000_000;
-      }
-    }
-    if (cost === null) sum.unpriced++;
-    else sum.costUsd = (sum.costUsd ?? 0) + cost;
   };
   for (const id of pathIds) {
-    add(j.tree.msgs.get(id)?.gen);
-    for (const e of j.tree.edits.get(id) ?? []) if (e.reason === 'continue') add(e.gen);
+    const m = j.tree.msgs.get(id);
+    add(m?.gen);
+    addCalls(m?.trace);
+    for (const e of j.tree.edits.get(id) ?? []) {
+      if (e.reason !== 'continue') continue;
+      add(e.gen);
+      addCalls(e.trace);
+    }
   }
+  if (agents.size > 0) sum.agents = Object.fromEntries(agents);
   return sum;
 }
 

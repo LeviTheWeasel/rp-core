@@ -4,7 +4,8 @@
 // Plain-text rendering for the CLI (ARCHITECTURE.md §19.2 cli/render.ts). M1a needs three things:
 // the streamed answer of a one-shot `send` (text to stdout, everything else to stderr), the
 // active path for `show`, and the `sessions` table. Pure string building plus a small stateful
-// turn renderer; the REPL's italics, folded reasoning and status line arrive in M1b.
+// turn renderer; the REPL's italics, folded reasoning and status line arrive in M1b. M4: one stderr
+// line per Director outcome in `send`'s text mode.
 
 import type { Event } from '../protocol/events.ts';
 import type { SessionHeader } from '../session/entries.ts';
@@ -154,11 +155,29 @@ export function toolLine(ev: Extract<Event, { type: 'tool' }>): string | null {
   return `⋯ ${ev.name}${args ? ` ${args}` : ''} → ${result}`;
 }
 
+/**
+ * The Director's line in `send`'s text mode (M4, D-113): `⋯ director: planned — arcs +1 · seeds +1`,
+ * `⋯ director: reused — …`, `⋯ director: failed (timeout)`. null for 'planning' and 'skipped'.
+ */
+export function directorLine(ev: Extract<Event, { type: 'director' }>): string | null {
+  switch (ev.status) {
+    case 'planned':
+    case 'reused':
+      return `⋯ director: ${ev.status}${ev.summary !== undefined && ev.summary.trim() !== '' ? ` — ${oneLine(ev.summary, 80)}` : ''}`;
+    case 'failed':
+      return `⋯ director: failed (${ev.reason !== undefined && ev.reason.trim() !== '' ? oneLine(ev.reason, 60) : 'unknown'})`;
+    default:
+      return null;
+  }
+}
+
 /** A human line (for stderr) about a non-text event, or null when there is nothing to say. */
 export function describeEvent(ev: Event): string | null {
   switch (ev.type) {
     case 'tool':
       return toolLine(ev);
+    case 'director':
+      return directorLine(ev);
     case 'notice':
       return `${ev.level}: ${ev.message} (${ev.code})`;
     case 'recovered':
@@ -247,10 +266,11 @@ export function createTextRenderer(io: Io, opts: { debug: boolean; prefix?: stri
           endLine();
           say(describeEvent(ev)!);
           return;
-        case 'tool': {
-          // M3: one line per finished call. stdout stays the answer alone, so a call between two
-          // rounds starts its stderr line on a fresh line when the answer's line is still open.
-          const line = toolLine(ev);
+        case 'tool':
+        case 'director': {
+          // M3: one line per finished call (M4: and per Director outcome). stdout stays the answer
+          // alone, so a line between two rounds starts on a fresh line when the answer's is still open.
+          const line = describeEvent(ev);
           if (line) io.err.write(`${printed !== '' && !printed.endsWith('\n') ? '\n' : ''}${prefix}${line}\n`);
           return;
         }

@@ -39,7 +39,7 @@ import type { Scheduler } from './sched.ts';
 import type { Connection } from './api.ts';
 import { ProviderError } from '../providers/types.ts';
 import { echoPlaceholders, SAFE_ID, SAFE_NAME } from '../providers/wire.ts';
-import type { FinishReason, ModelCaps, ModelRequest, PromptMsg, Replay, StreamEv, ToolSpec, Usage } from '../providers/types.ts';
+import type { CallAgent, FinishReason, JSONSchema, ModelCaps, ModelRequest, PromptMsg, Replay, StreamEv, ToolSpec, Usage } from '../providers/types.ts';
 import type { Block, ToolTraceRow, Trace } from '../session/entries.ts';
 import { historyPageChars } from '../tools/builtin/history.ts';
 import { recoverLeaks } from '../tools/leaks.ts';
@@ -91,6 +91,12 @@ export interface CallInput {
   tools?: ToolSpec[];
   toolChoice?: 'auto' | 'none';
   stop?: string[];
+  /** M4 (D-98): who the call is for (ModelRequest.agent); absent = 'narrator'. */
+  agent?: CallAgent;
+  /** M4 (D-98): the structured transport's schema (openai-chat sends it as response_format). */
+  responseSchema?: { name: string; schema: JSONSchema };
+  /** M4 (D-101): called once, right after the call got its semaphore slot (an agent's budget starts here). */
+  onSlot?(): void;
   /** Streamed text / reasoning deltas, in arrival order. */
   onText(delta: string): void;
   onReasoning(delta: string): void;
@@ -144,7 +150,7 @@ export function providerFinish(reason: FinishReason): FinishReason {
 /** What of a call goes into its ModelRequest. */
 export type RequestFields = Pick<
   CallInput,
-  'conn' | 'model' | 'caps' | 'messages' | 'prefill' | 'maxTokens' | 'samplers' | 'reasoning' | 'callKey' | 'tools' | 'toolChoice' | 'stop'
+  'conn' | 'model' | 'caps' | 'messages' | 'prefill' | 'maxTokens' | 'samplers' | 'reasoning' | 'callKey' | 'tools' | 'toolChoice' | 'stop' | 'agent' | 'responseSchema'
 >;
 
 /**
@@ -160,7 +166,7 @@ export function modelRequest(input: RequestFields, signal: AbortSignal): ModelRe
     samplers: input.samplers,
     signal,
     callKey: input.callKey,
-    agent: 'narrator',
+    agent: input.agent ?? 'narrator',
   };
   if (input.prefill !== undefined && input.prefill !== '') req.prefill = input.prefill;
   if (input.reasoning !== undefined) req.reasoning = input.reasoning;
@@ -171,6 +177,7 @@ export function modelRequest(input: RequestFields, signal: AbortSignal): ModelRe
     req.tools = input.tools;
     if (input.toolChoice !== undefined) req.toolChoice = input.toolChoice;
   }
+  if (input.responseSchema !== undefined) req.responseSchema = input.responseSchema;
   return req;
 }
 
@@ -350,6 +357,16 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
   } catch {
     out.stopped = true;
     return done();
+  }
+  // M4 (D-101): the agent's budget starts now; the wait in the queue is not counted. A throwing
+  // callback is the caller's bug: the place is given back before it propagates.
+  if (input.onSlot) {
+    try {
+      input.onSlot();
+    } catch (e) {
+      slot.release();
+      throw e;
+    }
   }
 
   const call = childController(input.turnSignal);

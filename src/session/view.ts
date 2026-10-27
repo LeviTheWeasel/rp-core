@@ -21,8 +21,9 @@ export interface MessageView {
 }
 
 /**
- * PathView. Fields reserved for later milestones (directorAt M4) are added then; consumers must
- * only read what is declared here.
+ * PathView. Fields reserved for later milestones are added then; consumers must only read what is
+ * declared here. The Director's state is not a field (PathView stays plain data, M6 serialises it):
+ * it is the pure fold agents/director/state.ts directorAt(tree, fromId) (m4-decisions A.8, D-103).
  */
 export interface PathView {
   session: string;

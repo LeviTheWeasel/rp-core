@@ -4,9 +4,11 @@
 // PathView: the one derived view (ARCHITECTURE.md §5.11). Recomputed per version, cached by caller.
 // CONTRACT FILE: signature is fixed; the storage agent implements the body.
 //
-// Fold order (§19.2): path, edits, swipes, vars [D-30] → fires (M2 reads them) → directorAt (M4)
-// → Compendium (M3 notes, §5.8; M5 the rest). One linear pass over the tree index; the 10k-message
-// benchmark lives in test/session/fold.test.ts, the 5 000-row Compendium one in test/memory.
+// Fold order (§19.2): path, edits, swipes, vars [D-30] → fires (M2 reads them) → Compendium (M3
+// notes, §5.8; M5 the rest). The Director's state is not folded here: agents/director/state.ts
+// directorAt(tree, fromId) walks the parents on demand (M4, D-103). One linear pass over the tree
+// index; the 10k-message benchmark lives in test/session/fold.test.ts, the 5 000-row Compendium one
+// in test/memory.
 
 import type { DeepPartial, Entry, SessionConfig, SessionHeader, Trace, VarsDiff } from './entries.ts';
 import type { TreeIndex } from './tree.ts';

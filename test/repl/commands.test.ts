@@ -110,7 +110,9 @@ describe('parseLine: commands', () => {
 
   test('later milestones are named, unknown commands get a hint', () => {
     expect(cmd('/memory recall')).toMatchObject({ name: 'later', command: 'memory recall', when: 'M5 (Compendium)' });
-    expect(cmd('/director on')).toMatchObject({ name: 'later', command: 'director' });
+    // M4: /director arrived (D-113); /persona is still later.
+    expect(cmd('/director on')).toEqual({ name: 'director', action: 'on' });
+    expect(cmd('/persona')).toMatchObject({ name: 'later', command: 'persona' });
     expect(error('/me waves')).toContain('/help');
     expect(error('/me waves')).toContain('//');
     expect(error('/')).toContain('/help');

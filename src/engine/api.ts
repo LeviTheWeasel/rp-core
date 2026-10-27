@@ -245,7 +245,9 @@ export interface SessionHandle {
   /**
    * M2: build the request a turn would send, without sending or writing anything (§6.1). Same path
    * as a turn: the same admission checks (as ok:false, never thrown), assemble and shape; the
-   * Director is never called (M4: a stub directive).
+   * Director is never called. M4 (D-106): while it is on, the request carries its contract and, at
+   * depth 1, the directive the turn would carry when it is known (a swipe that reuses the plan) or a
+   * stub; a past answer's preview (`turn`) re-renders that answer's stored directive.
    */
   preview(opts?: PreviewOptions): PreviewResult;
 

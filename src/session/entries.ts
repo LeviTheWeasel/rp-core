@@ -7,6 +7,7 @@
 // CONTRACT FILE: the types are fixed by the architect. The storage agent implements the parse
 // functions at the bottom; do not change exported type shapes.
 
+import type { DirectorRecord } from '../agents/director/types.ts';
 import type { Character, Persona, Samplers } from '../formats/native.ts';
 import type { Usage, FinishReason } from '../providers/types.ts';
 
@@ -113,8 +114,14 @@ export interface Trace {
 
 // ---- agent records (reserved: Director M4, Compendium M5) ----------------------------------------
 
-/** §7.3 DirectorRecord. Opaque until M4. */
-export type DirectorRecord = Record<string, unknown>;
+/**
+ * §7.3 DirectorRecord: the type of agents/director/types.ts (M4, D-117). The journal guard checks only
+ * that a `dir` is an object (anyObj), so a `dir` field holds what was written (a DirectorRecord) or,
+ * read back, any object: every reader goes through agents/director/state.ts checkRecord.
+ */
+export type { DirectorRecord };
+/** A `dir` as the journal holds it: written as a DirectorRecord, read back as any object. */
+export type StoredDirectorRecord = DirectorRecord | Record<string, unknown>;
 /** §7.4.2 RecallRecord. Opaque until M5. */
 export type RecallRecord = Record<string, unknown>;
 
@@ -122,7 +129,7 @@ export interface CommitBody {
   blocks: Block[];
   gen?: Generation;
   trace?: Trace;
-  dir?: DirectorRecord;
+  dir?: StoredDirectorRecord;
   recall?: RecallRecord;
   vars?: VarsDiff;
 }
@@ -279,7 +286,7 @@ export interface PrepEntry {
   t: 'prep';
   seq: number;
   turn: string;
-  dir?: DirectorRecord;
+  dir?: StoredDirectorRecord;
   recall?: RecallRecord;
   vars?: VarsDiff;
   trace: Trace;

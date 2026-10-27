@@ -17,15 +17,20 @@
 //   line never glues onto a half line.
 // - open: lock first, then read; a torn or invalid last line is copied to <id>.torn (fsynced) before
 //   the journal is truncated to the end of the previous line.
+// - compact (M4): under the lock, the kept lines go to a temp file (0600, then the journal's mode and
+//   times; fsynced) that is renamed over the journal only after re-checking that the journal is still
+//   the file read and the lock still ours (D-124), then the directory is fsynced.
 
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fdatasyncSync,
   fstatSync,
   fsyncSync,
   ftruncateSync,
+  futimesSync,
   linkSync,
   mkdirSync,
   openSync,
@@ -37,6 +42,7 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
+import type { Stats } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { systemClock } from '../engine/system.ts';
@@ -815,6 +821,287 @@ export function readSessionFile(
   }
   const { header, entries, notices } = parseJournal(id, bytes);
   return { header, entries, notices };
+}
+
+// ---- compact (D-35, D-114, D-124) -------------------------------------------------------------------
+
+/** compactSessionLog refused: a turn has no closing line (held for a decision, or running elsewhere). */
+export class TurnOpenError extends Error {
+  readonly turns: readonly string[];
+  constructor(id: string, turns: readonly string[]) {
+    super(`session ${id} has a turn that is still open (${turns.join(', ')}): an answer held for a decision, or a turn running elsewhere`);
+    this.name = 'TurnOpenError';
+    this.turns = turns;
+  }
+}
+
+export interface CompactResult {
+  /** File size before and after, in bytes (equal when nothing was removed). */
+  before: number;
+  after: number;
+  /** Lines removed: the chk and prep rows of closed turns. */
+  removed: number;
+  /**
+   * chk/prep rows of closed turns that were kept: removing them would let the reader accept a line it
+   * skips today (a line whose seq does not increase, right after them), or leave a broken line last.
+   * Present only when > 0.
+   */
+  kept?: number;
+}
+
+/** Seams of compactSessionLog outside the library contract, for tests: hosts never set them. */
+export interface CompactSeams {
+  /** Runs once the temp file is complete (written, fsynced), just before the re-checks and the rename. */
+  beforeRename?: () => void;
+}
+
+/** One line after the header, classified by the reader's rule (parseJournal). */
+type CompactLine =
+  | { kind: 'accepted'; e: Entry; start: number; end: number }
+  /** Skipped by the reader: `seq` when it parsed (its seq did not increase), null when it did not parse. */
+  | { kind: 'skipped'; seq: number | null; start: number; end: number };
+type AcceptedLine = Extract<CompactLine, { kind: 'accepted' }>;
+
+interface CompactPlan {
+  /** Rows to remove, in file order. */
+  drop: CompactLine[];
+  /** Droppable rows kept so that the reader accepts exactly the same lines (see planCompaction). */
+  kept: number;
+  /** The entries the reader must accept from the rewritten file, in order. */
+  expected: Entry[];
+}
+
+/**
+ * Decide which rows go. Droppable: the chk and prep rows of CLOSED turns (a `turn` row plus its
+ * commit `msg`/`edit` or its `end`). Removing a row must not change what the reader accepts:
+ * - a skipped line whose seq is not above the last accepted seq before it is skipped only because
+ *   of the rows right before it; when those rows would all go, the newest of them stays (its seq is
+ *   ≥ the skipped line's, so the line stays skipped and every kept accepted line stays accepted);
+ * - the file must not end in a line that does not parse (the reader would cut it off as a torn tail),
+ *   so a dropped last row stays when the line before it is broken.
+ * Throws for a torn/invalid last line and for an open turn.
+ */
+function planCompaction(id: string, bytes: Uint8Array): CompactPlan {
+  const { spans, torn } = splitLineSpans(bytes);
+  const first = spans[0];
+  if (!first) throw new SessionCorruptError(id, torn !== null ? 'the header line is torn' : 'the file is empty');
+  const h = parseHeader(first.text);
+  if (!h.ok) throw new SessionCorruptError(id, h.why);
+  const lines: CompactLine[] = [];
+  let prevSeq = 0;
+  for (let i = 1; i < spans.length; i++) {
+    const span = spans[i]!;
+    const r = parseEntry(span.text);
+    if (r.ok && r.value.seq > prevSeq) {
+      lines.push({ kind: 'accepted', e: r.value, start: span.start, end: span.end });
+      prevSeq = r.value.seq;
+    } else {
+      lines.push({ kind: 'skipped', seq: r.ok ? r.value.seq : null, start: span.start, end: span.end });
+    }
+  }
+  const last = lines[lines.length - 1];
+  if (torn !== null || (last?.kind === 'skipped' && last.seq === null)) {
+    throw new Error(`session ${id} ends in a torn or invalid line; open it once (recovery cuts it off), then compact`);
+  }
+
+  const begun = new Set<string>();
+  const closed = new Set<string>();
+  for (const l of lines) {
+    if (l.kind !== 'accepted') continue;
+    const e = l.e;
+    if (e.t === 'turn') begun.add(e.turn);
+    else if (e.t === 'end') closed.add(e.turn);
+    else if ((e.t === 'msg' || e.t === 'edit') && e.turn !== undefined) closed.add(e.turn);
+  }
+  const open = [...begun].filter((t) => !closed.has(t));
+  if (open.length > 0) throw new TurnOpenError(id, open);
+
+  const droppable = new Set<CompactLine>();
+  for (const l of lines) {
+    if (l.kind !== 'accepted') continue;
+    const e = l.e;
+    if ((e.t === 'chk' || e.t === 'prep') && begun.has(e.turn) && closed.has(e.turn)) droppable.add(l);
+  }
+  // Skipped lines stay skipped: walk in file order with the seq the rewritten file's reader would hold.
+  const keep = new Set<CompactLine>();
+  let keptSeq = 0; // seq of the last accepted line that stays
+  let pending: AcceptedLine | null = null; // the last accepted line, when it is to be removed
+  for (const l of lines) {
+    if (l.kind === 'accepted') {
+      if (droppable.has(l)) pending = l;
+      else {
+        keptSeq = l.e.seq;
+        pending = null;
+      }
+    } else if (l.seq !== null && pending !== null && l.seq > keptSeq) {
+      keep.add(pending);
+      keptSeq = pending.e.seq;
+      pending = null;
+    }
+  }
+  const goes = (l: CompactLine): boolean => droppable.has(l) && !keep.has(l);
+  // The new last line must parse: keep the last row when everything after a broken line would go.
+  const lastStays = [...lines].reverse().find((l) => !goes(l));
+  if (lastStays?.kind === 'skipped' && lastStays.seq === null && last !== undefined && goes(last)) keep.add(last);
+
+  const drop = lines.filter(goes);
+  const expected: Entry[] = [];
+  for (const l of lines) if (l.kind === 'accepted' && !goes(l)) expected.push(l.e);
+  return { drop, kept: keep.size, expected };
+}
+
+/**
+ * The rewritten bytes must read back, through the reader itself, as exactly the expected entries
+ * with nothing cut off: otherwise the rewrite would change the story, and nothing is written.
+ */
+function verifyCompacted(id: string, out: Uint8Array, expected: readonly Entry[]): void {
+  const p = parseJournal(id, out);
+  const same =
+    p.tailStart === null &&
+    p.entries.length === expected.length &&
+    p.entries.every((e, i) => JSON.stringify(e) === JSON.stringify(expected[i]));
+  if (!same) throw new Error(`compacting session ${id} would change the lines its reader accepts; nothing was changed`);
+}
+
+/** Read `size` bytes from the start of the file (positional reads); shorter when the file shrank. */
+function readPrefix(fd: number, size: number): Buffer {
+  const buf = Buffer.alloc(size);
+  let off = 0;
+  while (off < size) {
+    const n = readSync(fd, buf, off, size - off, off);
+    if (n <= 0) break;
+    off += n;
+  }
+  return off === size ? buf : buf.subarray(0, off);
+}
+
+/** compact lost the session to another process (it wrote to the journal, or took the lock). */
+function takenOver(id: string, owner: LockInfo, why: 'changed' | 'taken' | 'released'): SessionLockedError {
+  const err = new SessionLockedError(owner);
+  err.message =
+    why === 'changed'
+      ? `session ${id} changed while it was being compacted (another process wrote to it); nothing was changed`
+      : why === 'taken'
+        ? `session ${id} was taken over while it was being compacted (locked by pid ${owner.pid} on ${owner.host}); nothing was changed`
+        : `session ${id} lost its lock while it was being compacted (another process took it over); nothing was changed`;
+  return err;
+}
+
+/**
+ * Right before the rename (D-124): the journal must still be the file that was read (dev/ino), with
+ * the size and mtime it had, and the lock must still be ours. The journal is checked first: a
+ * process that wrote must have held the lock, so a write found here also names its owner if it still
+ * holds it. Returns the refusal, or null when compact may rename.
+ */
+function lostSession(id: string, paths: Paths, fd: number, read: Stats, mine: LockInfo): SessionLockedError | null {
+  let changed: boolean;
+  try {
+    const now = fstatSync(fd);
+    const named = statSync(paths.file);
+    changed = now.size !== read.size || now.mtimeMs !== read.mtimeMs || named.dev !== read.dev || named.ino !== read.ino;
+  } catch {
+    changed = true; // the journal was removed or replaced
+  }
+  let cur: LockRead = null;
+  try {
+    cur = readLockFile(paths.lock);
+  } catch {
+    /* unreadable: not provably ours */
+  }
+  const owner = cur?.info ?? unknownOwner(cur?.mtimeMs ?? 0);
+  if (changed) return takenOver(id, owner, 'changed');
+  if (!cur) return takenOver(id, owner, 'released');
+  if (!cur.info || !sameOwner(cur.info, mine)) return takenOver(id, owner, 'taken');
+  return null;
+}
+
+/**
+ * Rewrite <id>.jsonl without the chk and prep rows of CLOSED turns (a `turn` row with its commit
+ * `msg`/`edit` or its `end`): only recovery reads them, and a closed turn is never recovered. Every
+ * other line stays byte for byte, so seq numbers and versions do not change; msg.dir snapshots stay.
+ * A row whose removal would change which lines the reader accepts stays (`kept`); the rewritten bytes
+ * are read back through the reader before they replace the journal.
+ * Takes the lock (SessionLockedError when someone live holds it); refuses with TurnOpenError while
+ * any turn is open (open the session through the engine first, so recovery closes what it can).
+ * Refuses a journal whose last line is torn or invalid (an open repairs it). The journal is read
+ * through an fd kept open until the rename. Atomic: temp file (created 0600, then given the journal's
+ * mode and times) → fsync → re-check (same file, same size and mtime, lock still ours; else the temp
+ * file goes and SessionLockedError) → rename → fsync of the directory; nothing is written when there
+ * is nothing to remove.
+ */
+export function compactSessionLog(home: string, id: string, opts?: LogOptions, seams?: CompactSeams): CompactResult {
+  if (!isValidSessionId(id)) throw new SessionNotFoundError(id);
+  const paths = pathsFor(home, id);
+  if (!existsSync(paths.file)) throw new SessionNotFoundError(id);
+  const s = settingsOf(opts);
+  const lock = acquireLock(paths.lock, s);
+  let fd: number | undefined;
+  try {
+    try {
+      fd = openSync(paths.file, 'r');
+    } catch (e) {
+      if (errCode(e) === 'ENOENT') throw new SessionNotFoundError(id);
+      throw e;
+    }
+    const read = fstatSync(fd);
+    const bytes = readPrefix(fd, read.size);
+    if (bytes.length !== read.size) throw takenOver(id, readLockFile(paths.lock)?.info ?? unknownOwner(0), 'changed');
+    const plan = planCompaction(id, bytes);
+    const kept = plan.kept > 0 ? { kept: plan.kept } : {};
+    if (plan.drop.length === 0) return { before: bytes.length, after: bytes.length, removed: 0, ...kept };
+    const parts: Uint8Array[] = [];
+    let at = 0;
+    for (const d of plan.drop) {
+      if (d.start > at) parts.push(bytes.subarray(at, d.start));
+      at = d.end;
+    }
+    if (at < bytes.length) parts.push(bytes.subarray(at));
+    const out = Buffer.concat(parts);
+    verifyCompacted(id, out, plan.expected);
+
+    // A dotfile that does not end in .jsonl: a crash before the rename leaves nothing that lists as a
+    // session. A leftover of this pid goes first; 'wx' never opens an existing file (or a planted link).
+    const tmp = join(paths.dir, `.${id}.${s.pid}.compact.tmp`);
+    unlinkQuiet(tmp);
+    const tfd = openSync(tmp, 'wx', 0o600);
+    try {
+      // Never broader than the journal, not even for a moment: 0600 first, then exactly its mode. A
+      // filesystem without modes (or a refused chmod) leaves 0600: narrower, never broader.
+      try {
+        fchmodSync(tfd, read.mode & 0o7777);
+      } catch {
+        /* keeps 0600 */
+      }
+      writeAll(tfd, out);
+      // The story did not change, so neither does its "updated" time (listSessions sorts by mtime).
+      // Best effort: a filesystem that refuses it only costs the list order.
+      try {
+        futimesSync(tfd, read.atimeMs / 1000, read.mtimeMs / 1000);
+      } catch {
+        /* the new file keeps the time of this write */
+      }
+      fsyncSync(tfd);
+    } catch (e) {
+      closeSync(tfd);
+      unlinkQuiet(tmp);
+      throw e;
+    }
+    closeSync(tfd);
+    try {
+      seams?.beforeRename?.();
+      const lost = lostSession(id, paths, fd, read, lock);
+      if (lost) throw lost;
+      renameSync(tmp, paths.file);
+    } catch (e) {
+      unlinkQuiet(tmp);
+      throw e;
+    }
+    fsyncDir(paths.dir);
+    return { before: bytes.length, after: out.length, removed: plan.drop.length, ...kept };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    releaseLock(paths.lock, lock);
+  }
 }
 
 /** Read just the first line of a file (the header), without loading the whole journal. */

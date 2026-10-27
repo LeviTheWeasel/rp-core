@@ -43,10 +43,21 @@
 // block of a multi-round answer (the loop already left out the spans it turned into calls, §8.3);
 // tool rounds commit as interleaved blocks [§5.6]. A turn with no
 // visible text at all follows the M2 empty rules and commits nothing of its tool rounds.
+//
+// M4 (.notes/m4-decisions.md D-101, D-104, D-106): step 3 runs the Story Director when
+// director.enabled and the kind is not continue — after the beforeAssemble hook, before assemble,
+// on a child signal of the turn. It never fails the turn: its record (planned, reused or failed)
+// rides `prep` and the commit body (`dir`), its directive goes to depth 1, its calls to trace.calls
+// and CALL_CEILING, its status to trace.agents.director. A Stop during planning ends the turn
+// stopped-empty with no `dir`. A continue never plans: it re-sends the target's stored directive.
 
-import { abortableDelay, abortWith, type AbortReason } from './abort.ts';
+import { directiveInsert, runDirector, type DirectorAgentRow } from '../agents/director/call.ts';
+import { checkRecord } from '../agents/director/state.ts';
+import type { DirectorRecord } from '../agents/director/types.ts';
+import type { AgentCallEnv, TraceCall } from '../agents/structured.ts';
+import { abortableDelay, abortWith, childController, type AbortReason } from './abort.ts';
 import type { TurnOutcome } from './api.ts';
-import type { AdmittedTurn, Route } from './admit.ts';
+import { resolveDirector, type AdmittedTurn, type Route } from './admit.ts';
 import { EventQueue, singleConsumer } from './bus.ts';
 import { Checkpointer } from './checkpoint.ts';
 import { messageViewOf, placeCommit, type Journal, type Placed } from './commit.ts';
@@ -66,10 +77,12 @@ import {
   type ReplyLimits,
   type RequestInput,
   type Shaped,
+  startView,
 } from './request.ts';
 import { isRetryable, modelLabel, retryDelayMs } from './route.ts';
 import { traceForSent } from '../prompt/assemble.ts';
 import { continuationResult } from '../prompt/shape.ts';
+import type { DepthInsert } from '../prompt/depth.ts';
 import type { Event, EventBody, Notice } from '../protocol/events.ts';
 import { stripToolCallLeaks } from '../tools/leaks.ts';
 import type { FinishReason, ProviderError, Usage } from '../providers/types.ts';
@@ -166,6 +179,14 @@ export class TurnRun {
   private ended = false;
   /** traceForSent of the last shaped request: counted once, reused by the server check and the commit. */
   private sentCache: { messages: readonly unknown[]; prefill: string | undefined; tools: TurnTools | null; trace: Trace } | null = null;
+  /** M4: the Director's record of this turn (prep and the commit body), when it ran or reused a plan. */
+  private dir: DirectorRecord | undefined;
+  /** M4: the Director's model calls (trace.calls rows; they count toward CALL_CEILING). */
+  private dirCalls: TraceCall[] = [];
+  /** M4: trace.agents.director; undefined while the Director is off. */
+  private dirAgent: DirectorAgentRow | { status: 'skipped' } | undefined;
+  /** M4: the view at U the Director planned from (request.ts startView). */
+  private dirView: PathView | undefined;
 
   constructor(
     private readonly host: TurnHost,
@@ -217,8 +238,12 @@ export class TurnRun {
 
   private async body(): Promise<Ending> {
     const { plan } = this;
-    const placements = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx);
+    const hooked = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx);
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
+    // Step 3 (M4): the Director plans before assemble; a Stop meanwhile ends the turn like one above.
+    const directed = await this.direct();
+    if (this.ctrl.signal.aborted) return this.stoppedEmpty();
+    const placements = directed.length > 0 ? [...hooked, ...directed] : hooked;
 
     // Steps 4–5: assemble and shape for the primary model (request.ts, the same function preview runs).
     const request: RequestInput = {
@@ -226,7 +251,8 @@ export class TurnRun {
       sessionId: this.host.sessionId,
       header: this.host.header(),
       tree: this.host.tree(),
-      view: this.host.view(),
+      // The view the Director read (folded at U on a swipe), so the request does not fold it again.
+      view: this.dirView ?? this.host.view(),
       plan,
       seed: this.entry.seed,
       now: this.entry.now,
@@ -247,7 +273,8 @@ export class TurnRun {
     this.host.append({
       t: 'prep',
       turn: this.entry.turn,
-      trace: this.sentTrace(asm, shaped, built.tools),
+      ...(this.dir ? { dir: this.dir } : {}),
+      trace: this.withDirector(this.sentTrace(asm, shaped, built.tools)),
       // Recovery has nothing else to name the model of an interrupted answer by.
       model: { connection: primary.conn.id, model: primary.model },
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
@@ -310,6 +337,72 @@ export class TurnRun {
     return trace;
   }
 
+  /**
+   * Step 3 (M4, D-101 / D-104): the Director's inserts for this turn. Off: none, nothing recorded. A
+   * continue never plans: the target's stored directive is sent again (trace status 'skipped'). Else
+   * runDirector on the Director's route (no route → a no_connection record, never a refusal).
+   */
+  private async direct(): Promise<DepthInsert[]> {
+    const { plan } = this;
+    if (plan.config.director?.enabled !== true) return [];
+    const tree = this.host.tree();
+    if (plan.kind === 'continue') {
+      this.dirAgent = { status: 'skipped' };
+      const target = plan.target === undefined ? undefined : tree.msgs.get(plan.target);
+      return directiveInsert(checkRecord(target?.dir)?.directive);
+    }
+    const header = this.host.header();
+    const { binding, route } = resolveDirector(this.ctx, plan.config, plan);
+    const turnId = this.entry.turn;
+    const ctrl = childController(this.ctrl.signal);
+    const persona = header.cast.persona;
+    const env: AgentCallEnv = {
+      sched: this.ctx.sched,
+      fetch: this.ctx.fetch,
+      timeouts: timeoutsFor(route?.conn ?? plan.primary.conn, this.ctx.timeouts),
+      timers: this.ctx.timers,
+      clock: this.ctx.clock,
+      random: this.ctx.random,
+      ...(this.ctx.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: this.ctx.retryMaxDelayMs } : {}),
+      ...(this.ctx.prices ? { prices: this.ctx.prices } : {}),
+      emit: (ev) => this.emit(ev),
+      onProviderError: (info) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, turnId, ...info }),
+    };
+    const view = startView(header, tree, this.host.view(), plan.upTo);
+    this.dirView = view;
+    const run = await runDirector({
+      tree,
+      view,
+      upTo: plan.upTo,
+      kind: plan.kind,
+      ...(plan.target !== undefined ? { replaced: plan.target } : {}),
+      ...(plan.guidance !== undefined ? { guidance: plan.guidance } : {}),
+      config: plan.config,
+      ...(persona ? { persona: { name: persona.name, description: persona.description, ...(persona.aliases ? { aliases: persona.aliases } : {}) } } : {}),
+      charName: header.cast.character.name,
+      route,
+      binding,
+      counter: this.ctx.counter,
+      turnId,
+      turnSignal: ctrl.signal,
+      env,
+      emit: (ev) => this.emit({ type: 'director', turnId, ...ev }),
+      notice: (key, n) => {
+        if (this.host.firstNotice(key)) this.notice(n);
+      },
+    });
+    this.dir = run.record;
+    this.dirCalls = run.calls;
+    this.dirAgent = run.agent;
+    return directiveInsert(run.record.directive);
+  }
+
+  /** A trace with the Director's calls before the narrator's and its trace.agents row (as is while it is off). */
+  private withDirector(trace: Trace): Trace {
+    if (this.dirAgent === undefined) return trace;
+    return { ...trace, calls: [...this.dirCalls, ...trace.calls], agents: { ...trace.agents, director: this.dirAgent } };
+  }
+
   /** Shape (pure) for a fallback route's caps; its notices keep the once-per-session rule. */
   private shapeFor(route: Route, asm: AssembledOk): Shaped {
     const out = shapeRequest(route, asm, this.plan, this.host.header().cast);
@@ -368,8 +461,9 @@ export class TurnRun {
         turnId,
         tools: leg.tools,
         maxRounds: plan.maxRounds,
-        // B3: every narrator call of the turn counts toward CALL_CEILING, a retried round 0 too.
-        callsBefore: calls.length,
+        // B3: every model call of the turn counts toward CALL_CEILING, a retried round 0 and (M4,
+        // D-101) the Director's calls too.
+        callsBefore: this.dirCalls.length + calls.length,
         onText: (delta) => {
           const offset = this.text.length;
           this.text += delta;
@@ -666,12 +760,13 @@ export class TurnRun {
     };
     // trace.blocks / tokens.estimated stay the round-0 request (preview --turn compares them 1:1);
     // reported is round 0's prompt, the EMA's sample (B13). The loop rides trace.tools / rounds.
-    const sent = this.sentTrace(asm, shaped, tools);
+    // M4: the Director's calls come first in trace.calls; gen.usage stays the narrator's (D-101).
+    const sent = this.withDirector(this.sentTrace(asm, shaped, tools));
     const reported = res.firstUsage?.inputTotal;
     const trace: Trace = {
       ...sent,
       tokens: { ...sent.tokens, ...(reported !== undefined ? { reported } : {}) },
-      calls: n.calls,
+      calls: [...this.dirCalls, ...n.calls],
       ...(tools
         ? {
             ...(res.toolRows.length > 0 ? { tools: res.toolRows } : {}),
@@ -685,7 +780,8 @@ export class TurnRun {
       blocks,
       addition: this.answerText,
       ...(shaped.cont ? { cont: shaped.cont } : {}),
-      body: { gen, trace, ...(Object.keys(asm.varsDiff).length > 0 ? { vars: asm.varsDiff } : {}) },
+      // D-104: the plan rides the answer it shaped (a stopped or interrupted one too); a continue writes none.
+      body: { gen, trace, ...(this.dir && plan.kind !== 'continue' ? { dir: this.dir } : {}), ...(Object.keys(asm.varsDiff).length > 0 ? { vars: asm.varsDiff } : {}) },
       // Live, a continue on a changed target is discarded (§6.6); recovery says abandoned.
       continueConflict: 'discarded',
     });

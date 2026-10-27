@@ -148,7 +148,8 @@ describe('classes and help (M3)', () => {
     ]) {
       expect(help).toContain(s);
     }
-    expect(help).toContain('Later: /director (M4); /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).');
+    // M4: /director arrived (D-113), so the Later line keeps only the Compendium's subcommands.
+    expect(help).toContain('Later: /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).');
     expect(help).not.toContain('(M3)');
   });
 });

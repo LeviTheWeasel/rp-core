@@ -122,6 +122,13 @@ export interface AssembleInput {
    * With [] nothing of this exists and the request is exactly the M2 one.
    */
   tools: ToolSpec[];
+  /**
+   * M4 (D-106): the Director's contract (render.ts contractText) while director.enabled, on every kind.
+   * It opens the core block, before the tool protocol and catalog; with no tools the core block holds
+   * it alone (src CORE_DIRECTOR_SRC) and nothing tool-related comes with it (no room, declarations,
+   * gap note). Absent: the M3 request exactly.
+   */
+  contract?: string;
   prefillVsTools: 'prefill' | 'tools';
   /**
    * M3 (§8.4, DeepSeek): keep the raw reasoning blocks of the history's assistant messages generated
@@ -172,6 +179,8 @@ export type AssembleResult =
 
 /** M3: the src of the core block (§8.3): the tool protocol and, in prompted mode, the catalog. */
 export const CORE_TOOLS_SRC = 'core:tools';
+/** M4 (D-106): the src of a core block that holds only the Director's contract (no tools offered). */
+export const CORE_DIRECTOR_SRC = 'core:director';
 
 // ---- preset plan --------------------------------------------------------------------------------
 
@@ -412,13 +421,15 @@ function decidePrefill(input: AssembleInput, run: MacroRun, tools: ToolSpec[]): 
 // ---- M3: the core block and the tool room (§8.3, §11, D-93) -------------------------------------
 
 /**
- * The core block (§8.3): one system message with the tool protocol (and, prompted, the catalog),
- * placed with the leading system run, never inside a preset block. null without tools.
+ * The core block (§8.3, D-106): one system message with the Director's contract and the tool protocol
+ * (and, prompted, the catalog), placed with the leading system run, never inside a preset block. Its
+ * src is CORE_TOOLS_SRC when tools are offered, CORE_DIRECTOR_SRC for the contract alone. null when
+ * it would be empty (no tools, no contract).
  */
-function coreBlock(tools: readonly ToolSpec[], transport: 'native' | 'prompted'): PromptMsg | null {
-  const text = renderCoreBlock(tools, transport);
-  if (tools.length === 0 || text.trim() === '') return null;
-  return { role: 'system', blocks: [{ k: 'text', text }], src: CORE_TOOLS_SRC, placement: 'head' };
+function coreBlock(tools: readonly ToolSpec[], transport: 'native' | 'prompted', contract: string | undefined): PromptMsg | null {
+  const parts = [contract ?? '', tools.length > 0 ? renderCoreBlock(tools, transport) : ''].filter((t) => t.trim() !== '');
+  if (parts.length === 0) return null;
+  return { role: 'system', blocks: [{ k: 'text', text: parts.join('\n\n') }], src: tools.length > 0 ? CORE_TOOLS_SRC : CORE_DIRECTOR_SRC, placement: 'head' };
 }
 
 /** `lead` with `core` right after the last message of its leading system run (first when there is none). */
@@ -619,10 +630,13 @@ export function assemble(input: AssembleInput): AssembleResult {
   // caps.tools 'none' never carries tools (the request builder offers none then; defensive here).
   const prefill = decidePrefill(input, run, input.caps.tools === 'none' ? [] : input.tools);
   // M3: what survives the prefill rule decides everything tool-related below; with no tools the
-  // core block, the declarations, the room and the reasoning echo do not exist (exactly M2).
+  // declarations, the room and the reasoning echo do not exist (exactly M2). M4 (D-106): the core
+  // block also holds the Director's contract, so it can exist without tools; "tools are offered" is
+  // tools.length > 0, never `core !== null`.
   const tools = prefill.tools;
+  const offered = tools.length > 0;
   const transport = input.caps.tools === 'prompted' ? 'prompted' : 'native';
-  const core = tools.length > 0 ? coreBlock(tools, transport) : null;
+  const core = coreBlock(tools, transport, input.contract);
   const echo = tools.length > 0 ? input.echoReasoning : undefined;
   const chat = chatArea(input.view, input.upTo, run, echo);
 
@@ -642,17 +656,17 @@ export function assemble(input: AssembleInput): AssembleResult {
   const placeholderTok = preset.postProcessing === 'strict' ? estimateTokens(POST_PROCESSING_PLACEHOLDER, counter) + MESSAGE_OVERHEAD_TOKENS : 0;
   // M3 (§11: the core block is reserved first and never trimmed): the core block, and for native
   // tools the declarations the server renders into the prompt.
-  const toolsTok = (core === null ? 0 : measure(core)) + (core !== null && transport === 'native' ? estimateToolSpecs(tools, counter) : 0);
+  const toolsTok = (core === null ? 0 : measure(core)) + (offered && transport === 'native' ? estimateToolSpecs(tools, counter) : 0);
   // D-96: with the history tools offered, a cut history brings the gap note and the reminder. Both
   // are fixed; whether they come and the note's numbers depend on the cut, so the widest note (both
   // numbers as wide as the path length) and the reminder in the variant this transport sends (the
   // prompted one shows the call: D-96 amended) are reserved before it. When the history turns out
   // whole they are not sent and the reservation is simply unused.
-  const gapping = core !== null && offersHistoryTools(tools);
+  const gapping = offered && offersHistoryTools(tools);
   const gapTok = gapping ? Math.max(...widestGapMsgs(input.view.path.length).map(measure)) + measure(remindMsg(transport)) : 0;
   const fixed = scaled(blocksTok + loreOwnTok + insertsTok + prefillTok + cueTok + placeholderTok + toolsTok + gapTok, factor);
   // D-93: the tool room the history leaves free (budget tokens; 0 without tools).
-  const room = core === null ? 0 : toolRoom(input.window, input.reserve);
+  const room = offered ? toolRoom(input.window, input.reserve) : 0;
   // Measured on demand: trimHistory stops at the first overflow, so older messages are never
   // tokenized (D-49's early stop holds with a real tokenizer too).
   const sized = chat.msgs.map((m, i) => {
@@ -700,7 +714,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       `the preset's blocks ${s(blocksTok + loreOwnTok)} (lore included: ${lore.run.used} of its budget ${budgetForLore})`,
       ...(insertsTok > 0 ? [`in-chat inserts ${s(insertsTok)} (author's note, depth prompts, depth lore)`] : []),
       ...(prefillTok + cueTok + placeholderTok > 0 ? [`prefill and cues ${s(prefillTok + cueTok + placeholderTok)}`] : []),
-      ...(toolsTok + gapTok > 0 ? [`the tool instructions ${s(toolsTok + gapTok)}`] : []),
+      ...(toolsTok + gapTok > 0 ? [`${offered ? 'the tool instructions' : "the Director's contract"} ${s(toolsTok + gapTok)}`] : []),
       `your current message${tail > 1 ? ' and the answer it continues' : ''} ${tailTok}`,
     ];
     const greeting = head > 0 ? `; the greeting (${sized[0]!.tok} tokens) is already left out` : '';
@@ -779,7 +793,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   return {
     ok: true,
     messages,
-    tools: core === null ? [] : tools,
+    tools: offered ? tools : [],
     prefill: prefill.prefill,
     trace,
     varsDiff: run.varsDiff(),

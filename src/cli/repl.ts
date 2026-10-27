@@ -41,6 +41,7 @@ import { ConfigError, type RpConfig } from '../config/config.ts';
 import { listLibrary } from '../formats/library.ts';
 import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
 import { NOTES_BOOK_KEY, noteRefs, resolveNoteRef } from '../agents/compendium/notes.ts';
+import { directorAt } from '../agents/director/state.ts';
 import type { CEntry } from '../agents/compendium/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { Event } from '../protocol/events.ts';
@@ -66,6 +67,7 @@ import {
 } from './repl-commands.ts';
 import {
   configOf,
+  directorBinding,
   journalOf,
   latestTrace,
   pathUsage,
@@ -85,6 +87,7 @@ import {
   previewFailureText,
   refusalText,
   renderBindings,
+  renderDirector,
   renderImported,
   renderLoreBooks,
   renderNote,
@@ -750,7 +753,9 @@ class Repl {
     // The model's window unknown: the preset's (or the session's) limit still bounds it.
     const cap = limits.length > 0 ? Math.min(...limits) : undefined;
     // M3: whether the narrator can use tools at all is its route's caps (D-92 still decides per turn).
-    this.say(bannerLine(header, narrator, window, this.style, cap, this.capsOf(narrator)?.tools ?? null));
+    // M4: the Director's binding while it is on (D-113).
+    const director = config.director.enabled ? { ...directorBinding(config.roles), profile: config.director.profile } : null;
+    this.say(bannerLine(header, narrator, window, this.style, cap, this.capsOf(narrator)?.tools ?? null, director));
     for (const ev of this.session.openEvents()) this.openEvent(ev);
     this.whereYouAre(view);
   }
@@ -925,6 +930,8 @@ class Repl {
         return this.memory(c);
       case 'search':
         return this.search(c.query, c.before);
+      case 'director':
+        return this.director(c.action);
       case 'later':
         return this.say(this.style.dim(`/${c.command} arrives with ${c.when}`));
       case 'think':
@@ -1137,6 +1144,46 @@ class Repl {
     else if (role === 'director' || role === 'recorder') roles[role] = 'narrator';
     this.session.configure({ roles });
     this.say(this.style.dim(`${role} → ${typeof value === 'string' ? `follows the ${value}` : `${value.conn}:${value.model}`} (from the next turn)`));
+  }
+
+  /**
+   * /director show|on|off (D-113): the Director's state at the head (directorAt, the fold a turn
+   * starts from), or director.enabled through configure (from the next turn).
+   */
+  private director(action: 'show' | 'on' | 'off'): void {
+    const j = this.journal();
+    const config = configOf(j);
+    const binding = directorBinding(config.roles);
+    const d = config.director;
+    if (action === 'show') {
+      const at = directorAt(j.tree, this.session.view().head);
+      return this.say(
+        renderDirector(
+          {
+            enabled: d.enabled,
+            binding,
+            profile: d.profile,
+            style: d.style,
+            state: at.state,
+            invalid: at.invalid,
+            ...(at.record ? { record: at.record } : {}),
+            ...(at.from !== undefined ? { from: at.from } : {}),
+          },
+          this.style,
+        ),
+      );
+    }
+    const enabled = action === 'on';
+    if (d.enabled === enabled) return this.say(this.style.dim(`the Director is already ${action}`));
+    this.session.configure({ director: { enabled } });
+    if (!enabled) return this.say(this.style.dim('director off (from the next turn); its plan is kept: /director on resumes it'));
+    const model = `${binding.conn}:${binding.model}${binding.follows ? " (the narrator's model)" : ''}`;
+    this.say(this.style.dim(`director on: it plans every reply with ${model}, from the next turn (/director shows its plan; /model director <connection:model> picks another model)`));
+    // A binding of its own on a connection this runtime cannot serve: every plan would fail no_connection.
+    if (!binding.follows && !this.deps.override) {
+      const problem = Object.hasOwn(this.deps.config.connections, binding.conn) ? (this.deps.connectionProblem?.(binding.conn) ?? null) : `config.toml has no connection "${binding.conn}"`;
+      if (problem !== null) this.say(this.style.yellow(`! the Director's model ${binding.conn}:${binding.model} cannot be reached (${problem}): its plans will fail with no_connection; /model director narrator makes it follow the narrator`));
+    }
   }
 
   /** /note (§5.1 authorNote): set, show or remove. */

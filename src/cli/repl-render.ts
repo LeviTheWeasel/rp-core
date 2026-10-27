@@ -16,13 +16,16 @@ import { entryLabel } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg } from '../providers/types.ts';
 import type { CEntry } from '../agents/compendium/types.ts';
 import { NOTES_SCAN_DEPTH, noteText } from '../agents/compendium/notes.ts';
+import { MOMENTUM } from '../agents/director/momentum.ts';
+import { ageOf, isFinishedArc, isFinishedHidden } from '../agents/director/state.ts';
+import { SURFACE_TURNS, type DirectorRecord, type DirectorState, type Horizon, type NarratorDirective } from '../agents/director/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import { estimateMessage } from '../prompt/tokens.ts';
 import type { Generation, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { markers, messageText, toolLine } from './render.ts';
 import type { BookRow } from './refs.ts';
-import type { TailRow, UsageSummary } from './repl-journal.ts';
+import type { TailRow, UsageCounts, UsageSummary } from './repl-journal.ts';
 
 // ---- styles ----------------------------------------------------------------------------------------
 
@@ -427,7 +430,8 @@ export function toolsWord(tools: ModelCaps['tools'] | null | undefined): 'native
  * The banner line: "session s_4fa2 · Mira · narrator local:qwen3-14b (tools: prompted) · ctx 16384".
  * `tools` is the narrator route's caps.tools (off for 'none' or caps nobody knows). With the model's
  * window unknown, `cap` (the preset's or the session's own limit) still bounds it: "ctx ≤4095"; with
- * neither, "ctx ?".
+ * neither, "ctx ?". M4 (D-113): `director` (only while it is enabled) adds "director conn:model (profile)"
+ * after the narrator part.
  */
 export function bannerLine(
   header: Pick<SessionHeader, 'id' | 'title'>,
@@ -436,10 +440,12 @@ export function bannerLine(
   style: Style,
   cap?: number,
   tools?: ModelCaps['tools'] | null,
+  director?: { conn: string; model: string; profile: string } | null,
 ): string {
   const title = header.title ?? '(untitled)';
   const ctx = window !== null ? String(window) : cap !== undefined && cap > 0 ? `≤${cap}` : '?';
-  return style.bold(`session ${header.id} · ${title} · narrator ${narrator.conn}:${narrator.model} (tools: ${toolsWord(tools)}) · ctx ${ctx}`);
+  const dir = director ? ` · director ${director.conn}:${director.model} (${director.profile})` : '';
+  return style.bold(`session ${header.id} · ${title} · narrator ${narrator.conn}:${narrator.model} (tools: ${toolsWord(tools)})${dir} · ctx ${ctx}`);
 }
 
 /** /show: the active path, numbered from 1 (the numbers /e, /hide, /rewind and /fork take). */
@@ -504,17 +510,55 @@ export function formatUsd(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
-/** /usage. */
-export function renderUsage(u: UsageSummary): string {
-  if (u.calls === 0) return 'no model answers on this path yet';
-  const parts = [`${u.calls} generation${u.calls === 1 ? '' : 's'} on this path`];
-  const reported = u.calls - u.noUsage;
-  if (reported > 0) parts.push(`in ${u.inputTokens} tok`, `out ${u.outputTokens} tok`);
-  parts.push(u.costUsd === null ? 'cost unknown' : `cost ${formatUsd(u.costUsd)}`);
+/** The notes under a /usage line: calls without usage, calls without a price. */
+function usageNotes(u: UsageCounts, what: string): string[] {
   const notes: string[] = [];
-  if (u.noUsage > 0) notes.push(`${u.noUsage} without usage from the server`);
-  if (u.unpriced > 0) notes.push(`${u.unpriced} without a price ([prices."conn:model"] in config.toml)`);
-  return parts.join(' · ') + (notes.length > 0 ? `\n  (${notes.join('; ')})` : '');
+  if (u.noUsage > 0) notes.push(`${u.noUsage}${what} without usage from the server`);
+  if (u.unpriced > 0) notes.push(`${u.unpriced}${what} without a price ([prices."conn:model"] in config.toml)`);
+  return notes;
+}
+
+/** "in 900 tok · out 120 tok · cost $0.50" (the tokens only when some call reported them). */
+function usageParts(u: UsageCounts): string[] {
+  const parts: string[] = [];
+  if (u.calls - u.noUsage > 0) parts.push(`in ${u.inputTokens} tok`, `out ${u.outputTokens} tok`);
+  parts.push(u.costUsd === null ? 'cost unknown' : `cost ${formatUsd(u.costUsd)}`);
+  return parts;
+}
+
+/**
+ * /usage. Without other agents' calls: one line for the narrator's generations, as before M4. With
+ * them (M4: the Director, D-101): one row per agent, then the total.
+ */
+export function renderUsage(u: UsageSummary): string {
+  const agents = Object.entries(u.agents ?? {}).filter(([, a]) => a.calls > 0);
+  if (agents.length === 0) {
+    if (u.calls === 0) return 'no model answers on this path yet';
+    const parts = [`${u.calls} generation${u.calls === 1 ? '' : 's'} on this path`, ...usageParts(u)];
+    const notes = usageNotes(u, '');
+    return parts.join(' · ') + (notes.length > 0 ? `\n  (${notes.join('; ')})` : '');
+  }
+  const width = Math.max('narrator'.length, 'total'.length, ...agents.map(([name]) => name.length));
+  const lines = ['usage on this path:'];
+  const notes: string[] = [];
+  if (u.calls > 0) {
+    lines.push(`  ${'narrator'.padEnd(width)}  ${[plural(u.calls, 'generation'), ...usageParts(u)].join(' · ')}`);
+    notes.push(...usageNotes(u, ' narrator generation(s)'));
+  }
+  const total: UsageCounts = { ...u };
+  for (const [name, a] of agents) {
+    lines.push(`  ${name.padEnd(width)}  ${[plural(a.calls, 'call'), ...usageParts(a)].join(' · ')}`);
+    notes.push(...usageNotes(a, ` ${name} call(s)`));
+    total.calls += a.calls;
+    total.noUsage += a.noUsage;
+    total.unpriced += a.unpriced;
+    total.inputTokens += a.inputTokens;
+    total.outputTokens += a.outputTokens;
+    if (a.costUsd !== null) total.costUsd = (total.costUsd ?? 0) + a.costUsd;
+  }
+  lines.push(`  ${'total'.padEnd(width)}  ${usageParts(total).join(' · ')}`);
+  if (notes.length > 0) lines.push(`  (${notes.join('; ')})`);
+  return lines.join('\n');
 }
 
 /** `book:id` with the entry's title when it has one: `"Gull Point" harbor:0`. */
@@ -985,5 +1029,153 @@ export function renderSearch(query: string, r: HistorySearch, before: number | u
   if (r.hits.length === 0) return style.dim(before !== undefined ? `no messages before #${before} match` : 'no messages match');
   const lines = r.hits.map((h) => `#${h.n} ${h.speaker}: ${h.snippet}${h.inContext ? ' (in context)' : ''}`);
   if (r.nextBefore !== null) lines.push(style.dim(`(older matches: /search ${query} before=${r.nextBefore})`));
+  return lines.join('\n');
+}
+
+// ---- the Story Director (M4, D-113) ------------------------------------------------------------------
+
+/** What /director show prints: the setting, and the fold of the path at the head (directorAt). */
+export interface DirectorShow {
+  enabled: boolean;
+  /** The Director's binding (roles.director, or the narrator's when it follows). */
+  binding: { conn: string; model: string; follows: boolean };
+  profile: string;
+  style: string;
+  state: DirectorState;
+  /** The accepted record the state came from; absent before the first Director turn. */
+  record?: DirectorRecord;
+  /** The reply that carries `record`. */
+  from?: string;
+  /** Unreadable records skipped on the way (directorAt's `invalid`). */
+  invalid: number;
+}
+
+const quoted = (s: string, max = 60): string => `"${gist(s, max)}"`;
+
+/** Seeds and hidden arcs are due SURFACE_TURNS[horizon] turns after they began (what the planner is told). */
+const dueAfter = (h: Horizon | undefined): number => (h !== undefined ? SURFACE_TURNS[h] : undefined) ?? SURFACE_TURNS.medium;
+
+/**
+ * A directive in one line, the fields it sets: `mood "tense" · pace fast · goal "…" · 2 arc directions ·
+ * 1 character beat · hook "…"`. 'pace medium' (the default) is left out; '(empty)' when nothing is set.
+ */
+export function directiveSummary(d: NarratorDirective): string {
+  const parts: string[] = [];
+  const text = (label: string, v: string | undefined, max = 40): void => {
+    if (typeof v === 'string' && v.trim() !== '') parts.push(`${label} ${quoted(v, max)}`);
+  };
+  const count = (n: number | undefined, one: string, many?: string): void => {
+    if (typeof n === 'number' && n > 0) parts.push(plural(n, one, many));
+  };
+  text('mood', d.mood, 30);
+  if (d.pacing && d.pacing !== 'medium') parts.push(`pace ${d.pacing}`);
+  text('goal', d.narrativeGoal);
+  const sc = d.sceneGuidance;
+  if (sc) {
+    text('setting', sc.setting, 30);
+    if (typeof sc.tension_level === 'number' && Number.isFinite(sc.tension_level)) parts.push(`tension ${Math.round(sc.tension_level)}/10`);
+    else if (sc.atmosphere) text('atmosphere', sc.atmosphere, 30);
+  }
+  count(d.arcDirections?.length, 'arc direction');
+  count(d.characterBeats?.length, 'character beat');
+  count(d.dialogueGuidance?.length, 'dialogue note');
+  count(d.callbacks?.length, 'callback');
+  const inc = d.include;
+  count(inc ? (inc.characters?.length ?? 0) + (inc.themes?.length ?? 0) + (inc.sensoryDetails?.length ?? 0) + (inc.foreshadowing?.length ?? 0) : 0, 'thing to include', 'things to include');
+  const av = d.avoid;
+  count(av ? (av.topics?.length ?? 0) + (av.characters?.length ?? 0) + (av.revelations?.length ?? 0) : 0, 'thing to avoid', 'things to avoid');
+  text('hook', d.endingHook);
+  return parts.length > 0 ? parts.join(' · ') : '(empty)';
+}
+
+/** The record's outcome: planned, reused (from a reply), failed (code). */
+function recordResult(r: DirectorRecord, style: Style): string {
+  if (!r.ok) return style.yellow(`failed (${r.code ?? 'unknown'})`);
+  return r.reusedFrom !== undefined ? `reused (the plan of ${r.reusedFrom})` : 'planned';
+}
+
+/**
+ * /director show (D-113): the setting, then the Director's state at the head — the last turn and how it
+ * went, the chapter, the live arcs (status, priority, horizon, age, next beat), the unpaid seeds (age
+ * against their horizon, OVERDUE past it; ripe for payoff by the momentum rule), the live hidden arcs,
+ * the intentions and the last directive. Ages count from the state's own turn. Finished items are
+ * only counted. "The Director has not planned yet." before its first turn on this path.
+ */
+export function renderDirector(d: DirectorShow, style: Style): string {
+  const lines: string[] = [];
+  const label = (s: string): string => style.dim(s);
+  const binding = `${d.binding.conn}:${d.binding.model}${d.binding.follows ? " (the narrator's model)" : ''}`;
+  if (d.enabled) lines.push(style.bold(`director on · ${binding} · profile ${d.profile} · style ${d.style}`));
+  else lines.push(`${style.bold('director off')} ${style.dim('(/director on lets it plan every reply; the plan below is kept meanwhile)')}`);
+  if (d.invalid > 0) lines.push(style.dim(`(${plural(d.invalid, 'unreadable Director record')} on this path skipped)`));
+  const r = d.record;
+  if (!r) {
+    lines.push('The Director has not planned yet.');
+    return lines.join('\n');
+  }
+  const s = d.state;
+  const turn = s.turn;
+  const how = [r.transport, r.profile, r.model].filter((x): x is string => typeof x === 'string' && x !== '');
+  if (r.skipped.length > 0) how.push(`${r.skipped.length} skipped`);
+  lines.push(`${label('turn')} ${turn} · ${recordResult(r, style)}${d.from ? ` ${label(`on ${d.from}`)}` : ''}${how.length > 0 ? ` ${label(`· ${how.join(' · ')}`)}` : ''}`);
+
+  const current = s.currentChapterId === undefined ? undefined : s.chapters.find((c) => c.id === s.currentChapterId);
+  const completed = s.chapters.filter((c) => c !== current && c.status === 'complete').length;
+  const done = completed > 0 ? ` ${label(`· ${completed} completed`)}` : '';
+  // "2 live, 1 finished", "none".
+  const counted = (live: number, liveWord: string, done: number, doneWord: string): string =>
+    live + done === 0 ? 'none' : [live > 0 ? `${live} ${liveWord}` : '', done > 0 ? `${done} ${doneWord}` : ''].filter(Boolean).join(', ');
+  lines.push(
+    current
+      ? `${label('chapter')} ${current.number} ${quoted(current.title)} · ${current.status} · ${plural(ageOf(turn, current.createdAtTurn), 'turn')}${done}`
+      : `${label('chapter')} none yet${done}`,
+  );
+
+  const arcs = s.arcs.filter((a) => !isFinishedArc(a));
+  const arcsDone = s.arcs.length - arcs.length;
+  lines.push(`${label('arcs:')} ${counted(arcs.length, 'live', arcsDone, 'finished')}`);
+  for (const a of arcs) {
+    const parts = [`${a.id} ${quoted(a.title)}`, a.status, a.priority, a.horizon, `age ${ageOf(turn, a.createdAtTurn)}`];
+    const still = ageOf(turn, a.lastProgressTurn ?? a.createdAtTurn);
+    if (still >= MOMENTUM.arcStale) parts.push(style.yellow(`stale: ${still} turns without progress`));
+    lines.push(`  ${parts.join(' · ')}`);
+    const b = a.nextBeat;
+    if (b?.status === 'pending') lines.push(`    ${label('next:')} ${gist(b.description, 100)}${typeof b.targetTurn === 'number' ? ` ${label(`(by turn ${b.targetTurn})`)}` : ''}`);
+    else if (b?.status === 'delivered') lines.push(`    ${label(`next beat delivered${b.deliveredAtTurn !== undefined ? ` on turn ${b.deliveredAtTurn}` : ''}`)}`);
+    else if (b?.status === 'abandoned') lines.push(`    ${label('next beat abandoned')}`);
+    else lines.push(`    ${label('no next beat')}`);
+  }
+
+  const seeds = s.seeds.filter((x) => !x.payoffDelivered);
+  const paid = s.seeds.length - seeds.length;
+  lines.push(`${label('seeds:')} ${counted(seeds.length, 'waiting', paid, 'paid off')}`);
+  const ripe = MOMENTUM.seedRipe;
+  for (const x of seeds) {
+    const age = ageOf(turn, x.plantedAtTurn);
+    const due = dueAfter(x.payoffHorizon);
+    const parts = [`${x.id} ${quoted(x.hint)}`, x.payoffHorizon, `age ${age}/${due}${age >= due ? ` ${style.yellow('OVERDUE')}` : ''}`, plural(x.reinforcements.length, 'reinforcement')];
+    if (age >= ripe.age && x.reinforcements.length >= ripe.reinforcements) parts.push(style.yellow('ripe for payoff'));
+    lines.push(`  ${parts.join(' · ')}`);
+  }
+
+  const hidden = s.invisibleArcs.filter((h) => !isFinishedHidden(h));
+  const surfaced = s.invisibleArcs.length - hidden.length;
+  lines.push(`${label('hidden arcs:')} ${counted(hidden.length, 'live', surfaced, 'surfaced or resolved')}`);
+  for (const h of hidden) {
+    const age = ageOf(turn, h.createdAtTurn);
+    const due = dueAfter(h.horizon);
+    lines.push(`  ${[`${h.id} ${quoted(h.title)}`, h.status, h.arcType, `age ${age}/${due}${age >= due ? ` ${style.yellow('OVERDUE')}` : ''}`, plural(h.playerClues.length, 'clue')].join(' · ')}`);
+  }
+
+  if (s.nextIntentions.length > 0) {
+    lines.push(label('intentions:'));
+    for (const i of s.nextIntentions) lines.push(`  ${i.priority} · ${i.targetTurn}: ${gist(i.description, 100)}`);
+  }
+
+  // The directive as sent (after enrich and the persona filter) when this record planned one; else
+  // the last authored one the state keeps (a failed turn plans none).
+  if (r.ok && r.directive) lines.push(`${label(`last directive (turn ${r.turn}, as sent)`)} ${directiveSummary(r.directive)}`);
+  else if (s.lastDirective) lines.push(`${label(`last directive (turn ${s.lastDirective.turn})`)} ${directiveSummary(s.lastDirective.directive)}`);
+  else lines.push(label('no directive yet'));
   return lines.join('\n');
 }

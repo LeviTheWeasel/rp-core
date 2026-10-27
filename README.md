@@ -4,10 +4,10 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M3**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+- **Status:** milestone **M4**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
   koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
-  it notes to remember.
+  it notes to remember. A Story Director can plan the story before each answer (off by default).
 - **Built with:** TypeScript on [Bun](https://bun.sh), with three small runtime dependencies:
   `re2js` (regex lorebook keys), `gpt-tokenizer` (token counts) and `jsonrepair` (broken tool-call
   arguments).
@@ -25,19 +25,20 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 7. [Presets and lorebooks](#presets-and-lorebooks)
 8. [Tools and search](#tools-and-search)
 9. [Notes](#notes)
-10. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-11. [Active probes](#active-probes)
-12. [config.toml reference](#configtoml-reference)
-13. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-14. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-15. [Where your data lives](#where-your-data-lives)
-16. [Troubleshooting](#troubleshooting)
-17. [Command reference](#command-reference)
-18. [Development](#development)
+10. [The Story Director](#the-story-director)
+11. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+12. [Active probes](#active-probes)
+13. [config.toml reference](#configtoml-reference)
+14. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+15. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+16. [Where your data lives](#where-your-data-lives)
+17. [Troubleshooting](#troubleshooting)
+18. [Command reference](#command-reference)
+19. [Development](#development)
 
 ## What works today
 
-**Works now (M3):**
+**Works now (M4):**
 
 | Area | What you get |
 |---|---|
@@ -49,15 +50,15 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Models | Switch the model in the middle of a session (`/model`) |
 | Tools and search | The narrator looks up earlier messages and lore before it answers, with the server's own tool calling or with calls written as text; `/search` runs the same search for you |
 | Notes | Author's note; your own notes for the narrator (`/memory add`), sent when their keys come up |
+| Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
 | Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, and the tool rounds; `/preview` prints the exact request before it is sent; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
-| Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls |
+| Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls; `rp-core compact` shrinks a session's journal |
 
 **Not yet:**
 
 | Milestone | Arrives |
 |---|---|
-| M4 | The Story Director |
 | M5 | The Compendium (memory) |
 | M6 | `--stdio` for other UIs |
 | M7, M8 | Native Anthropic, then native Gemini |
@@ -292,6 +293,8 @@ Maren Vell › …
   the time it took, and why it ended. `length` means it hit the token cap; `/c` continues it.
   `tools: off (prefill)` means the preset's prefill switched the tools off for that answer.
 - **Tool calls.** Each lookup the narrator made is one dim line before the text it led to.
+- **The Director.** With the [Story Director](#the-story-director) on, one dim line
+  `⋯ director: …` comes before each answer, and the banner names the Director's model.
 - **Actions.** `*actions*` are shown in italics.
 - **Reasoning.** A model's reasoning is folded to one dim line; `/think show` unfolds it.
 
@@ -310,7 +313,7 @@ Maren Vell › …
 | `/rewind n` | Go back to message *n*; your next message starts a new branch |
 | `/tails` | List the branches that leave the current path; `/goto <id>` switches to one |
 | `/fork [n]` | Copy the story (up to message *n*) into a new session and open it |
-| `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session |
+| `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session. `/model director narrator` makes the Director follow the narrator again |
 | `/note <text> [@depth]`, `/note off` | The author's note, inserted *depth* messages from the end (default 4) |
 | `/think show`, `/think hide` | Show the model's reasoning, or fold it |
 | `/preset [id\|file]` | Show the preset, or switch it ([details](#presets-and-lorebooks)) |
@@ -321,6 +324,8 @@ Maren Vell › …
 | `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, the tool rounds and calls |
 | `/search <words> [before=n]` | Find earlier messages of this path, newest first ([details](#tools-and-search)) |
 | `/memory`, `/memory show\|add\|edit\|retire\|restore` | Your notes for the narrator ([details](#notes)) |
+| `/director`, `/director show` | The Story Director's plan at this point of the story: chapter, arcs, seeds, hidden arcs, the last directive ([details](#the-story-director)) |
+| `/director on`, `/director off` | Let the Director plan every reply from the next turn, or stop it. Its plan is kept |
 | `/probe --active [--write]` | Test the narrator's model with a few tiny calls ([details](#active-probes)) |
 | `/sessions`, `/open <id>` | List sessions, switch to one |
 | `/help`, `/quit` | Help, leave |
@@ -751,6 +756,228 @@ the order the narrator's searches found them; the next answer numbers them again
 rest of `/memory` (`tree`, `recall`, `export`, …) comes with the Compendium in M5, which will also
 write notes of its own.
 
+## The Story Director
+
+The Story Director is one more model call before each answer. It reads the recent story and its own
+plan from the turns before, and updates that plan:
+
+- **chapters:** the current one, with a title; a new one at a major turn of the story;
+- **arcs:** story threads, each with a status, the stages that already happened, and a *next beat*,
+  the next concrete event to push;
+- **seeds:** details planted now that should pay off later;
+- **hidden arcs:** things that move behind the scenes, with the clues let slip so far (the full
+  profile asks for them; lite does not);
+- **a directive** for this answer: mood, pacing, the scene, character beats, an ending hook and more.
+
+The narrator gets the directive near the end of its prompt (at depth 1) and writes the answer under
+it. The plan is saved on the answer in the session's journal, so every point of the story has its
+own plan. The Director is **off by default**.
+
+### Turning it on
+
+For new sessions, in `config.toml`:
+
+```toml
+[director]
+enabled = true
+```
+
+In the chat, `/director on` and `/director off`. The switch is saved in the session and applies from
+the next turn. `[director]` in `config.toml` sets new sessions only: a session keeps the values it was
+created with, as with `[roles]`.
+
+While it is on, the banner names its model and profile:
+
+```
+session s_0d042d8c · Марфа · narrator ollama:magmell-16k:latest (tools: prompted) · director ollama:magmell-16k:latest (auto) · ctx 16384
+```
+
+### Its model
+
+- **By default it follows the narrator:** the same connection and the same model, nothing else. It
+  does not take the narrator's reply limit (`--max-tokens`), samplers or reasoning setting.
+- **Another model:** `director = "conn:model"` under `[roles]` in `config.toml` for new sessions, or
+  `/model director <conn:model>` in the chat. `/model director narrator` makes it follow the narrator
+  again.
+- **Its own reply limit:** 1 500 tokens on the lite profile (2 524 when the model cannot stop
+  thinking), up to 16 384 on the full one. Never more than its window leaves after the prompt, or
+  than the model's own output limit.
+- **Its own window:** the Director's model's window (`context_length` under `[caps."conn:model"]`),
+  not the preset's.
+- **Sampling:** temperature 0.7. Thinking is turned off when the model allows it.
+
+### Profiles: lite and full
+
+| `profile` | What runs |
+|---|---|
+| `auto` (default) | Full when the window is at least 24 576 tokens and the full prompt plus 4 096 tokens for the plan fits; else lite |
+| `full` | Full when the window is at least 16 384 tokens and the full prompt plus 4 096 fits; else lite, with a notice once per session |
+| `lite` | Always lite |
+
+Lite is for small windows. Compared with full, it leaves out:
+
+- the long rules: a short text instead, and a digest of the personality instead of its whole text;
+- hidden arcs: no section about them in the prompt, no reminders about them, no hidden-arc updates in
+  the plan's schema;
+- most of the history: 10 % of the window instead of 25 %;
+- long lists: at most 3 arc directions, 3 character beats and 2 callbacks per directive, 3 intentions
+  kept instead of 5.
+
+When even the lite prompt is too big, it shrinks further: first the history goes, then the lists it
+shows (8 arcs and 10 seeds at most).
+
+### Tagged or structured
+
+- **Tagged** (the default): the plan's JSON schema is in the prompt, and the model answers with one
+  `<plan>{…}</plan>` block.
+- **Structured:** the server enforces the schema (`response_format`). Used only when that is
+  confirmed for the model: by `rp-core probe <conn:model> --active --write`, by `structured_output =
+  "json_schema"` under `[caps."conn:model"]`, or by a hosted catalog that says so (OpenRouter's, after
+  `rp-core probe --write`).
+
+If the server refuses structured output, the plan fails with `transport_unsupported`, and a notice
+says what to do: `structured_output = "none"` under `[caps."conn:model"]`, or the active probe with
+`--write`. If a plan cannot be read, the Director asks the model once more with a short correction.
+
+### The director line
+
+One dim line before each answer:
+
+```
+you   › Добрый вечер. Найдётся ли у вас комната на ночь? Я землемер, иду в Велеград.
+  ⋯ director: planned — seeds +1 · chapter 1
+Марфа › Марфа кивнула, слушая ответ Елисея, …
+```
+
+- **`planned — <summary>`:** what the plan changed. `arcs +1 ~2` is one new arc and two changed;
+  `seeds +1 ~1 -1` is planted, reinforced, paid off or dropped; `hidden +1 ~1` the same for hidden
+  arcs; `chapter 2` when a chapter started. A plan that changed only the directive and its intentions
+  says `no changes`. A full line: `⋯ director: planned — arcs +1 · seeds +1 · chapter 2`.
+- **`reused`:** a swipe (`/r`) keeps the plan the replaced answer was written under, without a call.
+  `on_swipe = "replan"` plans again on every swipe instead.
+- **`failed (<code>)`:** no plan this turn. The answer still comes, without a directive. The turn
+  still counts, so ages go on; the plan stays as it was.
+
+How it moves with the story:
+
+- **`/regen <direction>`** always plans again, and the Director sees your direction too.
+- **`/c`** makes no call: the continued text keeps its answer's directive.
+- **Going back** (`/rewind`, `/goto`, `/[` and `/]`) brings back the plan of that point. The next
+  plan starts from it; the plans on the other branch stay there.
+
+The codes of `failed (<code>)`:
+
+| Code | What happened | Do |
+|---|---|---|
+| `undecodable` | The plan was cut off or its JSON could not be read, also after the correction | See [Troubleshooting](#troubleshooting) |
+| `no_output` | The answer held no plan at all, also after the correction | The model does not follow the format; try another one for the Director |
+| `missing_directive` | The plan's directive set nothing | Usually passes on the next turn |
+| `no_room` | The Director's window cannot hold even its shortened prompt and 600 tokens for the plan. Nothing was sent | A bigger window ([Small windows](#small-windows)) |
+| `timeout` | No plan within the time budget (`timeout_sec`) | Raise `timeout_sec`, or a faster model |
+| `provider_error` | The server refused or failed the call (after one retry when that can help) | `--debug` shows the server's words |
+| `transport_unsupported` | The server refused structured output | Do what the notice says |
+| `no_connection` | The Director's binding names a connection that is not in `config.toml` | Fix the connection, or `/model director narrator` |
+| `aborted` | You pressed Ctrl+C while it planned. The answer stops too | Nothing |
+
+### /director show
+
+`/director` (or `/director show`) prints the plan at the current point of the story. From the live
+run on Mag-Mell 12B, after four Russian turns:
+
+```
+director on · ollama:magmell-16k:latest (the narrator's model) · profile auto · style the-balanced
+turn 4 · planned on 6af484fb · tagged · lite · ollama:magmell-16k:latest
+chapter 1 "A Warm Welcome" · active · 3 turns
+arcs: none
+seeds: 1 waiting
+  seed-1 "The old map" · long · age 3/10 · 0 reinforcements
+hidden arcs: none
+intentions:
+  must · next: Demonstrate Marfa's hospitality and care for Elisey's wellbeing by offering a safe, alternative pat…
+  should · eventually: Plant the idea of a hidden, potentially secret route that could factor into Elisey's journey, hinti…
+last directive (turn 4, as sent) mood "warm and inviting" · goal "Establish Marfa as a knowledgeable and …" · setting "A cozy, dimly-lit inn room wi…" · tension 3/10 · 1 arc direction · 1 character beat · hook "Marfa leans in closer, her voice barely…"
+```
+
+- **First line:** on or off, the model, the profile, the style.
+- **`turn 4 · planned on 6af484fb`:** the Director's turn count, the last result (`planned`,
+  `reused (the plan of <id>)` or `failed (<code>)`) and the answer it is saved on; then the
+  transport, the profile and the model, and `N skipped` when parts of the plan were dropped.
+- **Chapter:** number, title, status, age, and how many chapters are completed.
+- **Arcs:** id, title, status, priority, horizon, age, and `stale: N turns without progress` after 15
+  such turns; below each, `next:` with the pending next beat.
+- **Seeds:** hint, payoff horizon, `age N/T` (T: the age at which the payoff is due; `OVERDUE` from
+  then on), reinforcements, and `ripe for payoff` (age 30 or more with 2 or more reinforcements).
+- **Hidden arcs:** id, title, status, type, `age N/T` (with `OVERDUE`) and the number of clues.
+- **Last directive:** a summary of what the narrator got.
+
+Before the first plan it says "The Director has not planned yet." With the Director off, it says so
+and still shows the kept plan.
+
+While the Director is on, the narrator's prompt also holds a fixed block, the contract: follow the
+directive, never act, speak or decide for your persona, keep the story's language. It is sent on
+every turn, failed plans included. `/preview` shows it, and a placeholder where the directive will go.
+
+### Cost and speed on local models
+
+- **One more call per answer** (two when the correction runs). A turn has at most 12 model calls,
+  the Director's included.
+- **About 8 s more per answer** on Mag-Mell 12B (Ollama, window 16 384, lite, tagged): plans of
+  404–460 tokens took 7.6–8.8 s each once the model was loaded. The first one, while the model
+  loaded, took 110 s. An answer with its plan took 13–14 s; a swipe that reused the plan, 5.1 s.
+- **No shared prompt cache:** the Director's prompt and the narrator's differ from the first token.
+  On a server that keeps one prompt in its cache, the Director's call pushes out the narrator's, and
+  the narrator's prompt is processed again.
+- **Where to see it:** `/trace` lists the calls (`calls: director … 7.6s, narrator … 5.6s`); `/usage`
+  adds a row per agent, each priced by its own model.
+
+### Small windows
+
+The Director needs room for its prompt and at least 600 tokens for the plan. Without it nothing is
+sent: `failed (no_room)`, with a notice once per session.
+
+- **A 4 096 window is too small.** That is Ollama's default. The lite system prompt alone takes about
+  2 500 tokens there. In a test of 40 turns only turns 1 and 3 plan; the other 38 fail `no_room`. Give
+  the model a bigger window ([details](#the-context-window-the-one-thing-to-get-right)), or give the
+  Director a model with one.
+- **8 192 is enough** for a lite Director in the tests: a story of 40 Russian turns plans on every
+  turn; from turn 16 on, the history is left out of the Director's prompt.
+
+### Language
+
+The directive and the contract are in English. The contract tells the narrator to write in the
+story's own language. Small models may still drift: in the live run Mag-Mell 12B kept a Russian story
+in Russian in 5 of 6 answers and switched to English in the middle of one. `/r` asks again; `/director
+off` removes the English directive.
+
+### The [director] keys
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Plan every reply |
+| `profile` | `"auto"` | `auto`, `full` or `lite` ([above](#profiles-lite-and-full)) |
+| `on_swipe` | `"reuse"` | `reuse`: a swipe keeps the plan; `replan`: a swipe plans again |
+| `instructions` | `""` | Your standing instructions to the Director, sent as written, up to 2 000 characters |
+| `style` | `"the-balanced"` | The Director's personality (below). An unknown value is `the-balanced` |
+| `creativity` | `"moderate"` | `subtle`, `moderate` or `dramatic` |
+| `timeout_sec` | 660 local, 180 remote | The Director's time per turn, 1–3600 seconds; the correction and a retry share it |
+
+The ten personalities (`style`), from Bunraku and RoleCall:
+
+| `style` | Name | Its line |
+|---|---|---|
+| `the-weaver` | Meridian | The world breathes. Your choices matter. Let's see what emerges. |
+| `the-architect` | Cassian | Build the investment. Earn the devastation. Let the moments breathe. |
+| `the-oracle` | Vesper | Knowledge is currency. Revelation is art. Timing is everything. |
+| `the-romantic` | Rosalind | Love is built in quiet moments, not grand gestures. |
+| `the-thrill-seeker` | Magnus | Fortune favors the bold. The stakes are always rising. |
+| `the-shadow` | Morrigan | The oldest stories are the ones that make you check over your shoulder. |
+| `the-jester` | Felix | Life's a stage, and we're all ridiculous. Might as well laugh. |
+| `the-enigma` | Cassandra | The truth hides in plain sight. Question everything. |
+| `the-chronicler` | Aldric | History breathes. Legends walk. Your story joins the eternal chronicle. |
+| `the-balanced` | Sage | The story speaks. I listen. Together we find the way. |
+
+The milestone demo, with the live runs: [`docs/M4-DEMO.md`](docs/M4-DEMO.md).
+
 ## Other servers
 
 Every server that speaks the OpenAI Chat Completions API works through the `openai-chat` dialect.
@@ -863,9 +1090,10 @@ the round trip.
 | Table | Holds |
 |---|---|
 | `[connections.<name>]` | One per server. Fields: `dialect` (`"openai-chat"`), `base_url`, `key_env`, `key_cmd`, `max_in_flight` (1–64), `local` (overrides the guess from the URL), `headers` (header name → *name of the env variable* holding its value), `extra_body` (fields added to every request; `model`, `messages`, `stream`, `tools`, `tool_choice` are protected), `exclude_body`. Names may hold letters, digits, `_` and `-`, never `:` |
-| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, and `director`/`recorder`/`recall` (later milestones; they may say `"narrator"`). A session keeps its own copy; `/model` changes it there |
+| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), and `recorder`/`recall` (M5; they may say `"narrator"`). A session keeps its own copy; `/model` changes it there |
 | `[narrator]` | `max_rounds` (rounds of lookups per answer, 1–8, default 4; see [Rounds](#rounds)) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
-| `[director]`, `[compendium]` | Reserved for M4 and M5 |
+| `[director]` | The Story Director for new sessions: `enabled` (default `false`), `profile` (`"auto"`, `"full"`, `"lite"`), `on_swipe` (`"reuse"`, `"replan"`), `instructions` (up to 2 000 characters), `style` (a personality, default `"the-balanced"`), `creativity` (`"subtle"`, `"moderate"`, `"dramatic"`), `timeout_sec` (1–3600); see [The \[director\] keys](#the-director-keys) |
+| `[compendium]` | Reserved for M5 |
 | `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, … Override only after checking (`rp-core probe` shows the current values) |
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
 
@@ -898,6 +1126,9 @@ rp-core send "$id" "Hello there"
 - **`--json`** prints events: `start`, then `text`… deltas (and `tool` events when the narrator looks
   something up), then `changed` and `done`, or `stopped` / `failed`. These are the events a UI will
   consume. In text mode the lookups are one line each on stderr.
+- **The Director** on a session that has it on: `send` prints its line on stderr like a lookup
+  (`⋯ director: planned — seeds +1 · chapter 1`, `reused`, `failed (<code>)`); with `--json` these are
+  `director` events with `status` `planning`, `planned`, `reused` or `failed` (the code in `reason`).
 - **Piped input** to `chat` works as a script: each line waits for the previous answer.
 
   ```bash
@@ -977,7 +1208,34 @@ a temporary folder that is removed at exit.
 ```
 
 A session file is plain JSONL that only ever grows. Everything in it stays recoverable: every swipe,
-edit and hidden message is still there. Back it up by copying the file.
+edit and hidden message is still there. Back it up by copying the file. With the Director on, each
+answer's line also holds the Director's plan at that point (its state is at most 32 768 bytes).
+
+### Compacting a session
+
+While an answer streams, the journal gets checkpoints of its text, and each turn saves what it sent.
+Only crash recovery reads those lines. `rp-core compact` removes them for finished turns:
+
+```bash
+rp-core compact s_0d042d8c
+```
+
+```
+compacted s_0d042d8c: 89571 → 52056 bytes (36 lines removed)
+```
+
+That is a copy of the M4 live session (6 answers with the Director on). A second run says
+`(nothing to remove)`.
+
+- **What stays:** the story, its versions and the Director's plans, byte for byte. The file keeps its
+  mode and its modification time. A session with nothing to remove is left alone.
+- **Safe to run:** the session is opened first (an interrupted answer is recovered), and the new file
+  replaces the old one in one step. It is refused (exit 5) while another process has the session open
+  or wrote to it meanwhile (`session_locked`), while an answer waits for a decision (`turn_open`), and
+  when recovery just set aside the text of an interrupted answer it could not save (`draft_recovered`:
+  the draft is shown; run compact again).
+- **`--json`** prints `{"sessionId", "before", "after", "removed"}` on stdout (sizes in bytes), plus
+  `"kept"` when some lines had to stay so that the reader sees the same story.
 
 ## Troubleshooting
 
@@ -993,6 +1251,9 @@ edit and hidden message is still there. Back it up by copying the file.
 | `/e` opens vi and keys do nothing | A terminal editor inside the chat in a terminal like Warp | Unset `$EDITOR` to edit in place, or use a graphical editor ([details](#using-an-editor)) |
 | The first answer takes several seconds | The server is loading the model | Normal; later answers start fast |
 | The character answers in English to a Russian message | The card and the model, not rp-core | Write the card in Russian, or say so in the first message or in `/note` |
+| `⋯ director: failed (undecodable)` | The Director's plan was cut off at its reply limit or its JSON was broken, also after the correction. The answer still came, without a directive | One now and then is harmless: the next turn plans again. On every turn the model does not manage the plan's format: give the Director a larger model (`/model director <conn:model>`), or `/director off` |
+| `⋯ director: failed (no_room)` and notice `director_no_room` | The Director's window cannot hold its shortened prompt and 600 tokens for a plan; nothing was sent | Give its model a bigger window and set `context_length` ([Small windows](#small-windows)); 4 096 is too small |
+| `⋯ director: failed (timeout)` | The Director did not answer within `timeout_sec` (default 660 s on a local server, 180 s on a remote one) | Raise `timeout_sec` under `[director]` for new sessions; check that the model is not loading or spilling to the CPU (`ollama ps`) |
 
 Add `--debug` to any command to see raw server errors and stack traces on stderr; secrets are
 redacted.
@@ -1011,6 +1272,7 @@ redacted.
 | `models <conn> [--json]` | The connection's model ids |
 | `sessions [--json]` | Sessions, newest first |
 | `show <session> [--json]` | The active path with markers `[interrupted]`, `[stopped]`, `[hidden]`, `[edited]`. Never takes the lock |
+| `compact <session> [--json]` | Shrinks the session's journal: drops the checkpoint and request lines of finished turns; the story and the Director's plans stay ([details](#compacting-a-session)) |
 
 **`--provider`** takes `script:<file>` (a scripted fake model), `record:<file>` or `replay:<file>`
 ([details](#recording-and-replaying-a-chat)).
@@ -1031,7 +1293,7 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `2` | stopped |
 | `3` | failed; also a piped `chat` under `--provider script:` or `replay:` in which an answer failed |
 | `4` | conflict |
-| `5` | refused before the turn opened (`send`, `chat` and `preview` on a missing session: `session_not_found`), or a preview that cannot be built (`--turn` naming no message: `not_found`); stderr ends with `{"type":"refusal","code":…,"message":…}` |
+| `5` | refused before the turn opened (`send`, `chat` and `preview` on a missing session: `session_not_found`), or a preview that cannot be built (`--turn` naming no message: `not_found`), or a `compact` that cannot run (`session_locked`, `turn_open`, `draft_recovered`, `session_not_found`); stderr ends with `{"type":"refusal","code":…,"message":…}` |
 | `64` | usage or `config.toml` error |
 | `130`, `143` | SIGINT, SIGTERM |
 
@@ -1041,7 +1303,8 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite, about 3300 tests |
+| `bun test` | The full suite: 4257 tests in 199 files (4254 pass), about two minutes; the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
+| `bun test test/demo-m4` | The M4 demos on a scripted model (5 tests, a few seconds): 30 turns with chapters, arcs, seeds and hidden arcs; swipe reuse, `/regen` and rollback; a broken plan on a small window; 300 verbose Russian turns under the state cap. They print what they did ([`docs/M4-DEMO.md`](docs/M4-DEMO.md)) |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
@@ -1053,7 +1316,7 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Folder | Holds |
 |---|---|
-| `src/engine` | Turns and the narrator's tool loop, recovery, scheduling |
+| `src/engine` | Turns, the Director's call before the narrator, the narrator's tool loop, recovery, scheduling |
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
 | `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
@@ -1061,14 +1324,14 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
 | `src/tools` | The narrator's tools, their arguments, prompted calls and leak recovery |
 | `src/text` | Word folding and light stemming for search and note keys |
-| `src/agents` | The Compendium; in M3, your notes |
+| `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and your notes (the Compendium arrives in M5) |
 | `src/config` | Config and keys |
 | `src/cli` | Commands and the chat |
 
-The design and its decisions (D-1…D-97) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
-milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md),
-[`docs/M1B-DEMO.md`](docs/M1B-DEMO.md), [`docs/M2-DEMO.md`](docs/M2-DEMO.md) and
-[`docs/M3-DEMO.md`](docs/M3-DEMO.md). How rp-core differs
+The design and its decisions (D-1…D-124; the M4 ones are D-98…D-124) are in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md), [`docs/M1B-DEMO.md`](docs/M1B-DEMO.md),
+[`docs/M2-DEMO.md`](docs/M2-DEMO.md), [`docs/M3-DEMO.md`](docs/M3-DEMO.md) and
+[`docs/M4-DEMO.md`](docs/M4-DEMO.md). How rp-core differs
 from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](docs/PARITY-RC.md) and
 [`test/golden/st/README.md`](test/golden/st/README.md).
 

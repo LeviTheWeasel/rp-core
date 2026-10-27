@@ -20,7 +20,12 @@
 // the request it sends leaves history out and the history tools are not offered yet, they are, and
 // pass B runs once more. The result carries the turn's TurnTools: the dispatch table and the ToolCtx
 // every round reads.
+//
+// M4 (D-106): while director.enabled the core block holds the Director's contract on every kind
+// (continue included) and in previews, so the head stays the same whether or not the Director planned;
+// the directive itself arrives in `placements` (depth 1). Director off: no contract, the M3 bytes.
 
+import { contractText } from '../agents/director/render.ts';
 import type { Route } from './admit.ts';
 import { MIN_ROOM_TOKENS, type TurnTools } from './narrate.ts';
 import { tokenFactorFor } from './ema.ts';
@@ -331,6 +336,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     now: input.now,
     timeZone: input.timeZone,
     tools: [],
+    ...(plan.config.director?.enabled === true ? { contract: contractText(input.header.cast.persona?.name ?? '') } : {}),
     prefillVsTools: plan.config.narrator.prefillVsTools,
   };
   const common = { window, reserve, limits, tokenFactor, view };

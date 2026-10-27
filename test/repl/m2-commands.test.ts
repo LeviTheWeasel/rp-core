@@ -89,7 +89,8 @@ describe('classes and help', () => {
     for (const l of ['/preset', '/lore', '/preview']) expect(cmd(l).name).not.toBe('later');
     const help = helpText();
     for (const s of ['/preset', '/lore add <id|file>', '/lore rm <id>', '/lore test <text>', '/preview [n] [--wire] [--verdicts]']) expect(help).toContain(s);
-    expect(help).toContain('Later: /director (M4);');
+    // M4: /director is no longer later (D-113); the Later line keeps the M5 subcommands.
+    expect(help).toContain('Later: /memory tree|');
     expect(help).not.toContain('(M2)');
   });
 });

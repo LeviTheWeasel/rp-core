@@ -19,6 +19,7 @@ import { systemClock } from '../engine/system.ts';
 import { bool, list, parseArgs, str, UsageError, type FlagKind, type Parsed } from './args.ts';
 import { cmdModels, cmdProbe } from './catalog.ts';
 import { cmdChat, runChat } from './chat.ts';
+import { cmdCompact } from './compact.ts';
 import { cmdImport, cmdInit, cmdNew, cmdSessions, cmdShow, CliError } from './commands.ts';
 import { resolveHome, type Home } from './home.ts';
 import { processIo, type Io } from './io.ts';
@@ -102,7 +103,8 @@ ${PROVIDER_HELP}`,
     summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, /preset, /lore, /memory, /search, ...)',
     help: `Opens the session (lock + recovery of an interrupted answer) and reads lines: text is your
 message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /tails, /goto,
-/fork, /model, /preset, /lore, /memory, /search, /preview, /usage, /trace, /probe, /quit). The
+/fork, /model, /preset, /lore, /memory, /search, /director, /preview, /usage, /trace, /probe,
+/quit). The
 banner says whether the narrator can use tools (native, prompted or off). Ctrl+C stops an answer and keeps
 what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
 previous answer.
@@ -136,8 +138,9 @@ The session's bindings pick the connection from config.toml.
   --guidance <text>         swipe only: steer the re-roll
   --json                    stdout carries only events, one JSON object per line
 ${PROVIDER_HELP}
-In text mode stdout carries only the answer; notices and the narrator's tool calls (one line each,
-e.g. "⋯ search_history "caravan" → 2 hits") go to stderr.
+In text mode stdout carries only the answer; notices, the narrator's tool calls and the Story
+Director's outcome (one line each, e.g. "⋯ search_history "caravan" → 2 hits", "⋯ director:
+planned — arcs +1 · seeds +1") go to stderr.
 A failure after output keeps the partial answer, marked [interrupted].
 Ctrl+C stops the turn and keeps what arrived; Ctrl+C again quits at once.
 Exit codes: 0 done, 2 stopped, 3 failed, 4 conflict, 5 refused before the turn opened.`,
@@ -195,6 +198,23 @@ Exit 1 when a server did not answer or refused the key (nothing is stored for it
     summary: 'list sessions, newest first',
     help: '  --json  print [{"id","title","updated"}]',
   },
+  compact: {
+    flags: { json: 'bool' },
+    usage: 'rp-core compact <session> [--json]',
+    summary: "shrink a session's journal: drop the checkpoints of finished turns",
+    help: `Opens the session (an interrupted answer is recovered first), closes it, then rewrites its
+journal without the chk lines (the answer checkpointed while it streamed) and prep lines (what the
+turn sent) of finished turns. Only crash recovery reads them. Every other line stays byte for byte:
+the story, its versions and the Story Director's plans do not change. The rewrite is atomic (a temp
+file, fsync, rename); a session with nothing to remove is left untouched.
+The file keeps its mode and modification time. A row whose removal would change what the reader
+accepts is kept ("kept" in --json).
+  --json  print {"sessionId","before","after","removed","kept"?} on stdout (sizes in bytes, lines
+          removed); events of the recovery go to stderr as JSON lines
+Exit 5 when another process has the session open or the journal changed meanwhile (session_locked),
+an answer held by a conflict waits for a decision (turn_open), or the recovery just saved an unsent
+draft (draft_recovered: it is shown first; run compact again).`,
+  },
   show: {
     flags: { json: 'bool' },
     usage: 'rp-core show <session> [--json]',
@@ -215,7 +235,7 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M3)
+  return `rp-core — headless roleplay agent core (milestone M4)
 
 Usage: rp-core <command> [flags]
 
@@ -380,6 +400,12 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const id = p.positionals[0];
       if (id === undefined) throw new UsageError('which session? rp-core show <session>', name);
       return cmdShow({ home: home.dir, id, json, io });
+    }
+    case 'compact': {
+      noPositionals(p, name, 1);
+      const sessionId = p.positionals[0];
+      if (sessionId === undefined) throw new UsageError('which session? rp-core compact <session>', name);
+      return cmdCompact({ home: home.dir, sessionId, json, io });
     }
     case 'send': {
       noPositionals(p, name, 2);

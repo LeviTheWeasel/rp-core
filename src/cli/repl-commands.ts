@@ -70,6 +70,8 @@ export type Command =
   | { name: 'memory'; action: 'restore'; ref: string }
   /** /search <query> [before=<n>] (§7.5): the narrator's search_history over this path. */
   | { name: 'search'; query: string; before?: number }
+  /** M4 (D-113): /director (= show), /director show|on|off. */
+  | { name: 'director'; action: 'show' | 'on' | 'off' }
   | { name: 'help' }
   | { name: 'quit' }
   /** A §12.4 command that belongs to a later milestone. */
@@ -124,6 +126,8 @@ export function commandClass(c: Command): CommandClass {
     case 'memory':
       // Notes are written to the journal: refused mid-turn like any other edit (session_busy).
       return c.action === 'list' || c.action === 'show' ? 'read' : 'edit';
+    case 'director':
+      return c.action === 'show' ? 'read' : 'edit';
     default:
       return 'edit';
   }
@@ -131,7 +135,6 @@ export function commandClass(c: Command): CommandClass {
 
 /** §12.4 commands that arrive with later milestones (§15). */
 const LATER: Readonly<Record<string, string>> = {
-  director: 'M4 (Story Director)',
   persona: 'a later milestone',
   impersonate: 'M9 (draft)',
 };
@@ -226,6 +229,12 @@ export function parseLine(raw: string): ParsedLine {
       return parseMemory(rest);
     case 'search':
       return parseSearch(rest);
+    case 'director': {
+      const a = rest.toLowerCase();
+      if (a === '' || a === 'show') return cmd({ name: 'director', action: 'show' });
+      if (a === 'on' || a === 'off') return cmd({ name: 'director', action: a });
+      return err('/director takes show, on or off (bare /director shows the plan)');
+    }
     case 'help':
     case '?':
       return cmd({ name: 'help' });
@@ -474,7 +483,7 @@ export function resolveBindingArg(
   return { ok: true, value: parts };
 }
 
-/** /help text (the M3 set; later commands are listed with their milestone). */
+/** /help text (the M4 set; later commands are listed with their milestone). */
 export function helpText(): string {
   return [
     'Type to speak. Commands:',
@@ -497,6 +506,8 @@ export function helpText(): string {
     '  /memory add <title> | <keys> | <text>    a note: sent to the narrator when one of its keys comes up',
     '  /memory edit <ref> <title> | <keys> | <text>    change a note (an empty part keeps the old value)',
     '  /memory retire <ref> [reason], /memory restore <ref>    stop a note firing / bring it back',
+    '  /director          the Story Director\'s plan: chapter, arcs, seeds, hidden arcs, the last directive',
+    '  /director on|off   let the Director plan every reply, or stop it (its plan is kept)',
     '  /probe             how to probe a server; /probe --active [--write] tests the narrator\'s model (a few tiny calls)',
     '  /preset [id|file]  show the preset and the library, or switch (builtin, a library id, or an ST preset file to import)',
     '  /lore              the lorebooks of this session; /lore add <id|file> (a world info file is imported), /lore rm <id>',
@@ -505,7 +516,7 @@ export function helpText(): string {
     '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',
-    'Later: /director (M4); /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).',
+    'Later: /memory tree|new|undo|refile|retry|recall|export|profile|mode (M5, the Compendium).',
     'Start a line with // to send text that begins with "/".',
   ].join('\n');
 }

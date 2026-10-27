@@ -132,6 +132,27 @@ export function resolvePrimary(ctx: EngineCtx, config: SessionConfig): Route {
   return routeTo(conn, binding.model);
 }
 
+/**
+ * M4 (D-101, D-119): the Director's binding and route, resolved in the turn body (never at admission).
+ * `roles.director` absent or 'narrator' → the narrator's connection and model only, on its admitted
+ * route: not its maxTokens, samplers, reasoning or fallback (those are the narrator's reply settings;
+ * a narrator capped at 300 tokens must not cut every plan). An explicit director binding keeps all its
+ * fields. A missing connection or caps that cannot be resolved give route null (the record says
+ * no_connection); never a Refusal. providerOverride applies (resolveConnection).
+ */
+export function resolveDirector(ctx: EngineCtx, config: SessionConfig, narrator: { binding: Binding; primary: Route }): { binding: Binding; route: Route | null } {
+  const role = config.roles.director;
+  if (role === undefined || role === 'narrator') return { binding: { conn: narrator.binding.conn, model: narrator.binding.model }, route: narrator.primary };
+  const conn = resolveConnection(ctx, role.conn);
+  if (!conn) return { binding: role, route: null };
+  try {
+    return { binding: role, route: routeTo(conn, role.model) };
+  } catch (e) {
+    if (e instanceof Refusal) return { binding: role, route: null };
+    throw e;
+  }
+}
+
 /** The head message and what the kind needs of it. */
 function placeKind(kind: TurnKind, view: PathView): { parent: string; target?: string; upTo: string; head: MessageView } {
   const head = view.head === null ? undefined : view.path[view.path.length - 1];
