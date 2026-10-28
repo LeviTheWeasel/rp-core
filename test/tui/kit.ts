@@ -35,6 +35,8 @@ export interface TuiRigOptions {
   exitWindowMs?: number;
   /** Where runTui listens for uncaught errors (default the process, as `rp-core tui`). */
   errors?: ErrorEventSource;
+  /** Give the scripted connection a model catalog for picker tests. */
+  catalog?: { baseUrl: string; fetch: typeof fetch };
 }
 
 /** A SIGINT / SIGTERM source the test emits on. */
@@ -74,7 +76,7 @@ export async function tuiRig(script: ScriptCall[], o: TuiRigOptions = {}): Promi
   const home = o.home ?? tmpHome('rp-core-tui-');
   const provider = createScriptedProvider(script);
   const caps = o.caps ?? SCRIPT_CAPS;
-  const conn: Connection = { id: 'script', provider, caps, origin: 'script:script', local: true };
+  const conn: Connection = { id: 'script', provider, caps, origin: 'script:script', local: true, ...(o.catalog ? { baseUrl: o.catalog.baseUrl } : {}) };
   // The runtime's connections are the engine's, as in `rp-core tui` (engineOptions(rt)): the Repl's
   // capsOf / windowOf (the models pane's tools word and window) see the scripted caps.
   const connections = { script: conn, alt: { ...conn, id: 'alt', origin: 'script:alt' } };
@@ -102,6 +104,7 @@ export async function tuiRig(script: ScriptCall[], o: TuiRigOptions = {}): Promi
     env: o.env ?? { HOME: home },
     createRenderer: async () => setup.renderer,
     clock: fakeClock(),
+    ...(o.catalog ? { fetch: o.catalog.fetch } : {}),
     ...(o.parts ? { parts: o.parts } : {}),
     ...(o.exitWindowMs !== undefined ? { exitWindowMs: o.exitWindowMs } : {}),
     ...(o.errors ? { errors: o.errors } : {}),

@@ -432,6 +432,7 @@ A real capture at 140 × 36 on a scripted model, with the empty rows cut:
 │ F2         side panes    ││                                                                          ││                                  │
 │ F3         mouse: on     ││                                                                          ││                                  │
 │ Shift+drag select        ││                                                                          ││                                  │
+│ F4         choose model  ││                                                                          ││                                  │
 │ Esc        cancel/clear  ││                                                                          ││                                  │
 │                          ││                                                                          ││ Usage                            │
 │                          ││ ready · Enter sends · F1 help                                            ││   3 calls · usage not reported   │
@@ -480,6 +481,7 @@ The labels are those of the left pane.
 | F2 | side panes | Hides or shows both side panes |
 | F3 | mouse: on | Mouse reporting on or off; the row shows the current state |
 | Shift+drag | select | The terminal's own text selection (see [Mouse](#mouse-selecting-and-copying)) |
+| F4 | choose model | Opens the narrator model picker. It lists configured connections and models reported by their servers; ↑/↓ selects, Enter switches this session, Esc closes, F4 refreshes. Unreachable servers are marked in the list |
 | Esc | cancel/clear | Cancels an edit in place, or clears the input |
 
 - **Hotkeys are typed lines.** A hotkey that stands for a command goes in as if you typed it, so the

@@ -37,6 +37,7 @@ import { isLaneEvent } from './agents.ts';
 import { applyWidth, createUi, rendererConfig, type HostUi } from './app.ts';
 import { fileLog, tuiIo, tuiLogPath, type FileLog, type TuiIo } from './io.ts';
 import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
+import { createModelPicker } from './model-picker.ts';
 import { interruptHub, pasteGuard, TextareaSource, type InterruptHub } from './source.ts';
 import type { TranscriptOptions } from './transcript.ts';
 import { MONO_THEME, THEME } from './theme.ts';
@@ -343,6 +344,7 @@ export function mountTui(o: MountOptions): MountedTui {
   const theme = env.NO_COLOR ? MONO_THEME : THEME;
   const ui = createUi(renderer, theme);
   let view: TuiView | null = null;
+  let currentModel: { conn: string; model: string } | null = null;
   const warp = env.TERM_PROGRAM === 'WarpTerminal';
   const noOsc52 = ignoresOsc52(env);
   // Finished cards show reasoning as /think says (the Repl's live state, read through the view).
@@ -399,6 +401,13 @@ export function mountTui(o: MountOptions): MountedTui {
     showWork();
   };
 
+  const picker = createModelPicker(ui, theme, a.rt, a.fetch ?? fetch, () => currentModel, ({ conn, model }) => {
+    const line = `/model narrator ${conn}:${model}`;
+    sent(line);
+    source.inject(line);
+    transcript.scroll('bottom');
+  });
+
   ui.input.onSubmit = () => {
     sent(ui.input.plainText);
     source.submit();
@@ -438,6 +447,10 @@ export function mountTui(o: MountOptions): MountedTui {
           case 'toggleMouse':
             renderer.useMouse = !renderer.useMouse;
             return view?.refresh();
+          case 'modelPicker':
+            if (editing() || view?.turning) return;
+            if (a.rt.provider) return ui.setStatus('model picker is unavailable with --provider', 'yellow');
+            return picker.open();
           case 'escape':
             // Esc cancels an in-place edit exactly as Ctrl+C does (the Repl says "edit cancelled").
             if (editing()) return o.interrupts.fire();
@@ -461,6 +474,7 @@ export function mountTui(o: MountOptions): MountedTui {
       o.interrupts.fire();
       return;
     }
+    if (picker.handle(k)) return;
     // T-17: ↑ / ↓ scroll the chat while the input is empty; with text in it they stay the input's.
     const lines = arrowScroll(k);
     if (lines !== 0 && ui.input.plainText === '') {
@@ -544,7 +558,7 @@ export function mountTui(o: MountOptions): MountedTui {
       v.echo(line);
     },
     message: (m, withStatus) => v.message(m, withStatus),
-    banner: (b) => v.banner(b),
+    banner: (b) => { currentModel = b.narrator; v.banner(b); },
     turn(t): TurnView {
       unarm();
       const tv = v.turn(t);
@@ -618,6 +632,7 @@ export function mountTui(o: MountOptions): MountedTui {
       disposed = true;
       unarm();
       unguard();
+      picker.dispose();
       // The Repl winds down if it still runs (a signal): its input ends, it closes the session.
       source.close();
       renderer.keyInput.off('keypress', onKey);
