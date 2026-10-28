@@ -47,7 +47,7 @@ Set `context_length` to the context window the server **actually** uses. With Ol
 rp-core new --card ./character.png --model "ollama:model-name"
 ```
 
-The card may be PNG or JSON (CCv1/V2/V3). In a terminal, the chat opens immediately. Type a message and press Enter; `/help` lists commands and `/quit` exits. Run `rp-core sessions` to find a session ID, then `rp-core chat <id>` to return to it. Use `rp-core tui <id>` for the full-screen UI, or add `--tui` to `rp-core new`. In the TUI, press **F4** to choose a narrator model from your configured connections.
+The card may be PNG or JSON (CCv1/V2/V3). In a terminal, the chat opens immediately. Type a message and press Enter; `/help` lists commands and `/quit` exits. Run `rp-core sessions` to find a session ID, then `rp-core chat <id>` to return to it. Use `rp-core tui <id>` for the full-screen UI, or add `--tui` to `rp-core new`. In the TUI, press **F4** to choose a narrator model from your configured connections. The right pane shows the context window and the last prompt's size.
 
 ## Import files
 

@@ -29,6 +29,8 @@ export interface TuiViewDeps {
   transcript: TranscriptApi;
   models: ModelsPaneApi;
   agents: AgentsPaneApi;
+  /** The fixed context block below Usage (omitted by views that do not mount it). */
+  context?: { update(b: BannerInfo): void };
   /** config.toml's prices (the agents pane's usage totals). */
   prices: PriceTable;
   /** The left pane's live facts: the newline key the terminal supports, whether the mouse is on. */
@@ -168,6 +170,7 @@ export class TuiView implements ReplView {
         this.d.agents.reset(b.session.id, laneNow(b.session));
       }
       this.updateModels(b);
+      this.d.context?.update(b);
     });
   }
 
@@ -223,6 +226,7 @@ export class TuiView implements ReplView {
       this.reasoningStored = b.config.reasoningShown;
       this.updateModels(b);
       this.d.agents.refresh(b.journal, b.session.view().head, b.config, this.d.prices);
+      this.d.context?.update(b);
     });
   }
 

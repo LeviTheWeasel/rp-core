@@ -34,6 +34,7 @@ import type { ReplView, TurnView } from '../repl-view.ts';
 import { engineOptions } from '../runtime.ts';
 import { EXIT_SIGINT } from '../signals.ts';
 import { isLaneEvent } from './agents.ts';
+import { createContextPane } from './context-pane.ts';
 import { applyWidth, createUi, rendererConfig, type HostUi } from './app.ts';
 import { fileLog, tuiIo, tuiLogPath, type FileLog, type TuiIo } from './io.ts';
 import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
@@ -353,6 +354,7 @@ export function mountTui(o: MountOptions): MountedTui {
   const transcript = o.parts.transcript(ui, theme, { warp, showReasoning: () => view?.reasoningShown() ?? false });
   const models = o.parts.models(ui, theme, { warp });
   const agents = o.parts.agents(ui, theme, clock, { warp });
+  const context = createContextPane(ui, theme, a.rt, a.fetch ?? fetch, { warp });
   let disposed = false;
   const live = (): boolean => !disposed && !renderer.isDestroyed;
 
@@ -610,6 +612,7 @@ export function mountTui(o: MountOptions): MountedTui {
             transcript,
             models,
             agents,
+            context,
             prices: a.rt.config.prices,
             extra: () => ({ newlineKey: newlineKey(kitty()), mouse: renderer.useMouse }),
             status: (text, tone) => ui.setStatus(text, tone),
@@ -639,6 +642,7 @@ export function mountTui(o: MountOptions): MountedTui {
       unarm();
       unguard();
       picker.dispose();
+      context.dispose();
       // The Repl winds down if it still runs (a signal): its input ends, it closes the session.
       source.close();
       renderer.keyInput.off('keypress', onKey);

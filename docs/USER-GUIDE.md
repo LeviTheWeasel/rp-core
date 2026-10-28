@@ -547,8 +547,12 @@ still shows on palette grey.
   `idle`; below it the time of the last pass and its last change, as `memory: created character
   "Фрол"`. A session that opens with work queued shows it at once. The REPL's `⋯ memory:` lines go
   to the chat as well.
-- **Usage** at the bottom: calls, tokens in and out, and the cost (as `/usage`), the agents' calls
+- **Usage** above Context: calls, tokens in and out, and the cost (as `/usage`), the agents' calls
   included.
+- **Context** below Usage: the narrator's effective window and a bar for the **last** prompt, against
+  the space left after its reply reserve. `~` marks an estimate. On a local Ollama connection the
+  block also checks `/api/ps` and warns if the loaded model's actual window is smaller than rp-core's
+  configured window. A model that has not loaded yet has no runtime window to report.
 
 From a live session on Ollama with the Director on:
 
