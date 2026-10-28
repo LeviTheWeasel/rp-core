@@ -31,22 +31,23 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 6. [The full-screen TUI](#the-full-screen-tui)
 7. [Editing messages and choosing an editor](#editing-messages-and-choosing-an-editor)
 8. [Presets and lorebooks](#presets-and-lorebooks)
-9. [Continuing a RoleCall story](#continuing-a-rolecall-story): [exporting it](#exporting-the-story-from-rolecall),
+9. [Importing a SillyTavern chat](#importing-a-sillytavern-chat)
+10. [Continuing a RoleCall story](#continuing-a-rolecall-story): [exporting it](#exporting-the-story-from-rolecall),
    [what comes over](#what-comes-over), [when it does not fit](#when-the-story-does-not-fit)
-10. [Tools and search](#tools-and-search)
-11. [Notes](#notes)
-12. [The Compendium](#the-compendium): [its background agents](#the-background-agents), the
+11. [Tools and search](#tools-and-search)
+12. [Notes](#notes)
+13. [The Compendium](#the-compendium): [its background agents](#the-background-agents), the
     [`{{recap}}` slot](#the-recap-slot), [the /memory commands](#the-memory-commands), [the keys](#the-compendium-keys)
-13. [The Story Director](#the-story-director)
-14. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-15. [Active probes](#active-probes)
-16. [config.toml reference](#configtoml-reference)
-17. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-18. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-19. [Where your data lives](#where-your-data-lives)
-20. [Troubleshooting](#troubleshooting)
-21. [Command reference](#command-reference)
-22. [Development](#development)
+14. [The Story Director](#the-story-director)
+15. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+16. [Active probes](#active-probes)
+17. [config.toml reference](#configtoml-reference)
+18. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+19. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+20. [Where your data lives](#where-your-data-lives)
+21. [Troubleshooting](#troubleshooting)
+22. [Command reference](#command-reference)
+23. [Development](#development)
 
 ## What works today
 
@@ -67,6 +68,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Compendium agents | In the background, between turns: a filing agent writes what each accepted answer established into the Compendium, and a historian writes summaries and `[Arc]` overviews of the story. Once old messages leave the prompt, the `{{recap}}` slot gives the narrator those overviews and summaries. Swipes and rewinds take an answer's records off the path, edits file it again; `/memory undo`, `refile`, `retry`, `wait` and `status` steer the work. On a local server they wait until you pause, and a turn never waits for them |
 | Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
 | RoleCall stories | `rp-core import <story>.rolecall` continues a story from RoleCall's export: the character, the persona, the preset with the chat's own settings and the lorebooks (identical ones once) go to the library, then each chat you pick (the main one by default) becomes a session with every swipe, the reasoning split off as RoleCall did, the Director's state and the Compendium on from the import. A dry run first, all or nothing, and a warning when the story does not fit the narrator's window ([details](#continuing-a-rolecall-story)) |
+| SillyTavern chats | `rp-core import <chat>.jsonl --card <library id>` continues a solo chat, keeping its messages, swipes, selected versions and hidden lines ([details](#importing-a-sillytavern-chat)) |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
 | Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, which Compendium entries were picked, what the `{{recap}}` slot held, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
 | Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls; `rp-core compact` shrinks a session's journal |
@@ -663,6 +665,7 @@ names it by its library id. A RoleCall story export brings its own preset and lo
 | SillyTavern world info, or a bare `character_book` | a lorebook | `library/lorebooks` |
 | A RoleCall Compendium export (`compendium-v1.0.0`) | a lorebook whose typed entries feed [the Compendium](#the-compendium) | `library/lorebooks` |
 | A RoleCall story export (a `.rolecall` zip) | the character, persona, preset and lorebooks, then one session per chosen chat ([details](#continuing-a-rolecall-story)) | `library/…`, `sessions` |
+| A SillyTavern solo chat export (`.jsonl`, with `--card <library id>`) | a session with its messages and swipes ([details](#importing-a-sillytavern-chat)) | `sessions` |
 
 Refused, with the reason: the other SillyTavern files below ("Not a preset"), RoleCall's account
 backup (also a `.rolecall` file, but JSON), RoleCall's story as a lone `.jsonl` file, and any other
@@ -834,6 +837,32 @@ their own line.
   stdout; the notices and the verdicts go to stderr. A one-shot preview draws its own seed: `{{random}}`, `{{roll}}` and lore entries with
   a probability below 100 % can come out differently in the next `send`. Inside the chat, `/preview`
   and `/lore test` use the next answer's seed.
+
+## Importing a SillyTavern chat
+
+SillyTavern's **Manage chat files → Export as .jsonl** saves one chat's metadata and messages. A
+solo chat export does not contain its character card or preset. Import the card separately, then
+give its library id to the chat importer:
+
+```bash
+rp-core import ./mira.png
+rp-core import ./harbor.jsonl --card mira --dry-run
+rp-core import ./harbor.jsonl --card mira
+rp-core chat <session-id-from-import-output>
+```
+
+The import keeps the text and order of messages, every swipe as a version and `swipe_id` as the
+selected version. It also keeps `extra.reasoning` as a reasoning block and excludes messages marked
+`is_system` from the model context. The export's `user_name` becomes a name-only persona; use
+`--persona ./persona.json` for a full one. `--model conn:model` chooses another narrator. The
+session uses your `config.toml` defaults for the preset and lorebooks, because the chat file does
+not contain them. `--as "New title"` sets a title, `--new` creates another copy, and `--json`
+prints a machine-readable report. A second import of the same file and card is refused by default.
+
+Group chats with more than one assistant name are refused. Media and file attachments are not
+copied; the importer warns when it sees them. SillyTavern checkpoints are separate chat files:
+import each one separately if you want its branch. `--dry-run` checks the file and the card without
+writing a session.
 
 ## Continuing a RoleCall story
 
@@ -2580,6 +2609,7 @@ redacted.
 | `chat <session> [--keep-requests] [--provider …]` | The chat on a session (lock and crash recovery first) |
 | `tui <session> [--keep-requests] [--provider …]` | The same chat full-screen: models, chat and agents side by side ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
 | `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info, a character_book or a RoleCall Compendium export into the library; prints its id |
+| `import <chat.jsonl> --card <library id> [--persona <file>] [--model conn:model] [--as title] [--dry-run] [--new] [--json]` | Imports a SillyTavern solo chat as a session, with its swipes and selected version ([details](#importing-a-sillytavern-chat)) |
 | `import <story.rolecall> [--chat main\|all\|<prefix>[,…]] [--model conn:model] [--compendium on\|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]` | Imports a RoleCall story export: its library items, then one session per chosen chat (the main one by default); prints a line per item and session, the warnings and the hints ([details](#continuing-a-rolecall-story)) |
 | `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
 | `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |

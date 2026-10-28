@@ -2,7 +2,7 @@
 
 **English** · [Русский](README-ru.md)
 
-rp-core is a terminal chat for roleplay stories with local or remote models. It reads character cards, keeps message swipes and branches, supports SillyTavern presets and lorebooks, and can continue a story exported from RoleCall.
+rp-core is a terminal chat for roleplay stories with local or remote models. It reads character cards, keeps message swipes and branches, supports SillyTavern presets and lorebooks, and can continue chats exported from SillyTavern or RoleCall.
 
 ## Install
 
@@ -49,7 +49,7 @@ The card may be PNG or JSON (CCv1/V2/V3). In a terminal, the chat opens immediat
 
 ## Import files
 
-`rp-core import <file>` adds a supported file to your library and prints its ID. You can also pass a file directly to `rp-core new`, which imports it while creating the story.
+For cards, presets and lorebooks, `rp-core import <file>` adds the file to your library and prints its ID. You can also pass one of these files directly to `rp-core new`.
 
 | File | Import command | Use it with |
 |---|---|---|
@@ -68,6 +68,17 @@ rp-core new --card ./character.png --persona ./persona.json
 ```
 
 There is no separate `rp-core import` command for a persona: `--persona` reads the file when the session is created. A RoleCall export imports its persona with the story.
+
+**SillyTavern chat history.** Export a solo chat as `.jsonl` from SillyTavern. Import its character card first; a chat export does not contain the card.
+
+```bash
+rp-core import ./character.png                 # note the card ID
+rp-core import ./chat.jsonl --card <card-id> --dry-run
+rp-core import ./chat.jsonl --card <card-id>
+rp-core chat <session-id-from-import-output>
+```
+
+The import keeps messages, swipes, the selected version and hidden messages. Use `--persona ./persona.json` to supply a full persona, or `--model conn:model` to choose a narrator. Group chats are not yet supported.
 
 **RoleCall chat history.** In RoleCall, export the story as **RoleCall (.rolecall zip)**, then run:
 

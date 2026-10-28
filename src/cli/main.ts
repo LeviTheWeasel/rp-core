@@ -146,14 +146,15 @@ ${PROVIDER_HELP}
 Exit 0 at /quit; 3 under --provider script: or replay: when an answer failed; 64 without a terminal.`,
   },
   import: {
-    flags: { as: 'string', json: 'bool', chat: 'string', model: 'string', compendium: 'string', 'dry-run': 'bool', new: 'bool', 'keep-raw': 'bool' },
+    flags: { as: 'string', json: 'bool', chat: 'string', card: 'string', persona: 'string', model: 'string', compendium: 'string', 'dry-run': 'bool', new: 'bool', 'keep-raw': 'bool' },
     usage:
-      'rp-core import <file> [--as name] [--json]\n       rp-core import <story.rolecall> [--chat main|all|<id prefix>[,…]] [--model conn:model] [--compendium on|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]',
-    summary: 'import a card, preset or lorebook into the library, or a RoleCall story as sessions',
-    help: `Detects the file and converts it to the native format, in this order: RoleCall story export
-(.rolecall zip, below), PNG card, JSON card (CCv1/V2/V3), SillyTavern chat-completion preset,
-RoleCall Compendium export (compendium-v1.0.0), SillyTavern world info, a bare character_book.
-It lands in library/characters, library/presets or library/lorebooks as <id>.json, where id is
+      'rp-core import <file> [--as name] [--json]\n       rp-core import <chat.jsonl> --card <library id> [--persona <file>] [--model conn:model] [--as title] [--dry-run] [--new] [--json]\n       rp-core import <story.rolecall> [--chat main|all|<id prefix>[,…]] [--model conn:model] [--compendium on|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]',
+    summary: 'import a card, preset, lorebook, SillyTavern chat or RoleCall story',
+    help: `Detects RoleCall story exports (.rolecall zip), SillyTavern solo chats (.jsonl), PNG and
+JSON cards (CCv1/V2/V3), SillyTavern chat-completion presets and world info, RoleCall Compendium
+exports (compendium-v1.0.0), and bare character_books.
+Cards, presets and lorebooks land in library/characters, library/presets or library/lorebooks as
+<id>.json, where id is
 the name in lower case with its words joined by "-". The name is the file's own name field when
 it has one (cards, Compendium exports and character_books do); SillyTavern writes none into
 presets and world info, so those are named after the file: "My Preset.json" becomes my-preset.
@@ -162,6 +163,15 @@ Importing the same file twice is a no-op; a different file with the same name ge
 Warnings name what the file holds that rp-core does not honour.
   --as <name>  save under this name instead
   --json       print {"kind","id","path","name","warnings"}
+
+A SillyTavern solo chat export (.jsonl) becomes a session. Import its character card first, then
+give its library id with --card. The chat's text, swipes, chosen versions and hidden messages are
+kept. The file has no character card or preset; the new session uses config.toml defaults.
+  --card <id>            a character already in the library (required for a .jsonl chat)
+  --persona <json file>  override the user name in the chat export with a persona
+  --model conn:model     the new session's narrator (default: config.toml's)
+  --dry-run              check and report without writing
+  --new                  import the same file once more as a new session
 
 A RoleCall story export (RoleCall's per-story .rolecall zip; its account backup, a .rolecall JSON
 file, is not one) becomes library items and sessions: the character, the persona, the preset (and a
@@ -488,7 +498,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         fresh: bool(p, 'new'),
         keepRaw: bool(p, 'keep-raw'),
       };
-      return cmdImport({ home: home.dir, file, json, io, story, rt: () => runtimeOf(home, deps, p), ...(as !== undefined ? { as } : {}) });
+      return cmdImport({ home: home.dir, file, json, io, story, st: { ...(str(p, 'card') !== undefined ? { card: str(p, 'card')! } : {}), ...(str(p, 'persona') !== undefined ? { persona: str(p, 'persona')! } : {}) }, rt: () => runtimeOf(home, deps, p), ...(as !== undefined ? { as } : {}) });
     }
     case 'sessions':
       noPositionals(p, name, 0);

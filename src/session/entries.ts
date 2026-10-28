@@ -270,7 +270,7 @@ export interface SessionHeader {
   title?: string;
   fork?: { from: string; at: string };
   /** D-192: a session imported from another app (RoleCall story export): where it came from. */
-  imported?: { from: 'rolecall'; chat: string; exportedAt: string };
+  imported?: { from: 'rolecall'; chat: string; exportedAt: string } | { from: 'sillytavern'; hash: string; file: string };
   cast: { character: Character; persona?: Persona };
   config: SessionConfig;
   vars0?: VarsDiff;
@@ -695,7 +695,7 @@ const header = obj(
     cast: obj({ character }, { persona }),
     config: sessionConfig,
   },
-  { title: str, fork: obj({ from: str, at: str }), imported: obj({ from: oneOf('rolecall'), chat: str, exportedAt: str }), vars0: varsDiff },
+  { title: str, fork: obj({ from: str, at: str }), imported: either(obj({ from: oneOf('rolecall'), chat: str, exportedAt: str }), obj({ from: oneOf('sillytavern'), hash: str, file: str })), vars0: varsDiff },
 );
 
 // ---- entries ---------------------------------------------------------------------------------------
