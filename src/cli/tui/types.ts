@@ -102,7 +102,7 @@ export type HotkeyAction =
   | { kind: 'prefill'; text: string }
   | {
       kind: 'ui';
-      what: 'scrollPageUp' | 'scrollPageDown' | 'scrollTop' | 'scrollBottom' | 'togglePanes' | 'toggleMouse' | 'escape' | 'editLast';
+      what: 'scrollPageUp' | 'scrollPageDown' | 'scrollTop' | 'scrollBottom' | 'togglePanes' | 'toggleMouse' | 'modelPicker' | 'escape' | 'editLast';
     };
 
 export interface Hotkey {
@@ -131,6 +131,7 @@ export const HOTKEYS: readonly Hotkey[] = [
   { label: 'F1', description: 'help', match: [{ name: 'f1' }], action: { kind: 'command', line: '/help' } },
   { label: 'F2', description: 'side panes', match: [{ name: 'f2' }], action: { kind: 'ui', what: 'togglePanes' } },
   { label: 'F3', description: 'mouse wheel', match: [{ name: 'f3' }], action: { kind: 'ui', what: 'toggleMouse' } },
+  { label: 'F4', description: 'choose model', match: [{ name: 'f4' }], action: { kind: 'ui', what: 'modelPicker' } },
   { label: 'Esc', description: 'cancel/clear', match: [{ name: 'escape' }], action: { kind: 'ui', what: 'escape' } },
 ];
 // Pairs inside one entry (Alt+←/→, PgUp/PgDn, Ctrl+Home/End) are told apart by the host from the

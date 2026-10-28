@@ -120,6 +120,7 @@ const KEYS = [
   'F2         side panes',
   'F3         mouse: off',
   'Shift+drag select',
+  'F4         choose model',
   'Esc        cancel/clear',
 ];
 

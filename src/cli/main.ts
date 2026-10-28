@@ -137,7 +137,8 @@ the models and hotkeys on the left, the chat in the middle, the agents and their
 right (the side panes fold away on narrow terminals; F2 toggles them). Enter sends; Shift+Enter,
 Alt+Enter or Ctrl+J start a new line. Hotkeys: Ctrl+R swipe, Ctrl+G guided re-roll, Ctrl+O continue,
 Ctrl+E edit the last message in the input (Enter saves, Esc cancels), Alt+Left/Right versions,
-PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off. Ctrl+C
+PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off,
+F4 choose the narrator model from the configured connections (↑/↓, Enter, Esc). Ctrl+C
 stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
 Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes
 and scripts use rp-core chat.
