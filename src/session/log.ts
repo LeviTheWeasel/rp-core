@@ -1128,6 +1128,21 @@ function readFirstLine(file: string): string | null {
   }
 }
 
+/** Read one session's header for a browser without loading its message history. */
+export function readSessionHeader(home: string, id: string): SessionHeader {
+  if (!isValidSessionId(id)) throw new SessionNotFoundError(id);
+  let line: string | null;
+  try { line = readFirstLine(pathsFor(home, id).file); }
+  catch (e) {
+    if (errCode(e) === 'ENOENT') throw new SessionNotFoundError(id);
+    throw e;
+  }
+  if (line === null) throw new Error(`session header is incomplete: ${id}`);
+  const parsed = parseHeader(line);
+  if (!parsed.ok || parsed.value.id !== id) throw new Error(`invalid session header: ${id}`);
+  return parsed.value;
+}
+
 /** All sessions under <home>/sessions, newest first by file mtime. Unreadable ones are skipped. */
 export function listSessions(home: string): { id: string; title?: string; updated: string }[] {
   const dir = sessionsDir(home);

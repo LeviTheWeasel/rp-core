@@ -121,6 +121,7 @@ const KEYS = [
   'F3         mouse: off',
   'Shift+drag select',
   'F4         choose model',
+      'F5         stories',
   'Esc        cancel/clear',
 ];
 

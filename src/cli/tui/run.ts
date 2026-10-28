@@ -39,6 +39,7 @@ import { applyWidth, createUi, rendererConfig, type HostUi } from './app.ts';
 import { fileLog, tuiIo, tuiLogPath, type FileLog, type TuiIo } from './io.ts';
 import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
 import { createModelPicker } from './model-picker.ts';
+import { createStoryPicker } from './story-picker.ts';
 import { interruptHub, pasteGuard, TextareaSource, type InterruptHub } from './source.ts';
 import type { TranscriptOptions } from './transcript.ts';
 import { MONO_THEME, THEME } from './theme.ts';
@@ -348,6 +349,8 @@ export function mountTui(o: MountOptions): MountedTui {
   const ui = createUi(renderer, theme, a.splashMs);
   let view: TuiView | null = null;
   let currentModel: { conn: string; model: string } | null = null;
+  let currentSessionId: string | null = o.session.id;
+  let pendingBranch: { sessionId: string; leaf: string } | null = null;
   const warp = env.TERM_PROGRAM === 'WarpTerminal';
   const noOsc52 = ignoresOsc52(env);
   // Finished cards show reasoning as /think says (the Repl's live state, read through the view).
@@ -411,6 +414,16 @@ export function mountTui(o: MountOptions): MountedTui {
     source.inject(line);
     transcript.scroll('bottom');
   });
+  const storyPicker = createStoryPicker(ui, theme, a.rt.home, () => currentSessionId, (id, leaf) => {
+    if (id !== currentSessionId) {
+      pendingBranch = leaf ? { sessionId: id, leaf } : null;
+      const line = `/open ${id}`;
+      sent(line); source.inject(line); transcript.scroll('bottom');
+    } else if (leaf) {
+      const line = `/goto ${leaf}`;
+      sent(line); source.inject(line); transcript.scroll('bottom');
+    }
+  });
 
   ui.input.onSubmit = () => {
     sent(ui.input.plainText);
@@ -455,6 +468,9 @@ export function mountTui(o: MountOptions): MountedTui {
             if (editing() || view?.turning) return;
             if (a.rt.provider) return ui.setStatus('model picker is unavailable with --provider', 'yellow');
             return picker.open();
+          case 'storyPicker':
+            if (editing() || view?.turning) return;
+            return storyPicker.open();
           case 'escape':
             // Esc cancels an in-place edit exactly as Ctrl+C does (the Repl says "edit cancelled").
             if (editing()) return o.interrupts.fire();
@@ -479,6 +495,7 @@ export function mountTui(o: MountOptions): MountedTui {
       return;
     }
     if (picker.handle(k)) return;
+    if (storyPicker.handle(k)) return;
     // T-17: ↑ / ↓ scroll the chat while the input is empty; with text in it they stay the input's.
     const lines = arrowScroll(k);
     if (lines !== 0 && ui.input.plainText === '') {
@@ -565,7 +582,13 @@ export function mountTui(o: MountOptions): MountedTui {
     banner: (b) => {
       ui.hideLoading();
       currentModel = b.narrator;
+      currentSessionId = b.session.id;
       v.banner(b);
+      if (pendingBranch?.sessionId === b.session.id) {
+        const line = `/goto ${pendingBranch.leaf}`;
+        pendingBranch = null;
+        queueMicrotask(() => { if (live()) { sent(line); source.inject(line); } });
+      }
     },
     turn(t): TurnView {
       unarm();
@@ -586,6 +609,8 @@ export function mountTui(o: MountOptions): MountedTui {
     },
     status: (m, trace) => v.status(m, trace),
     idle(): void {
+      // /open can be refused (for example, another process holds its lock).
+      if (pendingBranch && currentSessionId !== pendingBranch.sessionId) pendingBranch = null;
       busy = false;
       queued = 0;
       unarm();
@@ -642,6 +667,7 @@ export function mountTui(o: MountOptions): MountedTui {
       unarm();
       unguard();
       picker.dispose();
+      storyPicker.dispose();
       context.dispose();
       // The Repl winds down if it still runs (a signal): its input ends, it closes the session.
       source.close();

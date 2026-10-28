@@ -86,6 +86,7 @@ describe('hotkeyAction: plain objects', () => {
     expect(hotkeyAction(key('f3'))).toEqual({ kind: 'ui', what: 'toggleMouse' });
     expect(hotkeyAction(key('escape'))).toEqual({ kind: 'ui', what: 'escape' });
     expect(hotkeyAction(key('f4'))).toEqual({ kind: 'ui', what: 'modelPicker' });
+    expect(hotkeyAction(key('f5'))).toEqual({ kind: 'ui', what: 'storyPicker' });
   });
 
   test('Ctrl+C is the interrupt, not a hotkey (Latin and Russian layout)', () => {

@@ -484,6 +484,7 @@ The labels are those of the left pane.
 | F3 | mouse: on | Mouse reporting on or off; the row shows the current state |
 | Shift+drag | select | The terminal's own text selection (see [Mouse](#mouse-selecting-and-copying)) |
 | F4 | choose model | Opens the narrator model picker. It lists configured connections and models reported by their servers; ↑/↓ selects, Enter switches this session, Esc closes, F4 refreshes. Unreachable servers are marked in the list |
+| F5 | stories | Opens the story browser. Type to search by title, character or id; ↑/↓ selects, Enter opens a story. → shows its current leaf and alternative branches; Enter switches to the selected branch, even in another story. ← returns to stories, Esc closes, F5 refreshes. Forked stories appear under their parent. Your unfinished input stays in the chat box |
 | Esc | cancel/clear | Cancels an edit in place, or clears the input |
 
 - **Hotkeys are typed lines.** A hotkey that stands for a command goes in as if you typed it, so the
