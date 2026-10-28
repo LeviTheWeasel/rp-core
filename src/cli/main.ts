@@ -89,7 +89,7 @@ unless the file exists, and prints its path. Edit [connections] and [roles] narr
       lore: 'list',
       'keep-requests': 'bool',
     },
-    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <json file>] [--title text] [--tui | --no-chat] [--json] [--keep-requests] [${PROVIDER_FLAG}]`,
+    usage: `rp-core new --card <file> [--model conn:model] [--preset <id|file>] [--lore <id|file>]... [--max-tokens n] [--persona <id|file>] [--title text] [--tui | --no-chat] [--json] [--keep-requests] [${PROVIDER_FLAG}]`,
     summary: 'import a card and start a session (opens the chat on a terminal)',
     help: `Imports the card (PNG or JSON, CCv1/V2/V3) into the library and creates a session with its
 greetings; its config starts from config.toml ([roles], [narrator], [director]). On a terminal
@@ -103,8 +103,8 @@ the chat opens right away; otherwise (or with --no-chat / --json) the session id
   --max-tokens <n>    the narrator's reply limit, kept free in the window (default: the preset's,
                       e.g. an ST preset's openai_max_tokens, else 2048, or 8192 from a 24576-token
                       window; never more than half the window)
-  --persona <file>    a persona JSON {name, description, aliases?, book?}; book is a lorebook in
-                      rp-core's own format, scanned before the card's
+  --persona <file|id> a persona JSON {name, description, aliases?, book?}, or an id from
+                      library/personas; book is scanned before the card's
   --title <text>      the session title (default: the character's name)
   --tui               open the new session full-screen (rp-core tui) instead of the line REPL
   --no-chat           only create the session and print its id
@@ -145,7 +145,7 @@ Alt+Enter or Ctrl+J start a new line. Hotkeys: Ctrl+R swipe, Ctrl+G guided re-ro
 Ctrl+E edit the last message in the input (Enter saves, Esc cancels), Alt+Left/Right versions,
 PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off,
 F4 choose the narrator model from the configured connections (↑/↓, Enter, Esc), F5 browse stories
-and branches. Ctrl+C
+and branches, F6 create a story from a library card with persona, preset and lorebook choices. Ctrl+C
 stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
 Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes
 and scripts use rp-core chat.

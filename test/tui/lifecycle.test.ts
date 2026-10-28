@@ -7,11 +7,13 @@ import { createTestRenderer, type TestRendererSetup } from '@opentui/core/testin
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Engine } from '../../src/engine/engine.ts';
+import { saveToLibrary } from '../../src/formats/library.ts';
+import { BUILTIN_PRESET } from '../../src/formats/native.ts';
 import { memoryChannel } from '../../src/cli/io.ts';
 import { main } from '../../src/cli/main.ts';
 import { loadRuntime } from '../../src/cli/runtime.ts';
 import { TERMINATED_LINE } from '../../src/cli/chat.ts';
-import { readLock } from '../../src/session/log.ts';
+import { readLock, readSessionFile } from '../../src/session/log.ts';
 import { cmdTui, NEEDS_TERMINAL } from '../../src/cli/tui/run.ts';
 import { rendererConfig } from '../../src/cli/tui/app.ts';
 import { branchRows } from '../../src/cli/tui/story-picker.ts';
@@ -105,10 +107,65 @@ describe('tui without a session id', () => {
     const setup = await createTestRenderer({ width: 90, height: 24, kittyKeyboard: true, ...rendererConfig() });
     const done = cmdTui({ rt: loadRuntime(home, {}), io: { out: memoryChannel(), err: memoryChannel() }, exitNow: () => {}, tty: true, createRenderer: async () => setup.renderer });
     expect(await waitForFrame(setup, 'No stories yet')).toContain('Stories and branches');
+    await setup.mockInput.pressKeys(['F6']);
+    await waitForFrame(setup, 'No cards in library');
+    setup.mockInput.pressEnter();
+    expect(await waitForFrame(setup, 'No cards in library')).toContain('New story');
+    setup.mockInput.pressEscape();
+    await waitForFrame(setup, 'No stories yet');
     setup.mockInput.pressEscape();
     expect(await done).toBe(0);
     expect(setup.renderer.isDestroyed).toBe(true);
     await setup.dispose();
+  });
+
+  test('F6 creates a new story from a library card without leaving the TUI', async () => {
+    const home = tmpHome('rp-core-tui-');
+    saveToLibrary(home, 'characters', 'Mira', MIRA);
+    const personaId = saveToLibrary(home, 'personas', 'Levi', LEVI).id;
+    const presetId = saveToLibrary(home, 'presets', 'Lighthouse', { ...BUILTIN_PRESET, name: 'Lighthouse' }).id;
+    const alphaId = saveToLibrary(home, 'lorebooks', 'Alpha', { name: 'Alpha', entries: [] }).id;
+    const betaId = saveToLibrary(home, 'lorebooks', 'Beta', { name: 'Beta', entries: [] }).id;
+    const setups: TestRendererSetup[] = [];
+    const done = cmdTui({
+      rt: loadRuntime(home, {}), io: { out: memoryChannel(), err: memoryChannel() }, exitNow: () => {}, tty: true,
+      createRenderer: async () => {
+        const setup = await createTestRenderer({ width: 90, height: 24, kittyKeyboard: true, ...rendererConfig() });
+        setups.push(setup);
+        return setup.renderer;
+      },
+      splashMs: 0,
+    });
+    await waitFor(() => setups.length === 1, 'story browser');
+    await waitForFrame(setups[0]!, 'No stories yet');
+    await setups[0]!.mockInput.pressKeys(['F6']);
+    await waitForFrame(setups[0]!, 'New story · 1/4 Card');
+    setups[0]!.mockInput.pressEnter();
+    await waitForFrame(setups[0]!, '2/4 Persona');
+    setups[0]!.mockInput.pressArrow('down');
+    setups[0]!.mockInput.pressEnter();
+    await waitForFrame(setups[0]!, '3/4 Preset');
+    setups[0]!.mockInput.pressArrow('down');
+    setups[0]!.mockInput.pressArrow('down');
+    setups[0]!.mockInput.pressEnter();
+    await waitForFrame(setups[0]!, '4/4 Lorebooks');
+    await setups[0]!.mockInput.pressKeys([' ']);
+    setups[0]!.mockInput.pressArrow('down');
+    await setups[0]!.mockInput.pressKeys([' ']);
+    setups[0]!.mockInput.pressEnter();
+    await waitFor(() => setups.length === 2, 'new story chat');
+    await waitForFrame(setups[1]!, 'Hello');
+    await setups[1]!.mockInput.pressKeys(['/','q','u','i','t']);
+    setups[1]!.mockInput.pressEnter();
+    expect(await done).toBe(0);
+    const ids = readdirSync(join(home, 'sessions')).filter((name) => name.endsWith('.jsonl'));
+    expect(ids).toHaveLength(1);
+    const newHeader = readSessionFile(home, ids[0]!.slice(0, -'.jsonl'.length)).header;
+    expect(newHeader.cast.persona?.name).toBe('Levi');
+    expect(newHeader.config.preset).toBe(presetId);
+    expect(newHeader.config.lorebooks).toEqual([alphaId, betaId]);
+    expect(personaId).toBe('levi');
+    for (const setup of setups) await setup.dispose();
   });
 
   test('selects a story and starts its chat', async () => {

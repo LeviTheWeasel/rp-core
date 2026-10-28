@@ -122,6 +122,7 @@ const KEYS = [
   'Shift+drag select',
   'F4         choose model',
       'F5         stories',
+      'F6         new story',
   'Esc        cancel/clear',
 ];
 

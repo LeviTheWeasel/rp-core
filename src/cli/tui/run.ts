@@ -39,6 +39,7 @@ import { applyWidth, createUi, rendererConfig, type HostUi } from './app.ts';
 import { fileLog, tuiIo, tuiLogPath, type FileLog, type TuiIo } from './io.ts';
 import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
 import { createModelPicker } from './model-picker.ts';
+import { createLibraryStory, createNewStoryPicker } from './new-story.ts';
 import { createStoryPicker } from './story-picker.ts';
 import { interruptHub, pasteGuard, TextareaSource, type InterruptHub } from './source.ts';
 import type { TranscriptOptions } from './transcript.ts';
@@ -168,14 +169,20 @@ export async function chooseTuiSession(a: TuiArgs): Promise<{ id?: string; leaf?
   ui.right.visible = false;
   ui.inputRow.visible = false;
   ui.hideLoading();
-  ui.setStatus('Choose a story · Esc quits · create one with rp-core new --card <file>');
+  ui.setStatus('Choose a story · F6 creates one from the library · Esc quits');
   let finish!: (result: { id?: string; leaf?: string; code: number }) => void;
   const selected = new Promise<{ id?: string; leaf?: string; code: number }>((resolve) => { finish = resolve; });
-  const picker = createStoryPicker(ui, theme, a.rt.home, () => null, (id, leaf) => finish({ id, ...(leaf ? { leaf } : {}), code: 0 }), true);
+  const newStory = createNewStoryPicker(ui, theme, a.rt.home, async (choice) => {
+    const id = await createLibraryStory(a.rt, choice);
+    finish({ id, code: 0 });
+  });
+  const picker = createStoryPicker(ui, theme, a.rt.home, () => null, (id, leaf) => finish({ id, ...(leaf ? { leaf } : {}), code: 0 }), true, () => newStory.open());
   const onKey = (k: KeyEvent): void => {
     if (k.eventType === 'release') return;
+    if (newStory.handle(k)) { if (!newStory.visible) picker.open(); return; }
     if (k.name === 'escape' || isInterruptKey(k)) { k.preventDefault(); finish({ code: k.name === 'escape' ? 0 : EXIT_SIGINT }); return; }
-    picker.handle(k);
+    if (picker.handle(k)) return;
+    if (k.name === 'f6') { k.preventDefault(); newStory.open(); }
   };
   const onDestroy = (): void => finish({ code: 0 });
   renderer.keyInput.on('keypress', onKey);
@@ -192,6 +199,7 @@ export async function chooseTuiSession(a: TuiArgs): Promise<{ id?: string; leaf?
   try { return await selected; }
   finally {
     picker.dispose();
+    newStory.dispose();
     renderer.keyInput.off('keypress', onKey);
     renderer.off('destroy', onDestroy);
     signals.removeListener('SIGINT', onSigint);
@@ -463,6 +471,11 @@ export function mountTui(o: MountOptions): MountedTui {
     source.inject(line);
     transcript.scroll('bottom');
   });
+  const newStory = createNewStoryPicker(ui, theme, a.rt.home, async (choice) => {
+    const id = await createLibraryStory(a.rt, choice);
+    const line = `/open ${id}`;
+    sent(line); source.inject(line); transcript.scroll('bottom');
+  });
   const storyPicker = createStoryPicker(ui, theme, a.rt.home, () => currentSessionId, (id, leaf) => {
     if (id !== currentSessionId) {
       pendingBranch = leaf ? { sessionId: id, leaf } : null;
@@ -472,7 +485,7 @@ export function mountTui(o: MountOptions): MountedTui {
       const line = `/goto ${leaf}`;
       sent(line); source.inject(line); transcript.scroll('bottom');
     }
-  });
+  }, false, () => newStory.open());
 
   ui.input.onSubmit = () => {
     sent(ui.input.plainText);
@@ -520,6 +533,9 @@ export function mountTui(o: MountOptions): MountedTui {
           case 'storyPicker':
             if (editing() || view?.turning) return;
             return storyPicker.open();
+          case 'newStory':
+            if (editing() || view?.turning) return;
+            return newStory.open();
           case 'escape':
             // Esc cancels an in-place edit exactly as Ctrl+C does (the Repl says "edit cancelled").
             if (editing()) return o.interrupts.fire();
@@ -544,6 +560,7 @@ export function mountTui(o: MountOptions): MountedTui {
       return;
     }
     if (picker.handle(k)) return;
+    if (newStory.handle(k)) return;
     if (storyPicker.handle(k)) return;
     // T-17: ↑ / ↓ scroll the chat while the input is empty; with text in it they stay the input's.
     const lines = arrowScroll(k);
@@ -716,6 +733,7 @@ export function mountTui(o: MountOptions): MountedTui {
       unarm();
       unguard();
       picker.dispose();
+      newStory.dispose();
       storyPicker.dispose();
       context.dispose();
       // The Repl winds down if it still runs (a signal): its input ends, it closes the session.

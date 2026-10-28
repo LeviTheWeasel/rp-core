@@ -398,7 +398,8 @@ rp-core new --card ~/cards/mira.png --model "ollama:magmell-16k:latest" --tui
 - **It needs a real terminal** on stdin and stdout. Without one it exits with code 64 and says
   `rp-core tui needs a terminal; use rp-core chat`.
 - **Without a session id**, the story browser opens first. Choose a story with ↑/↓ and Enter, or
-  search by typing its name. Esc exits. If there are no stories, create one with `rp-core new --card`.
+  search by typing its name. F6 starts a new story from a library card; choose a persona and preset,
+  then toggle any lorebooks with Space and press Enter to create it. Esc exits the browser.
 - **The line chat stays.** `rp-core chat` is unchanged and is still what `new` opens by default.
   Pipes, scripts and `--provider script:` runs use it. Both open the same session files, so you can
   switch between them (not at the same time: the session is locked while one has it open).
@@ -488,6 +489,7 @@ The labels are those of the left pane.
 | Shift+drag | select | The terminal's own text selection (see [Mouse](#mouse-selecting-and-copying)) |
 | F4 | choose model | Opens the narrator model picker. It lists configured connections and models reported by their servers; ↑/↓ selects, Enter switches this session, Esc closes, F4 refreshes. Unreachable servers are marked in the list |
 | F5 | stories | Opens the story browser. Type to search by title, character or id; ↑/↓ selects, Enter opens a story. → shows its current leaf and alternative branches; Enter switches to the selected branch, even in another story. ← returns to stories, Esc closes, F5 refreshes. Forked stories appear under their parent. Your unfinished input stays in the chat box |
+| F6 | new story | Creates and opens a session from a character card in the library. Pick an optional library persona and preset, then select any number of library lorebooks with Space. Enter creates the session on the last step; Esc cancels |
 | Esc | cancel/clear | Cancels an edit in place, or clears the input |
 
 - **Hotkeys are typed lines.** A hotkey that stands for a command goes in as if you typed it, so the
@@ -2615,7 +2617,7 @@ redacted.
 | Command | What it does |
 |---|---|
 | `init [--json]` | Writes the starter `config.toml` unless one exists; prints its path |
-| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--tui \| --no-chat] [--json] [--keep-requests] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal (`--tui`: the full-screen TUI), else prints the id (`--json`: `{sessionId, title, greetings}`) |
+| `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <id\|file>] [--title t] [--tui \| --no-chat] [--json] [--keep-requests] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal (`--tui`: the full-screen TUI), else prints the id (`--json`: `{sessionId, title, greetings}`) |
 | `chat <session> [--keep-requests] [--provider …]` | The chat on a session (lock and crash recovery first) |
 | `tui [session] [--keep-requests] [--provider …]` | Choose a story or open one directly in the full-screen chat ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
 | `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info, a character_book or a RoleCall Compendium export into the library; prints its id |

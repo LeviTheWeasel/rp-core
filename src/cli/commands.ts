@@ -260,13 +260,25 @@ function resolveCard(a: NewArgs): { character: Character; warnings: ImportWarnin
   return { character: v.value, warnings: [], libraryId: a.card, imported: false };
 }
 
-function resolvePersona(file: string): Persona {
-  const v = validatePersona(readJsonFile(file, 'persona'));
+function resolvePersona(home: string, file: string): Persona {
+  const raw = existsSync(file) ? readJsonFile(file, 'persona') : loadFromLibraryForPersona(home, file);
+  const v = validatePersona(raw);
   if (!v.ok) {
     const why = v.errors.map((e) => `${e.path || '(root)'}: ${e.message}`).join('; ');
     throw new CliError(`persona ${file} is invalid: ${why}`);
   }
   return v.value;
+}
+
+function loadFromLibraryForPersona(home: string, id: string): unknown {
+  try {
+    const value = loadFromLibrary(home, 'personas', id);
+    if (value === null) throw new CliError(`no persona file and no library persona named ${JSON.stringify(id)}`);
+    return value;
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    throw new CliError(errMessage(e));
+  }
 }
 
 /** Greeting roots as stored (macros expanded), in file order. */
@@ -337,7 +349,7 @@ function withPresetAndLore(a: NewArgs, config: DeepPartial<SessionConfig> | unde
 /** `rp-core new --card <file>`: import the card, create the session, print its id (or open the REPL). */
 export async function cmdNew(a: NewArgs): Promise<number> {
   const base = newSessionConfig(a);
-  const persona = a.persona !== undefined ? resolvePersona(a.persona) : undefined;
+  const persona = a.persona !== undefined ? resolvePersona(a.home, a.persona) : undefined;
   const config = withPresetAndLore(a, base);
   const card = resolveCard(a);
   warn(a.io, card.warnings);

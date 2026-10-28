@@ -55,7 +55,7 @@ export function branchRows(home: string, id: string): BranchRow[] {
 }
 
 /** A full-pane browser. All writes still go through the REPL's /open and /goto commands. */
-export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: () => string | null, choose: (id: string, leaf?: string) => void, standalone = false) {
+export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: () => string | null, choose: (id: string, leaf?: string) => void, standalone = false, onNew?: () => void) {
   const box = new BoxRenderable(ui.renderer, {
     id: 'story-picker', position: 'absolute', top: 1, left: 1, right: 1, bottom: 2,
     zIndex: 101, border: true, title: ' Stories and branches ', borderColor: theme.focusedBorder,
@@ -92,7 +92,7 @@ export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: (
     const rows: { text: string; tone: 'text' | 'accent' | 'dim' | 'yellow'; bold?: boolean }[] = [];
     if (tab === 'stories') {
       rows.push({ text: `Stories  › branches  ·  search: ${query || 'type to filter'}`, tone: 'accent', bold: true });
-      rows.push({ text: `↑/↓ select · Enter open · → branches · Esc ${standalone ? 'quit' : 'close'} · F5 refresh`, tone: 'dim' });
+      rows.push({ text: `↑/↓ select · Enter open · → branches · F6 new · Esc ${standalone ? 'quit' : 'close'}`, tone: 'dim' });
       if (!stories.length) rows.push({ text: query ? 'No matching stories' : 'No stories yet', tone: 'yellow' });
       stories.forEach((s, i) => rows.push({ text: `${i === storyIndex ? '›' : ' '} ${'  '.repeat(Math.min(5, s.depth))}${s.depth ? '↳ ' : ''}${s.title} · ${s.character} · ${s.id}${s.id === current() ? '  (current)' : ''} · ${s.updated.slice(0, 10)}`, tone: i === storyIndex ? 'accent' : 'text', bold: i === storyIndex }));
     } else {
@@ -122,6 +122,7 @@ export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: (
     if (!box.visible) return false;
     key.preventDefault();
     if (key.name === 'escape') close();
+    else if (key.name === 'f6' && onNew) { close(); onNew(); }
     else if (key.name === 'f5') { refreshStories(); if (tab === 'branches') refreshBranches(); draw(); }
     else if (key.name === 'up') { if (tab === 'stories') storyIndex = Math.max(0, storyIndex - 1); else branchIndex = Math.max(0, branchIndex - 1); draw(); }
     else if (key.name === 'down') { if (tab === 'stories') storyIndex = Math.min(Math.max(0, stories.length - 1), storyIndex + 1); else branchIndex = Math.min(Math.max(0, branches.length - 1), branchIndex + 1); draw(); }
