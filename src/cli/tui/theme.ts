@@ -13,7 +13,7 @@ import { RGBA } from '@opentui/core';
 import type { Theme } from './types.ts';
 
 /** ANSI palette slots (the terminal's theme decides the actual colours). */
-const ANSI = { red: 1, green: 2, yellow: 3, blue: 4, magenta: 5, brightBlack: 8 } as const;
+const ANSI = { red: 1, green: 2, yellow: 3, blue: 4, magenta: 5, cyan: 6, brightBlack: 8 } as const;
 
 const text = RGBA.defaultForeground();
 const background = RGBA.defaultBackground();
@@ -27,6 +27,7 @@ export const THEME: Theme = Object.freeze({
   accent: RGBA.fromIndex(ANSI.blue),
   user: RGBA.fromIndex(ANSI.green),
   char: RGBA.fromIndex(ANSI.magenta),
+  speech: RGBA.fromIndex(ANSI.cyan),
   border: RGBA.fromIndex(ANSI.brightBlack),
   focusedBorder: RGBA.fromIndex(ANSI.blue),
   background,
@@ -42,6 +43,7 @@ export const MONO_THEME: Theme = Object.freeze({
   accent: text,
   user: text,
   char: text,
+  speech: text,
   border: text,
   focusedBorder: text,
   background,

@@ -27,6 +27,7 @@ import { CLOSE_QUOTES, lastWords, OPEN_QUOTES, SGR, sideLine, stripAnsi, type Pr
 import type { TurnOptions, TurnView } from '../repl-view.ts';
 import { createSanitizer, sanitize, type Sanitizer } from './sanitize.ts';
 import { appendChunks, chunk, createSgrReader, type SgrReader } from './sgr.ts';
+import { speechColourer } from './speech.ts';
 import type { Names, Theme } from './types.ts';
 
 // ---- the transcript's entries (implemented by transcript.ts) ----------------------------------------
@@ -250,11 +251,16 @@ export function headerChunks(label: string, role: 'user' | 'assistant', theme: T
  * A text as the story shows it: sanitised, *actions* italic. `before`: the text it continues (a
  * continue's addition), whose prose state (inside *…*, inside quotes) the addition starts in.
  */
-export function proseChunks(text: string, theme: Theme, warp: boolean, before?: string): TextChunk[] {
+export function proseChunks(text: string, theme: Theme, warp: boolean, before?: string, colourSpeech = true): TextChunk[] {
   const styler = createChatStyler();
   const reader = createSgrReader(theme);
-  if (before !== undefined) reader.push(styler.seed(sanitize(before, { warp })));
-  return reader.push(styler.push(sanitize(text, { warp })) + styler.end());
+  const speech = colourSpeech ? speechColourer(theme) : null;
+  if (before !== undefined) {
+    const prior = reader.push(styler.seed(sanitize(before, { warp })));
+    speech?.paint(prior);
+  }
+  const chunks = reader.push(styler.push(sanitize(text, { warp })) + styler.end());
+  return speech ? speech.paint(chunks) : chunks;
 }
 
 const dim = (text: string, theme: Theme): TextChunk => chunk(text, theme, { dim: true });
@@ -283,7 +289,7 @@ export function messageChunks(m: MessageView, label: string, look: CardLook): Te
   const marks = look.markers === false ? [] : cardMarkers(m);
   if (marks.length > 0) appendChunks(out, [dim(`${marks.join(' ')} `, theme)]);
   const text = messageText(m);
-  appendChunks(out, text.trim() === '' ? [dim('(no text)', theme)] : proseChunks(text, theme, warp));
+  appendChunks(out, text.trim() === '' ? [dim('(no text)', theme)] : proseChunks(text, theme, warp, undefined, m.role === 'assistant'));
   return out;
 }
 
@@ -307,6 +313,7 @@ class LiveTurn implements TurnView {
   private readonly theme: Theme;
   private readonly prose: ChatStyler = createChatStyler();
   private readonly reader: SgrReader;
+  private readonly speech;
   private readonly clean: Sanitizer;
   private card: Seg | null = null;
   private cur: Seg | null = null;
@@ -335,6 +342,7 @@ class LiveTurn implements TurnView {
   ) {
     this.theme = host.theme;
     this.reader = createSgrReader(host.theme);
+    this.speech = speechColourer(host.theme);
     this.clean = createSanitizer({ warp: host.warp });
   }
 
@@ -439,7 +447,7 @@ class LiveTurn implements TurnView {
       if (last && last.id === messageId) this.origin = last.origin?.node ? last.origin : last;
       // The addition starts in the prose state the text before it ends in.
       const before = this.o.continueFrom;
-      if (before !== undefined) this.reader.push(this.prose.seed(sanitize(before, { warp: this.host.warp })));
+      if (before !== undefined) this.speech.paint(this.reader.push(this.prose.seed(sanitize(before, { warp: this.host.warp }))));
     }
     // Always a block of its own after the `/c` row, as the REPL prints it (T-15): never off-screen.
     const entry = this.host.append({ kind: 'card', chunks: this.placeholder(), gap: true, id: messageId, live: true });
@@ -496,7 +504,7 @@ class LiveTurn implements TurnView {
     // D-55: after a side line the next round's leading "\n" is not shown (the stored answer keeps it);
     // the prose state still sees it, as a card of the stored text does.
     if (this.afterSide && delta.startsWith('\n')) {
-      this.reader.push(this.prose.push('\n'));
+      this.speech.paint(this.reader.push(this.prose.push('\n')));
       delta = delta.slice(1);
     }
     if (delta === '') return;
@@ -506,7 +514,7 @@ class LiveTurn implements TurnView {
     const part = this.textPart;
     const seg = this.textSeg;
     if (!part || !seg) return;
-    appendChunks(part.chunks, this.reader.push(this.prose.push(this.clean.push(delta))));
+    appendChunks(part.chunks, this.speech.paint(this.reader.push(this.prose.push(this.clean.push(delta)))));
     this.streamed = true;
     this.render(seg);
   }
@@ -546,7 +554,7 @@ class LiveTurn implements TurnView {
 
   /** Styled output that may carry held-back asterisks: into the open text line (opened again if a row closed it). */
   private emitHeld(styled: string): void {
-    const chunks = this.reader.push(styled);
+    const chunks = this.speech.paint(this.reader.push(styled));
     if (chunks.length === 0) return;
     this.openText();
     const part = this.textPart;
