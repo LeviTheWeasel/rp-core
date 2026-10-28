@@ -32,9 +32,10 @@ export interface Runtime {
   /**
    * --debug: where a raw provider failure goes (one line, already scrubbed of every known secret).
    * Read at the moment of the failure, so the REPL can route it through its own screen while it runs.
-   * Without --debug the server's own words are never printed (§13).
+   * Without --debug the server's own words are never printed (§13). `call.job`: the failed call is a
+   * background lane pass's (M5b): the REPL holds its line for a pause, as it holds the lane's own lines.
    */
-  debug?: (line: string) => void;
+  debug?: (line: string, call?: { job?: string }) => void;
   /**
    * --keep-requests (D-164; chat, tui, new): every provider request of a turn is kept as JSON under
    * <home>/sessions/<id>.requests/ (EngineOptions.keepRequests).
@@ -97,7 +98,7 @@ export function engineOptions(rt: Runtime): EngineOptions {
   if (rt.debug) {
     const redact = redactor(rt);
     // rt.debug is read when a failure happens (the REPL swaps it while it runs).
-    o.onProviderError = (i) => rt.debug?.(redact(debugLine(i)));
+    o.onProviderError = (i) => rt.debug?.(redact(debugLine(i)), i.job !== undefined ? { job: i.job } : {});
   }
   return o;
 }

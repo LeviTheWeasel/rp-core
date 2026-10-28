@@ -111,12 +111,16 @@ describe('exportCoreBook (--format core)', () => {
     expect(entryOf(view, 'summary:m0000005.0').data.turn_range).toBeUndefined();
   });
 
-  test('attached as a library book, the export seeds the same live typed entries (types, names, aliases, data)', () => {
+  test('attached as a library book, the export seeds the same live typed entries (types, names, aliases, data) and arcs', () => {
     const seed = librarySeed([{ key: 'evening', book }], { enabled: true });
+    const typedSeed = seed.entries.filter((e) => e.type !== null);
     const live = exportScope(view).filter((e) => e.type !== null && e.retired === undefined);
-    expect(seed.entries.map((e) => [e.type, e.name, e.aliases])).toEqual(live.map((e) => [e.type, e.name, e.aliases]));
-    expect(seed.entries.map((e) => strip(e.data))).toEqual(live.map((e) => strip(e.data)));
+    expect(typedSeed.map((e) => [e.type, e.name, e.aliases])).toEqual(live.map((e) => [e.type, e.name, e.aliases]));
+    expect(typedSeed.map((e) => strip(e.data))).toEqual(live.map((e) => strip(e.data)));
     expect(seed.entries.find((e) => e.name === 'Мира')?.featured).toBe(true);
+    // M5b (D-177): the exported arc comes back as a library arc with the same plot and overview.
+    const arcs = seed.entries.filter((e) => e.arc !== undefined);
+    expect(arcs.map((e) => [e.key, e.type, e.arc, e.content])).toEqual([['lib:evening:arc:украденный свет', null, 'Украденный свет', 'Свет маяка украли, и город погрузился во тьму.']]);
   });
 
   test('deterministic: the same view exports the same book', () => {

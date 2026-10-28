@@ -1,0 +1,3 @@
+/memory wait
+/memory show Арсений Кеттер
+/quit

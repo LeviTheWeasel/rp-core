@@ -34,6 +34,12 @@
 // Otherwise nothing changes: no input, the M4 bytes. The lore tools are also offered when a live typed
 // entry was not injected. trace.loreHashes hash the books as loaded, before routing (the lead's ruling
 // I): turning the Compendium on or off is the Compendium's change (trace.compendium), not a book's.
+//
+// M5b (.notes/m5b-decisions.md D-178, G): while the Compendium is on, assemble gets the `{{recap}}`
+// slot's input: the previous request's trace.recap and books (previousRecap: the nearest answer at or
+// before upTo, as freshness finds the last request, D-152), the profile of the narrator's window, and
+// older arc revisions read back from the mem rows (arcRevisionText). The slot's summaries count as in
+// the prompt for the lore tools (D-156). Compendium off: no input, the M5a request.
 
 import { contractText } from '../agents/director/render.ts';
 import type { Route } from './admit.ts';
@@ -45,6 +51,7 @@ import { visibilityAt, visibleCopy } from '../agents/compendium/fresh.ts';
 import { librarySeed, routeBooks } from '../agents/compendium/library.ts';
 import { messageText } from '../agents/compendium/mention.ts';
 import { COMPENDIUM_LIMITS, compendiumProfile, resolveCompendium, type ResolvedCompendiumConfig } from '../agents/compendium/profile.ts';
+import { arcRevisionText, type RecapTrace } from '../agents/compendium/recap.ts';
 import { entryRefs } from '../agents/compendium/refs.ts';
 import { renderBriefParts, renderEntry } from '../agents/compendium/render.ts';
 import { select, WINDOW_MESSAGES } from '../agents/compendium/select.ts';
@@ -55,6 +62,7 @@ import { loadFromLibrary } from '../formats/library.ts';
 import { entryKey, entryLabel, type LoreRunResult, type LoreSource } from '../lore/engine.ts';
 import { assemble, type AssembleInput, type AssembleResult } from '../prompt/assemble.ts';
 import { loreSources, regexNotice } from '../prompt/assemble/lore.ts';
+import { readRecapTrace, type RecapRequest } from '../prompt/assemble/recap.ts';
 import { contextWindow, replyReserve } from '../prompt/budget.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import { subRng } from '../prompt/rng.ts';
@@ -340,13 +348,65 @@ export function compendiumBlockInput(
   return { rev: view.compendium.rev, profile, candidates, limits, minShare: cfg.minShare, inPrompt: new Set(), hidden };
 }
 
-/** D-156: a live typed entry the block did not inject (by ref): search_lore / read_lore can reach it. */
-export function unfiredCompendium(c: CompendiumView, injected: readonly { ref: string }[]): boolean {
+/**
+ * D-156: a live typed entry neither the block injected (by ref) nor the `{{recap}}` slot holds (by key,
+ * M5b: its summaries): search_lore / read_lore can reach it.
+ */
+export function unfiredCompendium(c: CompendiumView, injected: readonly { ref: string }[], inSlot: readonly string[] = []): boolean {
   const live = liveTyped(c);
   if (live.length === 0) return false;
   const done = new Set(injected.map((i) => i.ref));
+  const slot = new Set(inSlot);
   const refs = new Map(entryRefs(c).map((r) => [r.entry.key, r.ref]));
-  return live.some((e) => !done.has(refs.get(e.key) ?? e.key));
+  return live.some((e) => !slot.has(e.key) && !done.has(refs.get(e.key) ?? e.key));
+}
+
+/** What the previous request on the path said of the `{{recap}}` slot and its books. */
+export interface PreviousRecap {
+  recap: RecapTrace;
+  /** Its trace.loreHashes (absent when unreadable). */
+  books?: Record<string, string>;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * D-178: the previous request's trace.recap and books. That request is the nearest assistant message
+ * on the path at or before `upTo`: a reply or a swipe answers U, so the answer before U (a swipe of a
+ * past answer reads its predecessor's, never the head's); a continue extends A, so A's own. Its trace is
+ * the newest `continue` edit's when it has one, else its own (freshness reads the last request so,
+ * D-152). null when there is no such message (a greeting has no trace), `upTo` is not on the path, or
+ * the trace holds no readable recap.
+ */
+export function previousRecap(view: PathView, tree: TreeIndex, upTo: string): PreviousRecap | null {
+  const at = view.path.findIndex((m) => m.id === upTo);
+  for (let i = at; i >= 0; i--) {
+    const m = view.path[i]!;
+    if (m.role !== 'assistant') continue;
+    let trace = tree.msgs.get(m.id)?.trace;
+    for (const e of tree.edits.get(m.id) ?? []) if (e.reason === 'continue' && e.trace) trace = e.trace;
+    const recap = readRecapTrace(trace?.recap);
+    if (recap === null) return null;
+    const books: unknown = trace?.loreHashes;
+    return isRecord(books) && Object.values(books).every((h) => typeof h === 'string') ? { recap, books: books as Record<string, string> } : { recap };
+  }
+  return null;
+}
+
+/**
+ * D-178: AssembleInput.recap while the Compendium is on (undefined while it is off): the previous
+ * request's slot and books, the profile of the narrator's window (as the block's, D-154), and older arc
+ * revisions read back from the session's mem rows.
+ */
+export function recapRequest(view: PathView, tree: TreeIndex, upTo: string, cfg: ResolvedCompendiumConfig, window: number): RecapRequest | undefined {
+  if (!cfg.enabled) return undefined;
+  const prev = previousRecap(view, tree, upTo);
+  return {
+    previous: prev?.recap ?? null,
+    ...(prev?.books !== undefined ? { books: prev.books } : {}),
+    profile: compendiumProfile(cfg.profile, window),
+    revisionText: (key, rev, op) => arcRevisionText(tree.mems, key, rev, op),
+  };
 }
 
 /**
@@ -488,6 +548,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   const withNotes = (books: LoreSource[]): LoreSource[] => (notes ? [{ key: NOTES_BOOK_KEY, book: notes }, ...books] : books);
   const lorebooks = withNotes(routed);
   const block = compendiumBlockInput(view, input.tree, compendium, window, plan.guidance);
+  const recap = recapRequest(view, input.tree, plan.upTo, compendium, window);
 
   const base: AssembleInput = {
     sessionId: input.sessionId,
@@ -515,6 +576,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     ...(plan.config.director?.enabled === true ? { contract: contractText(input.header.cast.persona?.name ?? '') } : {}),
     prefillVsTools: plan.config.narrator.prefillVsTools,
     ...(block !== undefined ? { compendium: block } : {}),
+    ...(recap !== undefined ? { recap } : {}),
   };
   const common = { window, reserve, limits, tokenFactor, view };
 
@@ -529,8 +591,10 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   const sets = input.toolSets ?? BUILTIN_TOOL_SETS;
   const sources = loreSources(input.header.cast, lorebooks);
   const history = a.asm.trace.trimmed !== null;
-  // D-156: the lore tools also reach a live typed entry the block left out (Compendium on).
-  const loreLeft = unfiredLore(sources, a.asm.trace.lore.fired) || (compendium.enabled && unfiredCompendium(view.compendium, a.asm.trace.compendium?.injected ?? []));
+  // D-156: the lore tools also reach a live typed entry the block left out and the slot does not hold (Compendium on).
+  const loreLeft =
+    unfiredLore(sources, a.asm.trace.lore.fired) ||
+    (compendium.enabled && unfiredCompendium(view.compendium, a.asm.trace.compendium?.injected ?? [], a.asm.trace.recap.ids));
   let offered: Tool[] = [...(history ? sets.history() : []), ...(loreLeft ? sets.lore() : [])];
   if (offered.length === 0) return passA();
 

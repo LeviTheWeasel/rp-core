@@ -11,7 +11,7 @@
 //   parents always ends at a root;
 // - a duplicate message id keeps the first message; later duplicates are ignored.
 
-import type { Block, EditEntry, Entry, Generation, MemEntry, MsgEntry } from './entries.ts';
+import type { Block, EditEntry, Entry, Generation, JobEntry, MemEntry, MsgEntry } from './entries.ts';
 
 export interface TreeIndex {
   msgs: Map<string, MsgEntry>;
@@ -41,6 +41,13 @@ export interface TreeIndex {
    * is stale. An un-hide touches nothing.
    */
   touched: Map<string, number>;
+  /**
+   * M5b (.notes/m5b-decisions.md D-171, D-179): the `job` rows of the background lane by task key, each
+   * list in seq order (begin, failed and retry rows; not part of the tree or the version). The lane
+   * reads them for parking (failures since the key's newest `mem` or retry row) and for recovery at
+   * open (a begin with no `mem` row of the key after it and no later `failed`).
+   */
+  jobs: Map<string, JobEntry[]>;
 }
 
 /** Entries are expected in seq order (the log guarantees it); anything else is sorted first. */
@@ -61,6 +68,7 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
   const mems: MemEntry[] = [];
   let lastMemSeq = 0;
   const touched = new Map<string, number>();
+  const jobs = new Map<string, JobEntry[]>();
   const touch = (id: string, seq: number): void => {
     if ((touched.get(id) ?? 0) < seq) touched.set(id, seq);
   };
@@ -103,13 +111,20 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
         mems.push(e);
         lastMemSeq = e.seq;
         break;
+      case 'job': {
+        // Not part of the tree or the version; indexed for the lane (M5b).
+        const list = jobs.get(e.key);
+        if (list) list.push(e);
+        else jobs.set(e.key, [e]);
+        break;
+      }
       default:
-        break; // config, turn, prep, chk, held, end, job: not part of the tree or the version
+        break; // config, turn, prep, chk, held, end: not part of the tree or the version
     }
   }
   // An unknown leaf in a head entry, or an orphan msg, still counts for version: version is a
   // property of the log (the commit guard), not of what the tree could use.
-  return { msgs, children, edits, hidden, head, version, mems, lastMemSeq, touched };
+  return { msgs, children, edits, hidden, head, version, mems, lastMemSeq, touched, jobs };
 }
 
 /** Ids from the root down to `leaf` (inclusive). [] for null. */

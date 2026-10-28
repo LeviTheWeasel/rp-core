@@ -3,6 +3,8 @@
 // TMPDIR points inside the same root, so every directory a test makes under tmpdir() (tmpHome, the
 // CLI and REPL rigs, child processes) goes away with it: /tmp is often a RAM-backed tmpfs, and
 // thousands of leftover homes per run filled it up.
+// RP_CORE_LANE=manual (M5b, the lead's ruling G): engines opened by tests, and CLIs they spawn, never
+// start a Compendium lane task by themselves; the M5b tests opt in (EngineOptions.lane, memoryWait).
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +15,7 @@ const tmp = join(root, 'tmp');
 mkdirSync(tmp);
 process.env.RP_CORE_HOME = root;
 process.env.RP_CORE_TEST = '1';
+process.env.RP_CORE_LANE = 'manual';
 process.env.TMPDIR = tmp;
 
 afterAll(() => {

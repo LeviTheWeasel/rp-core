@@ -20,7 +20,7 @@ const TS = '2026-10-26T12:00:00.000Z';
 const big = (name: string): Record<string, unknown> => ({ name, description: `${name} — ${'очень длинное описание. '.repeat(600)}` });
 const fileRow = (data: Record<string, unknown>) => ({ t: 'mem' as const, ts: TS, key: null, on: null, by: 'user' as const, ops: [{ op: 'file' as const, type: 'character' as const, data }] });
 const noteRow = (title: string, content: string) => ({ t: 'mem' as const, ts: TS, key: null, on: null, by: 'user' as const, ops: [{ op: 'note' as const, title, keys: [], content }] });
-const LARGE = /^! The Compendium entry "Большой" \(C16\) holds \d+ characters.*\(compendium_large_entry\)$/;
+const LARGE = /^! The Compendium entry "Большой" \(C17\) holds \d+ characters.*\(compendium_large_entry\)$/;
 const userTexts = (s: SessionHandle): string[] => s.view().path.filter((m) => m.role === 'user').map(messageText);
 
 /** The lantern export again, its book named `name` (a second world with the same entries); its library id. */
@@ -34,7 +34,7 @@ function copyOfLantern(home: string, name: string): string {
 
 describe('a verb that changes nothing still prints its notices (engine#2)', () => {
   test('a restore of a live entry and a one-line note edit to the same text: "nothing changed", then the notice', async () => {
-    for (const line of ['/memory restore C16', '/memory edit Ключи | | Ключи у Арсения.']) {
+    for (const line of ['/memory restore C17', '/memory edit Ключи | | Ключи у Арсения.']) {
       const { home, book } = lanternHome();
       const id = await seededSession(home, { lorebooks: [book] }, [fileRow(big('Большой')), noteRow('Ключи', 'Ключи у Арсения.')]);
       const r = await replRig(calls([{ text: 'Мира кивает.' }]), { home, sessionId: id });
@@ -94,21 +94,21 @@ describe('/lore add of a book the Compendium reads', () => {
     const { home } = lanternHome();
     const harbor = copyOfLantern(home, 'Harbor');
     const r = await lanternRig(calls(), { home, editor: editorOf('{"name": "Ян"}', (t) => t.replace('"role": "', '"likes": ["чай"], "role": "')) });
-    r.type('/memory new character', '/memory edit Ульяна', '/lore rm lantern', '/lore add lantern', `/lore add ${harbor}`, '/memory list character', '/memory retire C16');
+    r.type('/memory new character', '/memory edit Ульяна', '/lore rm lantern', '/lore add lantern', `/lore add ${harbor}`, '/memory list character', '/memory retire C17');
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    expect(after(out, '/memory new character')).toBe('character C16 "Ян" filed (from the next turn)\n');
+    expect(after(out, '/memory new character')).toBe('character C17 "Ян" filed (from the next turn)\n');
     expect(after(out, '/lore add lantern')).toBe(
-      'lorebook lantern "Lantern" added: 18 entries (from the next turn); its 15 Compendium entries join /memory now, ' +
+      'lorebook lantern "Lantern" added: 18 entries (from the next turn); its 16 Compendium entries join /memory now, ' +
         "and the C<n> of the entries after them change; this session's changes to 1 of them apply again\n",
     );
     expect(after(out, `/lore add ${harbor}`)).toBe(
-      `lorebook ${harbor} "Harbor" added: 18 entries (from the next turn); its 15 Compendium entries join /memory now, and the C<n> of the entries after them change\n`,
+      `lorebook ${harbor} "Harbor" added: 18 entries (from the next turn); its 16 Compendium entries join /memory now, and the C<n> of the entries after them change\n`,
     );
-    expect(after(out, '/memory list character')).toMatch(/^ +C31 Ян( |$)/m);
-    // C16 is the new book's first entry now: the line above is what tells the person so.
-    expect(after(out, '/memory retire C16')).toStartWith('character C16 "Арсений Кеттер" retired');
+    expect(after(out, '/memory list character')).toMatch(/^ +C33 Ян( |$)/m);
+    // C17 is the new book's first entry now: the line above is what tells the person so.
+    expect(after(out, '/memory retire C17')).toStartWith('character C17 "Арсений Кеттер" retired');
   });
 
   test('nothing after the book: no handle changes; a book that replaces another; off: the M2 line alone', async () => {
@@ -122,10 +122,10 @@ describe('/lore add of a book the Compendium reads', () => {
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    expect(after(out, '/lore add lantern')).toBe('lorebook lantern "Lantern" added: 18 entries (from the next turn); its 15 Compendium entries join /memory now\n');
+    expect(after(out, '/lore add lantern')).toBe('lorebook lantern "Lantern" added: 18 entries (from the next turn); its 16 Compendium entries join /memory now\n');
     expect(after(out, `/lore add ${twin}`)).toBe(
       `lorebook ${twin} "Lantern" replaces lantern: same name, and a world is read once by name (18 entries, from the next turn; /lore add lantern brings the old one back); ` +
-        `lantern's 15 Compendium entries leave /memory and ${twin}'s 15 join it now\n`,
+        `lantern's 16 Compendium entries leave /memory and ${twin}'s 16 join it now\n`,
     );
     expect(after(out, `/lore add ${harbor}`)).toBe(`lorebook ${harbor} "Harbor" added: 18 entries (from the next turn)\n`);
   });
@@ -183,7 +183,7 @@ describe('piped input: a /memory new|edit refused before its editor opens takes 
     expect(await r.done).toBe(0);
     const out = r.out();
     expect(after(out, '/memory new character Ульяна')).toBe('/memory new: "Ульяна" is already C3; use /memory edit C3\n');
-    expect(after(out, '/memory new character')).toBe('character C16 "Ян" filed (from the next turn)\n');
+    expect(after(out, '/memory new character')).toBe('character C17 "Ян" filed (from the next turn)\n');
   });
 });
 

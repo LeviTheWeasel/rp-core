@@ -17,6 +17,7 @@ import type {
   TextRenderable,
 } from '@opentui/core';
 import type { DirectorRecord } from '../../agents/director/types.ts';
+import type { MemoryStatus } from '../../engine/api.ts';
 import type { Event } from '../../protocol/events.ts';
 import type { SessionConfig } from '../../session/entries.ts';
 import type { MessageView } from '../../session/view.ts';
@@ -172,6 +173,10 @@ export interface AgentsPaneApi {
   event(ev: Event): void;
   /** Re-read the stored facts at the head (last answer stats, the Director's record, usage totals). */
   refresh(j: Journal, head: string | null, config: SessionConfig, prices: PriceTable): void;
-  /** A different session is shown now: forget the live state. */
-  reset(sessionId: string): void;
+  /**
+   * A different session is shown now: forget the live state. `lane`: its background lane now
+   * (memoryStatus()): the blocks of the pass that runs, waits or is parked (M5b: the lane's events at the
+   * session's open came before the pane).
+   */
+  reset(sessionId: string, lane?: MemoryStatus): void;
 }

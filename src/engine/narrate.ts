@@ -10,7 +10,9 @@
 // The narrator's call and its tool loop (ARCHITECTURE.md §7.1, §8.1, §8.3, §8.8, D-55).
 //
 // One call (streamCall): resolve the connection's key (M1b, D-73), take a place on the connection's
-// origin semaphore (interactive priority), stream, turn every StreamEv into an outcome. Timeouts
+// origin semaphore (interactive priority unless the caller says background, D-172), stream, turn
+// every StreamEv into an outcome. A background call an interactive request preempts ends `stopped`
+// with `preempted` (M5b). Timeouts
 // (first byte, idle) abort a child of the turn signal with a typed reason and come back as
 // ProviderError 'timeout': a timeout is never reported as a Stop. They are measured on bytes, as
 // §8.8 says ("Первый байт … Простой между чанками"): the provider reports every body chunk through
@@ -34,8 +36,8 @@
 // default cap (DEFAULT_TOOL_OUTPUT), `full` text events.
 
 import { createHash } from 'node:crypto';
-import { abortWith, childController, reasonOf, type DelayTimers } from './abort.ts';
-import type { Scheduler } from './sched.ts';
+import { abortWith, childController, linkAbort, reasonOf, type DelayTimers } from './abort.ts';
+import type { Priority, Scheduler } from './sched.ts';
 import type { Connection } from './api.ts';
 import { ProviderError } from '../providers/types.ts';
 import { echoPlaceholders, SAFE_ID, SAFE_NAME } from '../providers/wire.ts';
@@ -99,6 +101,13 @@ export interface CallInput {
   onSlot?(): void;
   /** M5a (D-164, --keep-requests): handed the request right before the provider gets it. */
   keepRequest?(req: ModelRequest): void;
+  /**
+   * M5b (D-172): the semaphore priority; absent = 'interactive'. A background call can be preempted
+   * by an interactive request on its origin (CallResult.preempted).
+   */
+  priority?: Priority;
+  /** M5b (D-172): background only, the session's compendium.idleDelaySec (the local idle gate). */
+  idleDelaySec?: number;
   /** Streamed text / reasoning deltas, in arrival order. */
   onText(delta: string): void;
   onReasoning(delta: string): void;
@@ -128,8 +137,13 @@ export interface CallResult {
   calls: { id: string; name: string; args: string }[];
   /** M3: replay payloads (StreamEv 'replay'), for this round's wire message only (§8.6). */
   replay: Replay[];
-  /** The turn was stopped (user_stop / shutdown) during this call. */
+  /** The turn was stopped (user_stop / shutdown) during this call, or the call was preempted. */
   stopped: boolean;
+  /**
+   * M5b (D-172): an interactive request took this background call's place before its finish; set
+   * with `stopped`. What arrived is partial and is not to be used. Never set on an interactive call.
+   */
+  preempted?: true;
   /** Text or reasoning arrived (or the provider said the failure came after output). */
   output: boolean;
   ms: number;
@@ -181,6 +195,11 @@ export function modelRequest(input: RequestFields, signal: AbortSignal): ModelRe
   }
   if (input.responseSchema !== undefined) req.responseSchema = input.responseSchema;
   return req;
+}
+
+/** A background call's acquire options (D-172): the session's idle delay, when given. */
+function backgroundOpts(input: Pick<CallInput, 'idleDelaySec'>): { idleDelaySec?: number } {
+  return input.idleDelaySec !== undefined ? { idleDelaySec: input.idleDelaySec } : {};
 }
 
 /** A semaphore capacity the scheduler accepts (an integer >= 1). */
@@ -353,11 +372,19 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
 
   // The semaphore: a Stop while queued leaves the queue and ends the call as stopped.
   const sem = input.sched.forOrigin(input.conn.origin, capacityOf(input.caps));
+  const priority = input.priority ?? 'interactive';
   let slot;
   try {
-    slot = await sem.acquire('interactive', input.turnSignal);
+    slot = await sem.acquire(priority, input.turnSignal, priority === 'background' ? backgroundOpts(input) : undefined);
   } catch {
     out.stopped = true;
+    return done();
+  }
+  // D-172: preempted between the grant and here: nothing was sent, the place goes back at once.
+  if (slot.signal.aborted) {
+    slot.release();
+    out.stopped = true;
+    out.preempted = true;
     return done();
   }
   // M4 (D-101): the agent's budget starts now; the wait in the queue is not counted. A throwing
@@ -372,6 +399,8 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
   }
 
   const call = childController(input.turnSignal);
+  // D-172: a preemption aborts the call with TypedAbort('preempted'), like a Stop of this call only.
+  const unlink = linkAbort(call, slot.signal);
   const watch = new ActivityWatch(call, input.timeouts, timers);
 
   let finished = false;
@@ -468,7 +497,16 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
     }
   } finally {
     watch.stop();
+    unlink();
     slot.release();
+  }
+
+  if (!finished && reasonOf(call.signal) === 'preempted') {
+    // D-172: the place went to an interactive request before the finish. Whatever arrived is partial;
+    // a provider that reported the abort as an error is not a provider failure.
+    delete out.error;
+    out.stopped = true;
+    out.preempted = true;
   }
 
   // Index order. At a finish every call is whole (the adapter closes them before it); otherwise a
@@ -548,7 +586,7 @@ export interface RoundCall {
   res: CallResult;
 }
 
-export interface RoundsInput extends Omit<CallInput, 'onText' | 'onReasoning' | 'onUsage' | 'callKey' | 'tools' | 'toolChoice' | 'stop'> {
+export interface RoundsInput extends Omit<CallInput, 'onText' | 'onReasoning' | 'onUsage' | 'callKey' | 'tools' | 'toolChoice' | 'stop' | 'priority' | 'idleDelaySec'> {
   turnId: string;
   /** null: no tools this turn — exactly one call, as in M2 (no stripper, no stop, no core block). */
   tools: TurnTools | null;

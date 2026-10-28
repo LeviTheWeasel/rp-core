@@ -267,7 +267,8 @@ export async function cmdNew(a: NewArgs): Promise<number> {
   const card = resolveCard(a);
   warn(a.io, card.warnings);
 
-  const engine = await Engine.open({ ...a.engine, ...(a.rt ? engineOptions(a.rt) : {}), home: a.home });
+  // M5b (ruling H): without the chat that follows, `new` is a one-shot: its lane is 'manual'.
+  const engine = await Engine.open({ ...a.engine, ...(a.rt ? engineOptions(a.rt) : {}), home: a.home, ...(a.chat ? {} : { lane: 'manual' as const }) });
   let sessionId: string;
   let title: string | undefined;
   /** Set once the REPL owns the engine (runChat closes it when the REPL ends). */

@@ -55,6 +55,10 @@
 // (TurnHost.library) and folds every view with their seed; the Director gets the Compendium's world
 // snapshot while the Compendium is on. With EngineOptions.keepRequests every provider-level request
 // of the turn (narrator rounds, the Director) is kept as JSON under <home>/sessions/<id>.requests/.
+//
+// M5b (.notes/m5b-decisions.md D-171): the kept-request writer is shared with the session's background
+// lane (keepRequestFile), and the session hears when a turn has settled (after its terminal event), so
+// the lane's events never land inside a turn's stream on the bus.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -113,6 +117,11 @@ export interface TurnHost extends Journal {
   firstNotice(code: string): boolean;
   /** The turn is over: the session stops being busy. Called before the terminal event. */
   turnEnded(run: TurnRun): void;
+  /**
+   * M5b: called after the terminal event (the turn's stream has ended), for what follows a turn without
+   * being part of it: the background lane's next look at its work (D-171).
+   */
+  turnSettled?(run: TurnRun): void;
   /** M5a (D-141): the session's books and the Compendium's seed view() was folded with. */
   library(): SessionLibrary;
 }
@@ -127,6 +136,26 @@ export function requestsDir(home: string, sessionId: string): string {
  * request under one call key (a retry, a fallback's round 0) gets `-n` before `.json` (n ≥ 2).
  */
 export const requestFileName = (callKey: string, n = 1): string => `${callKey.replace(/[^A-Za-z0-9._-]/g, '_')}${n > 1 ? `-${n}` : ''}.json`;
+
+/**
+ * D-164: writes one provider-level request as JSON under <home>/sessions/<id>.requests/ (see
+ * TurnRun.keepRequest); shared with the background lane (M5b). Throws when it cannot be written.
+ */
+export function keepRequestFile(home: string, sessionId: string, req: ModelRequest): void {
+  const { signal: _signal, ...rest } = req;
+  const body = { ...rest, messages: rest.messages.map(({ replay: _replay, ...m }) => m) };
+  const dir = requestsDir(home, sessionId);
+  mkdirSync(dir, { recursive: true });
+  const text = `${JSON.stringify(body, null, 2)}\n`;
+  for (let n = 1; ; n++) {
+    try {
+      writeFileSync(join(dir, requestFileName(req.callKey, n)), text, { flag: 'wx' });
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    }
+  }
+}
 
 type Category = string;
 interface Ending {
@@ -248,20 +277,8 @@ export class TurnRun {
    * name moves on to `-2`, `-3`… A failure to write is told once and never touches the turn.
    */
   private keepRequest(req: ModelRequest): void {
-    const { signal: _signal, ...rest } = req;
-    const body = { ...rest, messages: rest.messages.map(({ replay: _replay, ...m }) => m) };
     try {
-      const dir = requestsDir(this.ctx.home, this.host.sessionId);
-      mkdirSync(dir, { recursive: true });
-      const text = `${JSON.stringify(body, null, 2)}\n`;
-      for (let n = 1; ; n++) {
-        try {
-          writeFileSync(join(dir, requestFileName(req.callKey, n)), text, { flag: 'wx' });
-          break;
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        }
-      }
+      keepRequestFile(this.ctx.home, this.host.sessionId, req);
     } catch (e) {
       if (this.host.firstNotice('keep_requests_failed')) {
         this.notice({ level: 'warn', code: 'keep_requests_failed', message: `A request could not be kept (--keep-requests): ${errMessage(e)}` });
@@ -966,5 +983,6 @@ export class TurnRun {
     this.emit(ending.terminal);
     this.queue.end();
     this.resolveResult(ending.outcome);
+    this.host.turnSettled?.(this);
   }
 }

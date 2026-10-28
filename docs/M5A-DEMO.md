@@ -17,6 +17,10 @@ D-169 fix «Это фонарь вашего мужа, Гордея?» brings «
 its facts. Three fixes went in with the demo (§5): two engine rulings it needed, and one help text
 it found.**
 
+*Since M5b the book's `[Arc]` overview is no longer plain lore: it is the Compendium entry C16 and goes
+to the `{{recap}}` slot right after the greeting (D-177, D-178), so Мира is C17; the transcript below is
+the current output.*
+
 The demo runs the real CLI (`bun src/cli/main.ts`) as separate processes in one isolated home:
 `import`, `new`, `chat` with the typed lines piped in, and `import` again. Everything between the
 keyboard and the model is the real code: the codec, the library seed, the fold with its overlays, the
@@ -24,14 +28,14 @@ tree, the selector, the block, the Director's world snapshot, the export. Only t
 (`chat.jsonl`) and the editor (`editor.ts`) are scripted.
 
 Environment: Bun 1.3.14 (`0d9b296a`), Linux 7.0.0-38-generic (x86_64). `bun test test/demo-m5a`:
-9 pass, 0 fail, 101 `expect()` calls; the four CLI runs take 0.85–0.95 s.
+9 pass, 0 fail, 107 `expect()` calls; the four CLI runs take 0.85–0.95 s.
 
 ## What the demo shows
 
 | §15 demo point | Step | What the test asserts |
 |---|---|---|
-| `rp-core import lantern.compendium.json`, `/lore add lantern`, `/memory tree` shows Cast, Places, Narrative… | a, b | The book is saved as `lantern` (18 entries: 16 typed, 1 `[Arc]`); the tree lists the session's part, then the book's with `Cast · 3`, `Places · 3` (Вельмар with two sub-places), `Narrative · 1`…; `/memory list` gives the book's 15 live typed entries the handles C1…C15 |
-| `/memory new character Мира` in `$EDITOR`; «…отдай это Миру…» → `/preview` shows her brief in `[Retrieved World Knowledge]` at depth 1, above the directive | c | One human row (`key:null`, `on:null`) with the editor's JSON; C16; `/trace` picks Мира by mention, as a brief; in `/preview` the block and the directive are the two messages right above the last user message, the block first; the block starts `[Lore: Мира]` and holds her brief, not the full render |
+| `rp-core import lantern.compendium.json`, `/lore add lantern`, `/memory tree` shows Cast, Places, Narrative… | a, b | The book is saved as `lantern` (18 entries: 16 typed, 1 `[Arc]`); the tree lists the session's part, then the book's with `Cast · 3`, `Places · 3` (Вельмар with two sub-places), `Narrative · 2`…; `/memory list` gives the book's 15 live typed entries and its `[Arc]` overview the handles C1…C16 |
+| `/memory new character Мира` in `$EDITOR`; «…отдай это Миру…» → `/preview` shows her brief in `[Retrieved World Knowledge]` at depth 1, above the directive | c | One human row (`key:null`, `on:null`) with the editor's JSON; C17; `/trace` picks Мира by mention, as a brief; in `/preview` the block and the directive are the two messages right above the last user message, the block first (the `{{recap}}` slot with the `[Arc]` overview above them, right after the greeting); the block starts `[Lore: Мира]` and holds her brief, not the full render |
 | `/memory edit` of a library entry: the book file does not change, `/memory show` shows the overlay | d | The book file is byte-identical; the edit row targets `lib:lantern:…e03`; `/memory show` says "an overlay" and prints the new state |
 | A swipe and a rewind leave the person's edits alone; a fork keeps the entry keys | e | `/memory list character` prints the same four rows after the swipe, after the rewind and in the fork; the fork's journal has the same human rows; the engine folds both sessions to the same handles and keys |
 | `/memory export lantern2 --format compendium`, re-import → the same entries | f | The file is `compendium-v1.0.0` with `tree: null`; it imports as `lantern2`; type, name, aliases and data of each entry equal the session's (Мира and the Ульяна overlay) |
@@ -54,7 +58,7 @@ not in the book: the demo creates her.
 
 The scripted connection has an 8 192-token window, so `profile = "auto"` runs lite: at most 6
 entries, and always the brief (§15's «краткую запись»; in the full profile a small entry renders
-whole, D-154). Tools are off on it, so a brief has no `(more: read_lore C16)` tail.
+whole, D-154). Tools are off on it, so a brief has no `(more: read_lore C17)` tail.
 
 ## 2. The run
 
@@ -89,10 +93,10 @@ session s_82a556a3 · Рассказчик · narrator script:default (tools: of
 Рассказчик › Ночь опускается на портовый город. Ян стоит у причала с тяжёлым свёртком в руках: внутри что-то звякает, будто стекло о латунь. Старый лодочник уже отвязывает лодку.
   [greeting 1/1]
 you        › /lore add lantern
-lorebook lantern "Lantern" added: 18 entries (from the next turn); its 15 Compendium entries join /memory now
+lorebook lantern "Lantern" added: 18 entries (from the next turn); its 16 Compendium entries join /memory now
 you        › /memory tree
 World Knowledge (this session) · 0
-Lantern (lib: lantern) · 15
+Lantern (lib: lantern) · 16
   Cast · 3
     Гильдия фонарщиков · 1: C1 Арсений Кеттер
     Соляной суд · 1: C2 Селина Бранд
@@ -111,12 +115,12 @@ Lantern (lib: lantern) · 15
     Notable · 1: C12 Чёрный прилив
   Worldbuilding · 1
     Закон · 1: C13 Право огня
-  Narrative · 1
-    Украденный свет · 1: C14 Фонарь погас
+  Narrative · 2
+    Украденный свет · 2: C16 [Arc] Украденный свет, C14 Фонарь погас
   Bestiary · 1
     Дух · 1: C15 Туманник
 you        › /memory list
-The Compendium of this path: 15 live · /memory show <ref> prints one
+The Compendium of this path: 16 live · /memory show <ref> prints one
 Cast (3)
   C1  Арсений Кеттер (aka Старшина, Арсений) — Старшина Гильдии фонарщиков, сорок лет зажигает огни Вельмара. [lib: lantern] [featured] [1.6k]
   C2  Селина Бранд — Хочет, чтобы свет принадлежал городу. [lib: lantern] [406]
@@ -130,14 +134,16 @@ Narrative (1)
   C14 Фонарь погас — Ночь, когда маяк ослеп. [lib: lantern] [524]
 Bestiary (1)
   C15 Туманник — Тень в тумане, которая боится огня. [lib: lantern] [355]
+Arcs (1)
+  C16 [Arc] Украденный свет — Маяк погас, фонарь пропал вместе со смотрительницей. Гильди… [lib: lantern] [148]
 ```
 
 What it shows:
 
 - **The library seed.** The book's 15 live typed entries are in the Compendium with handles C1–C15,
   numbered before any session entry (D-150). The disabled «Старая пристань» is left out. The
-  `[Arc]` row and the classic «Песня фонарщиков» stay ordinary lore in M5a (D-141), so they are in
-  neither the tree nor the list.
+  classic «Песня фонарщиков» stays ordinary lore (D-141), so it is in neither the tree nor the list;
+  the `[Arc]` row was ordinary lore in M5a too, and since M5b it is the arc entry C16 (D-177).
 - **The derived tree** (D-165): Cast, Places, Items… Narrative, Bestiary, with Bunraku's grouping:
   characters by affiliation (Арсений's `{org}` counts, A.7), places nested under their parent, events
   by plot, threats by severity (the legacy `"moderate"` shows as Notable), worldbuilding and
@@ -148,9 +154,9 @@ What it shows:
 
 ```
 you        › /memory new character Мира
-character C16 "Мира" filed (from the next turn)
+character C17 "Мира" filed (from the next turn)
 you        › /memory show Мира
-C16 Мира · character · character:мира
+C17 Мира · character · character:мира
   aka: Фонарщица
   origin: this session, written by you at journal row 3
 
@@ -173,32 +179,36 @@ you        › — Отдай это Мире, — говорю я лодочн�
 Рассказчик › Лодочник взвешивает свёрток на ладони и долго молчит. — Мире, говоришь? — наконец бурчит он. — Отнесу. К маяку сейчас мало кто ходит.
   [swipe 1/1 · 0.4s · end]   /r swipe  /c continue  /e edit
 you        › /trace
-trace of 95c5ab27 · script:default
-  window 8192 · reserve 2048 · prompt ~1218 tok · 11 messages sent
+trace of 89aa7272 · script:default
+  window 8192 · reserve 2048 · prompt ~1226 tok · 11 messages sent
   trimmed: nothing · prefill: none
   unknown macros: none
-  lore fired: 1 · budget 921 tok
-    ✓ "[Arc] Украденный свет" lantern:00000000-0000-4000-8000-000000000e17 (constant)
+  lore: nothing fired · budget 921 tok
   lore not fired (recomputed from its seed):
     ✗ 1 entry: no-key-match 1
-  compendium: lite · picked 3: C16 "Мира" (mention), C6 "Серый маяк" (mention), C14 "Фонарь погас" (mention) · injected 3: C16 "Мира" brief 115 tok, C6 "Серый маяк" brief 57 tok, C14 "Фонарь погас" brief 112 tok · block 290 tok
+  compendium: lite · picked 3: C17 "Мира" (mention), C6 "Серый маяк" (mention), C14 "Фонарь погас" (mention) · injected 3: C17 "Мира" brief 115 tok, C6 "Серый маяк" brief 57 tok, C14 "Фонарь погас" brief 112 tok · block 290 tok
+  recap: 1 arc: C16 "Украденный свет" rev 0 · boundary ff940e38
   calls: director script:default 0.0s, narrator script:default 0.0s
 you        › /preview
-preview of a swipe (a new answer to 1c8e670c) · script:default
-  window 8192 · reserve 2048 · prompt ~1218 tok (o200k) · 11 messages · nothing was sent
+preview of a swipe (a new answer to f0f0aa47) · script:default
+  window 8192 · reserve 2048 · prompt ~1226 tok (o200k) · 11 messages · nothing was sent
 
 #1 system · main · 42 tok
 Write Рассказчик's next reply in a fictional roleplay chat between Рассказчик and Ян. Stay in character, write vivid prose, and never speak, act or decide for Ян.
 …
-#5 system · lore_after · 53 tok
-Маяк погас, фонарь пропал вместе со смотрительницей. Гильдия ищет его в городе, Соляной суд требует отдать огни городу, а с моря идёт Чёрный прилив.
-…
-#7 system · core:director · 444 tok
+#5 system · persona · 36 tok
+Ян — мальчишка с пристани, посыльный Гильдии фонарщиков. Быстро бегает и всё запоминает.
+
+#6 system · core:director · 444 tok
 ## Story Director Authority - CONTRACTUAL
 …
 
-#8 assistant · history · 57 tok
+#7 assistant · history · 57 tok
 Ночь опускается на портовый город. Ян стоит у причала с тяжёлым свёртком в руках: внутри что-то звякает, будто стекло о латунь. Старый лодочник уже отвязывает лодку.
+
+#8 system · recap · 61 tok
+[Arc] Украденный свет
+Маяк погас, фонарь пропал вместе со смотрительницей. Гильдия ищет его в городе, Соляной суд требует отдать огни городу, а с моря идёт Чёрный прилив.
 
 #9 system · compendium:block · 256 tok
 [Retrieved World Knowledge]
@@ -241,15 +251,14 @@ Character Beats:
 
 prefill: none · max tokens 2048 · samplers: none
 tools: none
-  lore fired: 1 · budget 921 tok
-    ✓ "[Arc] Украденный свет" lantern:00000000-0000-4000-8000-000000000e17 (constant)
+  lore: nothing fired · budget 921 tok
 ```
 
 What it shows:
 
 - **`/memory new` in the editor** (D-160). The REPL opened the editor on a JSON template with the
   name filled in; `editor.ts` saved `mira.character.json`. One human row went to the journal
-  (`by: user`, `key: null`, `on: null`), and Мира became C16, after the book's entries.
+  (`by: user`, `key: null`, `on: null`), and Мира became C17, after the book's entries.
 - **Мира fires by her name in another case.** The message says «Мире» (§15 writes «Миру»; both forms
   stem to `мир`), and the selector picks her by mention (tier 0, D-153). The same message picks
   «Серый маяк» by its alias «маяк», and the book's summary «Фонарь погас» by its RoleCall trigger
@@ -262,8 +271,9 @@ What it shows:
 - `/trace` names every pick and how much it cost. It counts in budget tokens: o200k scaled by the
   model's correction factor, 1.15 before any usage arrives (D-50). `/preview` counts the message in
   plain o200k tokens, so the block is 290 there and 256 here.
-- The `[Arc]` row still fires as ordinary constant lore (#5, `lore_after`). M5b moves it into the
-  `{{recap}}` slot.
+- The `[Arc]` row fired as ordinary constant lore (`lore_after`) in M5a; since M5b it is the
+  `{{recap}}` slot (#8, right after the greeting, ahead of the depth-1 inserts), and `/trace` names it
+  on its `recap:` line.
 
 ### d. `/memory edit` of a library entry: an overlay
 
@@ -293,8 +303,8 @@ C3 Ульяна · character · lib:lantern:00000000-0000-4000-8000-000000000e03
   - Nature: family; Status: past; With: Арсений Кеттер
 you        › /memory tree
 World Knowledge (this session) · 1
-  General · 1: C16 Мира
-Lantern (lib: lantern) · 15
+  General · 1: C17 Мира
+Lantern (lib: lantern) · 16
   Cast · 3
     Гильдия фонарщиков · 1: C1 Арсений Кеттер
     Соляной суд · 1: C2 Селина Бранд
@@ -324,7 +334,7 @@ Cast (4)
   C1  Арсений Кеттер (aka Старшина, Арсений) — Старшина Гильдии фонарщиков, сорок лет зажигает огни Вельмара. [lib: lantern] [featured] [1.6k]
   C2  Селина Бранд — Хочет, чтобы свет принадлежал городу. [lib: lantern] [406]
   C3  Ульяна (aka Смотрительница) — Смотрительница Серого маяка, тридцать зим не пропустившая ни одной ночи. [lib: lantern, edited] [348]
-  C16 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]
+  C17 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]
 you        › /rewind 2
 you        › — Отдай это Мире, — говорю я лодочнику. — Она ждёт у маяка.
 rewound to your message 2: /r asks for a new answer to it; a line you type now follows it as another message of yours (/rewind 1 to replace it instead); the rest stays as a branch (/tails)
@@ -345,9 +355,9 @@ Cast (4)
 The person's rows are not tied to a message (`on: null`), so they apply on every path. The swipe
 made a new answer, the rewind moved the head back to the user message, and the fork (`/fork` at
 message 2) copied the human rows into a new session. Each time `/memory list character` printed the
-same four lines: Ульяна still edited, Мира still C16. The test also opens both sessions with the
+same four lines: Ульяна still edited, Мира still C17. The test also opens both sessions with the
 engine after the CLI exits: `memoryList()` gives the same handles and keys in both
-(`C16 character:мира`, `C3 lib:lantern:…e03`), and the fork's overlay holds the new state. The swipe
+(`C17 character:мира`, `C3 lib:lantern:…e03`), and the fork's overlay holds the new state. The swipe
 reused the Director's plan (`reused`, no Director call, D-104).
 
 ### f. Export as a Compendium file, import it again
@@ -716,7 +726,7 @@ grep -l 'COMPENDIUM CONTEXT' $H/sessions/$id.requests/*director*
   `[compendium]` / `profile = "lite"` to `config.toml` before `rp-core new` to see the brief there.
 - **Tools.** With `tools = "prompted"` the narrator is offered `search_lore` and `read_lore` (the
   book has entries the block did not send, D-156). A brief that leaves part of its entry out then
-  ends with `(more: read_lore C16)`, and the model may look an entry up.
+  ends with `(more: read_lore C17)`, and the model may look an entry up.
 - **The Director.** `/director on` in the script makes it follow the narrator's model. If a plan
   fails, the answer still arrives and the request is still kept; a correction attempt is a second
   file (`…_director_1.json`).

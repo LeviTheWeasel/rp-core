@@ -44,9 +44,18 @@ export function memRows(): MemEntry[] {
 
 export const books = (): LoreSource[] => [lantern()];
 
-/** The PathView at #7 with the lantern seed and `mems` (default memRows()). */
+/**
+ * The PathView at #7 with the lantern seed and `mems` (default memRows()). The person's rows before the
+ * first agent row were written while the chat stood at #4, the rest while it stood at #5 (the filing and
+ * historian rows are #5's), so they apply in seq order: M5b D-184 places each row where it was written
+ * in the story, and at one place the passes come before the person's rows (section K, order#2).
+ */
 export function world(mems: MemEntry[] = memRows(), seed: LibrarySeed = librarySeed(books(), ON)): PathView {
-  const entries: EntryInput[] = chatEntries(TEXTS, mems as unknown as EntryInput[]);
+  const chat = chatEntries(TEXTS);
+  const first = mems.findIndex((m) => m.key !== null);
+  const early = (first < 0 ? [] : mems.slice(0, first)) as unknown as EntryInput[];
+  const late = (first < 0 ? mems : mems.slice(first)) as unknown as EntryInput[];
+  const entries: EntryInput[] = [...chat.slice(0, 4), ...early, ...chat.slice(4, 5), ...late, ...chat.slice(5)];
   return foldView(makeHeader(), seqd(entries), undefined, { library: seed });
 }
 

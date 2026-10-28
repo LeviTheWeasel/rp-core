@@ -20,9 +20,9 @@ const rows = (text: string): string[] => text.split('\n').filter((l) => /^[LC]\d
 describe('search_lore over the Compendium', () => {
   test('a typed session entry: its C<n>, its type as the label, its brief as the snippet', async () => {
     const out = await search('клятва');
-    expect(rows(out.text)).toEqual(['C5 Мира (character): Младшая фонарщица. | Role: ally | Memories: Старая клятва; Спор у маяка — Ульяне можно верить.']);
+    expect(rows(out.text)).toEqual(['C6 Мира (character): Младшая фонарщица. | Role: ally | Memories: Старая клятва; Спор у маяка — Ульяне можно верить.']);
     // An alias is a key: the entry is found by it.
-    expect(rows((await search('Фонарщица')).text)[0]).toStartWith('C5 Мира (character): ');
+    expect(rows((await search('Фонарщица')).text)[0]).toStartWith('C6 Мира (character): ');
   });
 
   test('a library entry is labelled with its type and its book; an overlay too', async () => {
@@ -34,25 +34,28 @@ describe('search_lore over the Compendium', () => {
   });
 
   test('a note and an arc: labelled so, their snippet cut around the match in their own text', async () => {
-    expect(rows((await search('трактирщицы')).text)).toEqual(['C4 Брат (note): Тихон — брат трактирщицы Марты.']);
+    expect(rows((await search('трактирщицы')).text)).toEqual(['C5 Брат (note): Тихон — брат трактирщицы Марты.']);
     const arc = rows((await search('тьму')).text);
-    expect(arc).toEqual(['C6 Украденный свет (arc): Свет маяка украли, и город погрузился во тьму.']);
+    expect(arc).toEqual(['C7 Украденный свет (arc): Свет маяка украли, и город погрузился во тьму.']);
   });
 
   test('a retired entry never appears, and read_lore does not read it', async () => {
     expect((await search('пристань')).text).toMatch(/^No lore or Compendium entry matches\./);
-    expect((await read(['C7'])).text).toBe('"C7": no such handle. Use the handles search_lore gave, like L3 or C2.');
+    expect((await read(['C8'])).text).toBe('"C8": no such handle. Use the handles search_lore gave, like L3 or C2.');
   });
 
   test('a routed typed library entry is a C<n> row only: no L<n> for it, also when the sources were not routed', async () => {
     const routed = rows((await search('свет')).text);
     expect(routed).toContain('C3 Украденный свет (plot, Фонарщики): Status: active');
-    // The book's [Arc] entry stays plain lore (D-141), so it is an L row.
-    expect(routed.filter((l) => l.startsWith('L'))).toEqual(['L1 [Arc] Украденный свет (Фонарщики): About [Arc] Украденный свет.']);
-    // Handed the unrouted book, the tool still lists each typed entry once, as its C<n>.
+    // M5b (D-177): the book's [Arc] entry is seeded as an arc and routed out of the lore, so it is a
+    // C<n> row too (it was plain lore, an L row, in M5a).
+    expect(routed.filter((l) => l.startsWith('L'))).toEqual([]);
+    // M5b (section G): a library arc names its book, as a typed library entry does.
+    expect(routed).toContain('C4 Украденный свет (arc, Фонарщики): About [Arc] Украденный свет.');
+    // Handed the unrouted book, the tool still lists each typed entry and the arc once, as its C<n>.
     const raw = worldCtx(world(), { lore: [lantern()] });
     const all = rows((await search('Ульяна маяк свет песня', raw)).text);
-    expect(all.filter((l) => l.startsWith('L')).map((l) => l.replace(/^L\d+ /, '').split(' (')[0])).toEqual(['Песня фонарщиков', '[Arc] Украденный свет']);
+    expect(all.filter((l) => l.startsWith('L')).map((l) => l.replace(/^L\d+ /, '').split(' (')[0])).toEqual(['Песня фонарщиков']);
     expect(all.filter((l) => / \((character|location|plot), Фонарщики\)/.test(l)).map((l) => l.split(' ')[0])).toEqual(['C1', 'C2', 'C3']);
   });
 
@@ -81,31 +84,33 @@ describe('read_lore over the Compendium', () => {
   test('C<n> reads the full render, with no freshness filter: the memory filed from a visible message is there', async () => {
     const view = world();
     const mira = entryOf(view, 'character:мира');
-    const out = await read(['C5'], worldCtx(view));
-    expect(out.text).toBe(`C5 Мира (character):\n${renderEntry(mira)}`);
+    const out = await read(['C6'], worldCtx(view));
+    expect(out.text).toBe(`C6 Мира (character):\n${renderEntry(mira)}`);
     expect(out.text).toContain('Спор у маяка');
     expect(mira.prov.appended.memories).toEqual([null, idOf(5)]);
   });
 
   test('library entries, overlays, notes, arcs and summaries read whole, in the order asked', async () => {
     const view = world();
-    const out = await read(['C2', 'C1', 'C4', 'C6', 'C8'], worldCtx(view));
+    const out = await read(['C2', 'C1', 'C5', 'C7', 'C9'], worldCtx(view));
     expect(out.text).toStartWith('C2 Серый маяк (location, Фонарщики):\n# Серый маяк\n\nМаяк на мысе.');
     expect(out.text).toContain('\n\nC1 Ульяна (character, Фонарщики):\n# Ульяна\n');
     expect(out.text).toContain('## Dangers\n- обрыв');
-    expect(out.text).toContain('\n\nC4 Брат (note):\n[Memory: Брат]\nТихон — брат трактирщицы Марты.');
-    expect(out.text).toContain('\n\nC6 Украденный свет (arc):\n# [Arc] Украденный свет\n\nСвет маяка украли, и город погрузился во тьму.');
-    expect(out.text).toEndWith('C8 Вечер у маяка (summary):\n# Вечер у маяка\n\nМира и Ульяна говорили о свете.');
+    expect(out.text).toContain('\n\nC5 Брат (note):\n[Memory: Брат]\nТихон — брат трактирщицы Марты.');
+    expect(out.text).toContain('\n\nC7 Украденный свет (arc):\n# [Arc] Украденный свет\n\nСвет маяка украли, и город погрузился во тьму.');
+    expect(out.text).toEndWith('C9 Вечер у маяка (summary):\n# Вечер у маяка\n\nМира и Ульяна говорили о свете.');
     expect(out.summary).toBe('5 read');
+    // M5b (D-177): the book's [Arc] overview reads as an arc too.
+    expect((await read(['C4'], worldCtx(view))).text).toBe('C4 Украденный свет (arc, Фонарщики):\n# [Arc] Украденный свет\n\nAbout [Arc] Украденный свет.');
   });
 
   test('a handle past the view, or of a retired entry, is unknown', async () => {
-    const out = await read(['C99', 'С7', 'C9']);
+    const out = await read(['C99', 'С8', 'C10']);
     expect(out.text).toBe(
       [
         '"C99": no such handle. Use the handles search_lore gave, like L3 or C2.',
-        '"С7": no such handle. Use the handles search_lore gave, like L3 or C2.',
-        `C9 Тихон (character):\n${renderEntry(entryOf(world(), 'character:тихон'))}`,
+        '"С8": no such handle. Use the handles search_lore gave, like L3 or C2.',
+        `C10 Тихон (character):\n${renderEntry(entryOf(world(), 'character:тихон'))}`,
       ].join('\n\n'),
     );
     expect(out.summary).toBe('1 read, 2 unknown');

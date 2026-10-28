@@ -12,6 +12,7 @@
 // adds its note, and the key rows themselves when the left pane does not show them (T-17).
 
 import { directorAt } from '../../agents/director/state.ts';
+import type { MemoryStatus, SessionHandle } from '../../engine/api.ts';
 import type { MessageView } from '../../session/view.ts';
 import type { Trace } from '../../session/entries.ts';
 import type { PriceTable } from '../repl-journal.ts';
@@ -59,6 +60,15 @@ export function answerStatus(m: MessageView, style: Style, trace?: Pick<Trace, '
     if (m.hidden) items.push('hidden');
   }
   return style.dim(`  [${items.join(' · ')}]`);
+}
+
+/** The session's background lane now (memoryStatus), or undefined when it cannot say (a closed session). */
+function laneNow(session: Pick<SessionHandle, 'memoryStatus'>): MemoryStatus | undefined {
+  try {
+    return session.memoryStatus();
+  } catch {
+    return undefined;
+  }
 }
 
 const READY = 'ready · Enter sends · F1 help';
@@ -154,7 +164,8 @@ export class TuiView implements ReplView {
         // showPath cleared the screen: what the Repl said before switching (`forked into …`) stays.
         for (const text of this.said) this.d.transcript.system(text);
         this.greeting = new Set(path.map((m) => m.id));
-        this.d.agents.reset(b.session.id);
+        // M5b: the lane's events at the session's open came before this pane: its state now instead.
+        this.d.agents.reset(b.session.id, laneNow(b.session));
       }
       this.updateModels(b);
     });

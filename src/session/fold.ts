@@ -130,8 +130,8 @@ export function foldView(header: SessionHeader, entries: readonly Entry[], idx?:
     castNames: castNamesOf(header),
     // §5.8: the library seed, then the mem rows bound to this path (or to none), from the index, so a
     // view folded at another leaf (foldViewAt) sees the same entries; staleness reads the path's
-    // positions and the touched seqs (D-143).
-    compendium: foldCompendium(tree.mems, { pathSet, path: pathIds, touched: tree.touched, library: opts?.library }),
+    // positions and the touched seqs (D-143), the story order the messages' seqs (D-184).
+    compendium: foldCompendium(tree.mems, { pathSet, path: pathIds, touched: tree.touched, library: opts?.library, msgs: tree.msgs }),
   };
 }
 

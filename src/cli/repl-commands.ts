@@ -84,6 +84,17 @@ export type Command =
   | { name: 'memory'; action: 'export'; exportName: string; format?: 'core' | 'compendium'; force?: true }
   /** /memory on|off (the lead's ruling after the review): compendium.enabled of this session; entries are kept either way. */
   | { name: 'memory'; action: 'on' | 'off' }
+  /**
+   * M5b (D-180, D-181): the Compendium agents' pass bound to a message — `at` is its /show number (5 or
+   * #5) or its id (a unique prefix) — undone, or queued again; `task` keeps the filing or the historian's.
+   */
+  | { name: 'memory'; action: 'undo' | 'refile'; at: MessageAt; task?: 'file' | 'hist' }
+  /** /memory retry [#n]: the parked tasks (all of them on this path, or those bound to the message) queued again. */
+  | { name: 'memory'; action: 'retry'; at?: MessageAt }
+  /** /memory wait [sec]: until the background lane has nothing left to run (or `sec` passed; at most 24 h). */
+  | { name: 'memory'; action: 'wait'; sec?: number }
+  /** /memory status: the lane's running task, queue, parked tasks and backlog. */
+  | { name: 'memory'; action: 'status' }
   /** /search <query> [before=<n>] (§7.5): the narrator's search_history over this path. */
   | { name: 'search'; query: string; before?: number }
   /** M4 (D-113): /director (= show), /director show|on|off. */
@@ -92,6 +103,9 @@ export type Command =
   | { name: 'quit' }
   /** A §12.4 command that belongs to a later milestone. */
   | { name: 'later'; command: string; when: string };
+
+/** A message a command names: its 1-based position on the active path (as /show numbers it), or its id or a unique prefix. */
+export type MessageAt = { n: number } | { id: string };
 
 export type ParsedLine =
   | { kind: 'empty' }
@@ -142,7 +156,8 @@ export function commandClass(c: Command): CommandClass {
     case 'memory':
       // Rows are written to the journal: refused mid-turn like any other edit (session_busy); an
       // export writes no row but is refused mid-turn too (D-159: one rule for every memory verb).
-      return c.action === 'list' || c.action === 'show' || c.action === 'tree' ? 'read' : 'edit';
+      // /memory wait only waits for the background lane (allowed during a turn: it runs after the answer).
+      return c.action === 'list' || c.action === 'show' || c.action === 'tree' || c.action === 'status' || c.action === 'wait' ? 'read' : 'edit';
     case 'director':
       return c.action === 'show' ? 'read' : 'edit';
     default:
@@ -156,11 +171,8 @@ const LATER: Readonly<Record<string, string>> = {
   impersonate: 'M9 (draft)',
 };
 
-/** §7.4.9 /memory subcommands of the Compendium's later parts: the agents (M5b) and recall (M5c). */
+/** §7.4.9 /memory subcommands of the Compendium's later part: recall (M5c). */
 const MEMORY_LATER: Readonly<Record<string, string>> = {
-  undo: 'M5b (Compendium agents)',
-  refile: 'M5b (Compendium agents)',
-  retry: 'M5b (Compendium agents)',
   recall: 'M5c (recall)',
   profile: 'M5c (recall)',
   mode: 'M5c (recall)',
@@ -328,7 +340,10 @@ const ADD_USAGE = '/memory add <title> | <keys> | <text>, e.g. /memory add Broth
 const EDIT_USAGE = '/memory edit <ref> opens an entry in the editor; a note also takes <ref> <title> | <keys> | <text> (an empty part keeps the old value)';
 const REF_HINT = 'its C<n> as /memory lists it, its key, or its name';
 const EXPORT_USAGE = '/memory export <name> [--format core|compendium] [--force]';
-const SUBCOMMANDS = 'list, show, tree, new, add, edit, retire, restore, export, on, off';
+const SUBCOMMANDS = 'list, show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status';
+const AT_HINT = 'its number as /show prints it (5 or #5) or its id';
+/** /memory wait waits at most this many seconds (24 h): a longer timer would overflow and fire at once. */
+export const MEMORY_WAIT_MAX_SEC = 86_400;
 
 /**
  * The note a command names, then the rest of the line: a quoted ref ("Old lighthouse") may hold
@@ -423,7 +438,38 @@ function parseMemoryExport(arg: string): ParsedLine {
   };
 }
 
-/** /memory [list|show|tree|new|add|edit|retire|restore|export|on|off] (D-161); the agents' and recall's subcommands are 'later'. */
+/** A message as /memory undo|refile|retry name it: `5` or `#5` (its /show number), else a hex id or prefix; null when it is neither. */
+function messageAt(word: string): MessageAt | null {
+  const m = /^#?(\d+)$/.exec(word);
+  if (m) {
+    const n = positive(m[1]!);
+    return n === null ? null : { n };
+  }
+  return /^[0-9a-f]+$/i.test(word) ? { id: word.toLowerCase() } : null;
+}
+
+/** file|filing → 'file', hist|historian → 'hist' (any case), else null. */
+function taskOf(word: string): 'file' | 'hist' | null {
+  const w = word.toLowerCase();
+  return w === 'file' || w === 'filing' ? 'file' : w === 'hist' || w === 'historian' ? 'hist' : null;
+}
+
+/** /memory undo|refile <ref|#n> [file|hist] (D-181). */
+function parseMemoryPass(sub: 'undo' | 'refile', arg: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const words = arg === '' ? [] : arg.split(/\s+/);
+  const usage = `/memory ${sub} <ref|#n> [file|hist]`;
+  if (words.length === 0) return err(`/memory ${sub} needs a message: ${AT_HINT}, then file or hist if you like (${usage})`);
+  if (words.length > 2) return err(`/memory ${sub} takes a message and at most file or hist (${usage})`);
+  const at = messageAt(words[0]!);
+  if (at === null) return err(`/memory ${sub}: "${words[0]}" is not a message (${AT_HINT})`);
+  if (words.length === 1) return { kind: 'command', command: { name: 'memory', action: sub, at } };
+  const task = taskOf(words[1]!);
+  if (task === null) return err(`/memory ${sub}: "${words[1]}" is neither file nor hist (the filing pass or the historian's)`);
+  return { kind: 'command', command: { name: 'memory', action: sub, at, task } };
+}
+
+/** /memory [list|show|tree|new|add|edit|retire|restore|export|on|off|undo|refile|retry|wait|status] (D-161, D-181); recall's are 'later'. */
 function parseMemory(rest: string): ParsedLine {
   const m = /^(\S+)\s*([\s\S]*)$/.exec(rest);
   const sub = m ? m[1]!.toLowerCase() : '';
@@ -490,6 +536,23 @@ function parseMemory(rest: string): ParsedLine {
     case 'off':
       if (arg !== '') return err(`/memory ${sub} takes nothing after it (/memory on sends the Compendium's entries, /memory off stops it)`);
       return cmd({ name: 'memory', action: sub });
+    case 'undo':
+    case 'refile':
+      return parseMemoryPass(sub, arg);
+    case 'retry': {
+      if (arg === '') return cmd({ name: 'memory', action: 'retry' });
+      const at = /\s/.test(arg) ? null : messageAt(arg);
+      if (at === null) return err(`/memory retry takes at most one message: ${AT_HINT} (bare /memory retry retries every parked task)`);
+      return cmd({ name: 'memory', action: 'retry', at });
+    }
+    case 'wait': {
+      if (arg === '') return cmd({ name: 'memory', action: 'wait' });
+      if (!/^\d+(?:\.\d+)?$/.test(arg) || !Number.isFinite(Number(arg))) return err(`/memory wait takes a number of seconds to wait at most, e.g. /memory wait 30 (got "${arg}")`);
+      return cmd({ name: 'memory', action: 'wait', sec: Math.min(Number(arg), MEMORY_WAIT_MAX_SEC) });
+    }
+    case 'status':
+      if (arg !== '') return err('/memory status takes nothing after it');
+      return cmd({ name: 'memory', action: 'status' });
     default: {
       const when = Object.hasOwn(MEMORY_LATER, sub) ? MEMORY_LATER[sub] : undefined;
       if (when !== undefined) return cmd({ name: 'later', command: `memory ${sub}`, when });
@@ -607,7 +670,7 @@ export function resolveBindingArg(
   return { ok: true, value: parts };
 }
 
-/** /help text (the M5a set; later commands are listed with their milestone). */
+/** /help text (the M5b set; later commands are listed with their milestone). */
 export function helpText(): string {
   return [
     'Type to speak. Commands:',
@@ -635,6 +698,11 @@ export function helpText(): string {
     '  /memory retire <ref> [reason], /memory restore <ref>    take an entry out of the story / bring it back',
     '  /memory export <name> [--format core|compendium] [--force]   copy this session\'s entries to a library lorebook or a RoleCall file',
     '  /memory on|off     send the Compendium\'s entries with every reply, or stop sending them (they are kept)',
+    '  /memory undo <ref|#n> [file|hist]   take back what the filing agent (or the historian) wrote from message n',
+    '  /memory refile <ref|#n> [file|hist] file message n again (its new pass replaces the old one, an undo too)',
+    '  /memory retry [#n]  run the parked tasks again (those that failed every attempt), or only message n\'s',
+    '  /memory wait [sec]  wait until the Compendium\'s background work is done (at most sec seconds, up to 24 h)',
+    '  /memory status     the background work: what runs, what waits, what is parked, answers not filed yet',
     '  /director          the Story Director\'s plan: chapter, arcs, seeds, hidden arcs, the last directive',
     '  /director on|off   let the Director plan every reply, or stop it (its plan is kept)',
     '  /probe             how to probe a server; /probe --active [--write] tests the narrator\'s model (a few tiny calls)',
@@ -645,7 +713,7 @@ export function helpText(): string {
     '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',
-    'Later: /memory undo|refile|retry (M5b, the Compendium agents), /memory recall|profile|mode (M5c, recall).',
+    'Later: /memory recall|profile|mode (M5c, recall).',
     'Start a line with // to send text that begins with "/".',
   ].join('\n');
 }

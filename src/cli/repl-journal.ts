@@ -7,7 +7,7 @@
 // (/usage), and the last answer's trace (/trace). Pure functions over (header, entries); repl.ts
 // reads the file with session/log.ts readSessionFile (read-only, no lock).
 
-import type { Entry, Generation, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
+import type { Entry, Generation, JobEntry, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
 import { currentConfig } from '../session/fold.ts';
 import { buildTree, effectiveMessage, swipeSiblings, type TreeIndex } from '../session/tree.ts';
 import type { Usage } from '../providers/types.ts';
@@ -97,7 +97,7 @@ export function resolveMessageId(j: Journal, prefix: string): { ok: true; id: st
 
 /** Calls and tokens of one agent (or the narrator's generations) over a path. */
 export interface UsageCounts {
-  /** Narrator: generations (answers and continue additions with a gen). Other agents: model calls (trace.calls rows, retries included). */
+  /** Narrator: generations (answers and continue additions with a gen). Other agents: model calls (trace.calls rows and the lane rows' `calls`, retries included). */
   calls: number;
   inputTokens: number;
   outputTokens: number;
@@ -148,6 +148,9 @@ function addUsage(sum: UsageCounts, u: Usage | undefined, model: string | undefi
  * call). Cost: the provider-reported figure first, else the price table, else unpriced (never 0, §11).
  * M4 (D-101): every trace.calls row of another agent (the Director) in those traces is counted under
  * its agent and priced by the row's own model; the narrator's numbers come from its gens as before.
+ * M5b (the lead's ruling I): the background lane's calls too — the `calls` rows of the filing and
+ * historian rows (`mem`) and of their failed attempts (`job{failed}`) bound to a message on the path,
+ * an undone or re-run pass's included (its calls were made).
  */
 export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceTable): UsageSummary {
   const sum: UsageSummary = zeroCounts();
@@ -156,8 +159,8 @@ export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceT
     if (!gen || gen.kind !== 'model') return;
     addUsage(sum, gen.usage, gen.connection !== undefined && gen.model !== undefined ? `${gen.connection}:${gen.model}` : undefined, prices);
   };
-  const addCalls = (trace: Trace | undefined): void => {
-    const rows: unknown = trace?.calls;
+  /** trace.calls-shaped rows (a turn's, a lane row's): each under its agent, the narrator's left to its gens. */
+  const addRows = (rows: unknown): void => {
     if (!Array.isArray(rows)) return;
     for (const row of rows as Trace['calls']) {
       if (typeof row !== 'object' || row === null || typeof row.agent !== 'string' || row.agent === 'narrator') continue;
@@ -166,6 +169,7 @@ export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceT
       addUsage(into, row.usage, typeof row.model === 'string' ? row.model : undefined, prices);
     }
   };
+  const addCalls = (trace: Trace | undefined): void => addRows(trace?.calls);
   for (const id of pathIds) {
     const m = j.tree.msgs.get(id);
     add(m?.gen);
@@ -175,6 +179,11 @@ export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceT
       add(e.gen);
       addCalls(e.trace);
     }
+  }
+  const onPath = new Set(pathIds);
+  for (const m of j.tree.mems) if (m.by !== 'user' && m.on !== null && onPath.has(m.on)) addRows(m.calls);
+  for (const rows of j.tree.jobs.values()) {
+    for (const r of rows) if (r.state === 'failed' && onPath.has(r.on)) addRows((r as JobEntry & { calls?: unknown }).calls);
   }
   if (agents.size > 0) sum.agents = Object.fromEntries(agents);
   return sum;

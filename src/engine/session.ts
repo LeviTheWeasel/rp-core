@@ -21,6 +21,14 @@
 // I): the no-op check is merge.ts's bounded comparison; aliases the entry already shows are no change;
 // one name per live entry of a type holds for renames, new aliases and restores (summaries exempt);
 // an export folds with the readable books' seed even while the Compendium is off.
+//
+// M5b (.notes/m5b-decisions.md D-171, D-172, D-180): each open session runs its background lane
+// (lane.ts): created after recovery at open, told after every send, settled turn, edit, hide, head
+// move, config change and lane verb, its origins touched for the scheduler's idle gate, closed first
+// on close(). The lane writes through append() like everything else; its events go on the bus. The
+// verbs memoryUndo (revert rows, after a dry run), memoryRefile and memoryRetry (job retry rows)
+// follow D-159 (session_busy during a turn, changed:false); memoryWait and memoryStatus are allowed
+// during a turn (memoryWait starts nothing while it runs, the lead's ruling I).
 
 import { statSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,6 +51,7 @@ import { librarySeed } from '../agents/compendium/library.ts';
 import { exportCompendiumRows, exportCoreBook, ExportLimitError, replaceFile, writeCompendiumFile } from '../agents/compendium/export.ts';
 import { isNote, noteRefs } from '../agents/compendium/notes.ts';
 import { COMPENDIUM_LIMITS, resolveCompendium } from '../agents/compendium/profile.ts';
+import { RECAP_SRC } from '../agents/compendium/recap.ts';
 import { entryRefs, refOf, resolveEntryRef } from '../agents/compendium/refs.ts';
 import { renderBrief, renderEntry } from '../agents/compendium/render.ts';
 import { deriveTree, type TreeNode } from '../agents/compendium/tree.ts';
@@ -54,16 +63,29 @@ import { libraryDir, saveToLibrary } from '../formats/library.ts';
 import { canonicalId, type ImportWarning } from '../formats/native.ts';
 import { searchHistory, type HistorySearch } from '../tools/builtin/history.ts';
 import { Refusal } from './api.ts';
-import type { CreateSessionInput, MemoryRow, MemoryWrite, PreviewOptions, PreviewResult, RunTurnOptions, SessionHandle, TurnHandle } from './api.ts';
+import type {
+  CreateSessionInput,
+  MemoryLaneWrite,
+  MemoryRow,
+  MemoryStatus,
+  MemoryWrite,
+  PreviewOptions,
+  PreviewResult,
+  RunTurnOptions,
+  SessionHandle,
+  TurnHandle,
+} from './api.ts';
 import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.ts';
 import { effectiveText } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
+import { Lane, taskOn, type LaneHost } from './lane.ts';
 import { firstRoundLast, modelRequest, roundFields } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
 import { buildRequest, compendiumConfigOf, compendiumNotices, loadLibrary, maxTokensFor, type SessionLibrary } from './request.ts';
 import { TurnRun, type EventBody, type TurnHost } from './turn.ts';
 import { traceForSent } from '../prompt/assemble.ts';
 import { loreSources } from '../prompt/assemble/lore.ts';
+import { readRecapTrace } from '../prompt/assemble/recap.ts';
 import { isInsertSrc, type DepthInsert } from '../prompt/depth.ts';
 import { CONTINUE_CUE_SRC, POST_PROCESSING_PLACEHOLDER_SRC } from '../prompt/shape.ts';
 import { counterOf } from './ema.ts';
@@ -149,6 +171,15 @@ const SHAPING_SRCS: ReadonlySet<string> = new Set([POST_PROCESSING_PLACEHOLDER_S
 /** A chat message's source ('history' or 'history:…'), as assemble names it. */
 const isHistorySrc = (src: string): boolean => src === 'history' || src.startsWith('history:');
 
+/** The {{recap}} slot's message source (D-178). */
+const isRecapSrc = (src: string): boolean => src === RECAP_SRC;
+
+/** What the {{recap}} slot held (trace.recap's ids and arc revisions; none recorded reads as empty). */
+function recapHeld(t: Trace): string {
+  const r = readRecapTrace(t.recap);
+  return JSON.stringify([r?.ids ?? [], r?.arcs ?? []]);
+}
+
 /** What the past answer's request was built from, beyond its trace: decided by the caller from the journal. */
 interface PastInputs {
   /** The path messages it was built from (ids, hidden state, text) differ from today's. */
@@ -168,10 +199,12 @@ interface PastInputs {
  * journal: the history (an edit or a hidden message, compared by message id and text, never by the
  * rows: shaping merges history rows with other blocks), the cut of old messages (trace.trimmed), the
  * author's note and other in-chat inserts, the text of the system blocks when neither the preset nor
- * a book explains it, the shaping (rows merged or re-roled with the same parts in the same order:
- * the model's connection or the preset's post-processing), the window and the model. A row is split
- * on '+' into the parts shape() joined. Token counts are compared only when both were counted the
- * same way (an M1 trace counted chars) and the rows line up one to one. Empty when the rebuild matches.
+ * a book explains it, the {{recap}} slot (its message, or what trace.recap says it held) when the
+ * Compendium does not explain it (M5b, the lead's ruling H), the shaping (rows merged or re-roled with
+ * the same parts in the same order: the model's connection or the preset's post-processing), the
+ * window and the model. A row is split on '+' into the parts shape() joined. Token counts are compared
+ * only when both were counted the same way (an M1 trace counted chars) and the rows line up one to
+ * one. Empty when the rebuild matches.
  */
 function sentChanged(past: Trace, now: Trace, inputs: PastInputs): string[] {
   const out: string[] = [];
@@ -186,18 +219,22 @@ function sentChanged(past: Trace, now: Trace, inputs: PastInputs): string[] {
       .join('\u0001');
   // A Compendium block that changed with the Compendium is named by inputsChanged, not as an insert.
   const isInsert = (a: string): boolean => !isHistorySrc(a) && isInsertSrc(a) && !(inputs.compendium && isCompendiumSrc(a));
-  const isBlock = (a: string): boolean => !isHistorySrc(a) && !isInsertSrc(a) && !SHAPING_SRCS.has(a);
+  const isBlock = (a: string): boolean => !isHistorySrc(a) && !isInsertSrc(a) && !SHAPING_SRCS.has(a) && !isRecapSrc(a);
   const shape = (rows: readonly { src: string; role: string }[]): string => rows.map((r) => `${r.src}\u0000${r.role}`).join('\u0001');
   const sameShape = shape(pastRows) === shape(nowRows);
 
   let inserts = atoms(pastRows, isInsert) !== atoms(nowRows, isInsert);
   let blocks = atoms(pastRows, isBlock) !== atoms(nowRows, isBlock);
+  // The slot came, went or holds other summaries or arcs (also when a preset block holds {{recap}}).
+  let recap = atoms(pastRows, isRecapSrc) !== atoms(nowRows, isRecapSrc) || recapHeld(past) !== recapHeld(now);
   if (sameShape && sameCounter) {
     // The rows line up: a row whose count moved changed its text (history rows: the journal decides).
     pastRows.forEach((r, i) => {
       if (r.tok === nowRows[i]!.tok) return;
       const p = parts(r.src);
       if (p.some(isInsert)) inserts = true;
+      // A slot merged with a block: the slot when it is known to have changed, else the block.
+      else if (p.some(isRecapSrc) && (recap || !p.some(isBlock))) recap = true;
       else if (p.some(isBlock)) blocks = true;
     });
   }
@@ -211,6 +248,7 @@ function sentChanged(past: Trace, now: Trace, inputs: PastInputs): string[] {
   if (JSON.stringify(past.trimmed ?? null) !== JSON.stringify(now.trimmed ?? null)) out.push('which old messages the budget leaves out');
   if (inserts) out.push("the author's note or other in-chat inserts");
   if (blocks && !inputs.presetOrBooks) out.push('the text of the system blocks (the card, the persona or the lore that fired)');
+  if (recap && !inputs.compendium) out.push('the {{recap}} slot');
   if (past.window !== now.window || past.reserve !== now.reserve) out.push(`the window (${past.window}/${past.reserve} then, ${now.window}/${now.reserve} now)`);
   if (modelChanged) out.push(`the model (${inputs.model.past} then)`);
   if (shaping) {
@@ -495,12 +533,14 @@ function greetingEntries(ctx: EngineCtx, header: SessionHeader, now: string): En
   return out;
 }
 
-export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
+export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, LaneHost {
   readonly id: string;
   private ver: number;
   /** seq of the newest mem row: mem rows change the Compendium but not the version (§5.8 "Стоимость"). */
   private memSeq: number;
-  private treeCache: { version: number; memSeq: number; idx: TreeIndex } | null = null;
+  /** M5b: seq of the newest job row (TreeIndex.jobs; job rows move neither the version nor memSeq). */
+  private jobSeq = 0;
+  private treeCache: { version: number; memSeq: number; jobSeq: number; idx: TreeIndex } | null = null;
   private viewCache: { version: number; memSeq: number; seed: LibrarySeed; view: PathView } | null = null;
   /** D-141: the books as last loaded, with the key they were loaded under (libraryKey). */
   private libCache: { key: string; lib: SessionLibrary; categories?: ReadonlyMap<string, string> } | null = null;
@@ -517,6 +557,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   private nextSeed: number | null = null;
   private readonly opened: Event[] = [];
   private closing: Promise<void> | null = null;
+  /** M5b (D-171): the session's background lane (filing, the historian). */
+  private readonly lane: Lane;
 
   private constructor(
     private readonly ctx: EngineCtx,
@@ -530,6 +572,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     this.memSeq = tree.lastMemSeq;
     this.config = currentConfig(log.header, entries);
     for (const e of entries) if (e.t === 'turn') this.turnIds.add(e.turn);
+    this.lane = new Lane(ctx, this, ctx.lane);
   }
 
   // ---- construction -----------------------------------------------------------------------------
@@ -565,7 +608,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
       }
     }
     if (!log) throw new Error('could not find a free session id');
-    return new SessionImpl(ctx, log, onClose);
+    const s = new SessionImpl(ctx, log, onClose);
+    s.lane.open();
+    return s;
   }
 
   /** Open an existing session: lock, read, recover (§6.7). */
@@ -590,6 +635,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
         if (ev.type === 'notice') s.noticed.add(ev.code);
         s.openEvent(ev);
       }
+      // M5b (D-171, ruling I): the lane's first look after the turns' recovery (a begin left by a
+      // crash runs again when its key is still owed: the derivation is the lane's recovery).
+      s.lane.open();
     } catch (e) {
       opened.log.close();
       throw e;
@@ -612,6 +660,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const t = (e as { t: EntryKind }).t;
     if (VERSIONED_KINDS.has(t)) this.ver = e.seq;
     else if (t === 'mem') this.memSeq = e.seq;
+    else if (t === 'job') this.jobSeq = e.seq;
     return e;
   }
 
@@ -638,11 +687,12 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   }
 
   tree(): TreeIndex {
-    // Versioned entries change the tree and mem rows its `mems`: (version, memSeq) is a complete key.
+    // Versioned entries change the tree, mem rows its `mems` and job rows its `jobs` (M5b): (version,
+    // memSeq, jobSeq) is a complete key.
     const c = this.treeCache;
-    if (c?.version === this.ver && c.memSeq === this.memSeq) return c.idx;
+    if (c?.version === this.ver && c.memSeq === this.memSeq && c.jobSeq === this.jobSeq) return c.idx;
     const idx = buildTree(this.log.entries());
-    this.treeCache = { version: this.ver, memSeq: this.memSeq, idx };
+    this.treeCache = { version: this.ver, memSeq: this.memSeq, jobSeq: this.jobSeq, idx };
     return idx;
   }
 
@@ -665,6 +715,12 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
 
   turnEnded(run: TurnRun): void {
     if (this.running === run) this.running = null;
+    this.lane.touch();
+  }
+
+  /** M5b: after the turn's terminal event, the lane looks again (a committed answer may be accepted, D-171). */
+  turnSettled(): void {
+    this.lane.poke();
   }
 
   // ---- reading -----------------------------------------------------------------------------------
@@ -704,6 +760,14 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
   // ---- verbs -------------------------------------------------------------------------------------
 
   send(input: { text: string; expectedVersion: number; greetingIndex?: number }): { messageId: string; version: number } {
+    const sent = this.sendLine(input);
+    // The answer before it may be accepted now (filing.wait ≥ 1, D-171).
+    this.lane.poke();
+    return sent;
+  }
+
+  /** send() without the lane's look (submit gives the lane its look once the turn is registered). */
+  private sendLine(input: { text: string; expectedVersion: number; greetingIndex?: number }): { messageId: string; version: number } {
     this.guardWrite(input?.expectedVersion, { held: true });
     if (typeof input.text !== 'string') throw new Refusal('invalid_params', 'text must be a string');
     const idx = this.tree();
@@ -751,6 +815,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const run = new TurnRun(this, this.ctx, plan, entry);
     this.running = run;
     run.emit({ type: 'start', turnId, kind: plan.kind, messageId: msgId, parentId: plan.parent });
+    // D-172: a swipe or a continue is activity on the session's origins (the idle gate).
+    this.lane.touch();
     void run.run();
     return {
       turnId,
@@ -770,8 +836,13 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const onError = checkOnError(input.onError);
     resolvePrimary(this.ctx, this.config);
     resolvePreset(this.ctx, this.config.preset);
-    const sent = this.send({ text: input.text, expectedVersion: input.expectedVersion });
-    return this.runTurn({ kind: 'reply', expectedVersion: sent.version, onError });
+    const sent = this.sendLine({ text: input.text, expectedVersion: input.expectedVersion });
+    // The lane looks once the turn is registered: it starts nothing before the turn settles.
+    try {
+      return this.runTurn({ kind: 'reply', expectedVersion: sent.version, onError });
+    } finally {
+      this.lane.poke();
+    }
   }
 
   stop(turnId?: string): void {
@@ -790,6 +861,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const keep = effectiveMessage(idx, input.messageId).blocks.filter((b) => b.k !== 'text');
     this.verbAppend({ t: 'edit', ts: this.now(), target: input.messageId, reason: 'user', blocks: [...keep, { k: 'text', text: input.text }] });
     this.publish({ type: 'changed', version: this.ver, change: 'edit', id: input.messageId });
+    this.laneActivity();
     return { version: this.ver };
   }
 
@@ -799,6 +871,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     this.mustExist(this.tree(), input.messageId);
     this.verbAppend({ t: 'hide', ts: this.now(), target: input.messageId, hidden: input.hidden });
     this.publish({ type: 'changed', version: this.ver, change: 'hide', id: input.messageId });
+    this.laneActivity();
     return { version: this.ver };
   }
 
@@ -812,6 +885,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     if (leaf === idx.head) return { version: this.ver }; // already there: no line, no new version
     this.verbAppend({ t: 'head', ts: this.now(), leaf });
     this.publish({ type: 'changed', version: this.ver, change: 'head', id: leaf });
+    this.laneActivity();
     return { version: this.ver };
   }
 
@@ -1057,10 +1131,14 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     if (!checked.ok) throw new Refusal('invalid_params', `invalid config: ${checked.why}`);
     this.verbAppend({ t: 'config', ts: this.now(), patch });
     this.config = next;
+    // D-171: the Compendium switched, filing or the historian changed: the lane's work is derived again.
+    this.lane.poke();
   }
 
   close(): Promise<void> {
     this.closing ??= (async () => {
+      // M5b (D-171): the lane first, so nothing it does lands after the log is closed.
+      await this.lane.close();
       const run = this.running;
       if (run) {
         run.stop('shutdown');
@@ -1124,9 +1202,15 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     return { sessionId: this.id, ts: this.now(), ...body } as Event;
   }
 
-  /** A session-level event (no turn): engine.events() only. */
-  private publish(body: EventBody): void {
+  /** A session-level event (no turn): engine.events() only. The lane's events come here too (LaneHost). */
+  publish(body: EventBody): void {
     this.ctx.bus.publish(this.stamp(body));
+  }
+
+  /** D-172: an edit, a hide or a head move is activity on the session's origins, and the lane's work may change (D-171). */
+  private laneActivity(): void {
+    this.lane.touch();
+    this.lane.poke();
   }
 
   /** An event produced while opening: kept for openEvents() and published. */
@@ -1448,6 +1532,118 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     return this.view().compendium;
   }
 
+  // ---- M5b: the lane's verbs (D-180) ----------------------------------------------------------------
+
+  memoryUndo(input: { messageId: string; task?: 'file' | 'hist' }): MemoryLaneWrite {
+    this.guardMemory();
+    const { messageId, task } = this.laneTarget(input, 'memoryUndo');
+    const bound = this.lane.boundKeys(messageId, task);
+    if (bound.length === 0) throw new Refusal('not_found', `no ${task === 'file' ? 'filing' : task === 'hist' ? 'historian' : 'filing or historian'} pass is bound to message ${messageId}`);
+    // Only an applied pass is undone: an undone one is already, a stale one is being written again.
+    const applied = bound.filter((b) => b.state.status === 'applied');
+    if (applied.length === 0) return { keys: [], changed: false };
+    // D-159 dry run: the revert rows folded after the current ones.
+    const ts = this.now();
+    const rowOf = (key: string): EntryInput & { t: 'mem' } => ({ t: 'mem', ts, key: null, on: taskOn(key), by: 'user', ops: [{ op: 'revert', key }] });
+    const tree = this.tree();
+    const view = this.view();
+    const last = this.log.lastSeq();
+    const trial = applied.map((b, i) => ({ ...rowOf(b.key), seq: last + 1 + i }) as MemEntry);
+    const c = foldCompendium([...tree.mems, ...trial], { pathSet: view.pathSet, path: view.path.map((m) => m.id), touched: tree.touched, library: this.library().seed, msgs: tree.msgs, trial: true });
+    const issue = c.issues.find((i) => i.seq > last && i.why !== 'large_entry');
+    if (issue) throw new Refusal('invalid_params', `the pass cannot be undone: the Compendium cannot apply it (${issue.why})`);
+    const before = view.compendium;
+    this.lane.cancel(applied.map((b) => b.key));
+    for (const b of applied) this.verbAppend(rowOf(b.key));
+    // One `reverted` event per entry the undone rows had changed (and that the undo really changes).
+    const after = this.view().compendium;
+    const told = new Set<string>();
+    for (const b of applied) {
+      for (const x of before.effects) {
+        if (x.seq !== b.state.seq || told.has(x.key)) continue;
+        told.add(x.key);
+        const was = before.entries.get(x.key);
+        if (!was || sameEntry(was, after.entries.get(x.key))) continue;
+        this.publish({ type: 'memory', change: 'reverted', ref: x.key, kind: entryKind(was), name: was.name, by: 'user' });
+      }
+    }
+    this.lane.poke();
+    return { keys: applied.map((b) => b.key), changed: true };
+  }
+
+  memoryRefile(input: { messageId: string; task?: 'file' | 'hist' }): MemoryLaneWrite {
+    this.guardMemory();
+    const { messageId, task } = this.laneTarget(input, 'memoryRefile');
+    return this.lane.refile(messageId, task);
+  }
+
+  memoryRetry(input?: { messageId?: string }): MemoryLaneWrite {
+    this.guardMemory();
+    const opts = input ?? {};
+    if (!isObject(opts)) throw new Refusal('invalid_params', 'memoryRetry takes {messageId?}');
+    if (opts.messageId !== undefined) this.laneTarget({ messageId: opts.messageId }, 'memoryRetry');
+    try {
+      return this.lane.retry(opts.messageId);
+    } catch (e) {
+      if (e instanceof SessionLockedError) throw new Refusal('session_locked', `another process took this session over: ${e.message}`);
+      throw e;
+    }
+  }
+
+  memoryWait(input?: { timeoutMs?: number }): Promise<MemoryStatus & { idle: boolean }> {
+    this.assertOpen();
+    const opts = input ?? {};
+    if (!isObject(opts)) throw new Refusal('invalid_params', 'memoryWait takes {timeoutMs?}');
+    const t = opts.timeoutMs;
+    if (t !== undefined && !(typeof t === 'number' && Number.isFinite(t) && t >= 0)) throw new Refusal('invalid_params', 'timeoutMs must be a number of milliseconds, 0 or more');
+    return this.lane.wait(t);
+  }
+
+  memoryStatus(): MemoryStatus {
+    this.assertOpen();
+    return this.lane.status();
+  }
+
+  /** A lane verb's message (on the active path) and task kind; not_found / invalid_params. */
+  private laneTarget(input: unknown, verb: string): { messageId: string; task?: 'file' | 'hist' } {
+    if (!isObject(input)) throw new Refusal('invalid_params', `${verb} needs {messageId}`);
+    const { messageId, task } = input;
+    if (typeof messageId !== 'string') throw new Refusal('invalid_params', 'messageId must be a message id');
+    if (task !== undefined && task !== 'file' && task !== 'hist') throw new Refusal('invalid_params', "task must be 'file' or 'hist'");
+    this.mustExist(this.tree(), messageId);
+    if (!this.view().pathSet.has(messageId)) throw new Refusal('invalid_params', `message ${messageId} is not on the active path`);
+    return { messageId, ...(task !== undefined ? { task } : {}) };
+  }
+
+  /**
+   * M5b (the lead's rulings G and I): one `memory` event per entry an agent row really changed. The keys
+   * its own ops touched (the fold's effects of that seq, in application order), each compared before
+   * and after the write: a merge that changed nothing tells nothing, and an entry a refile re-creates
+   * is 'merged' when it was there before. Then the entries the task key's replaced row (a refile, a
+   * re-write) had changed and this one did not touch: `reverted` for each that is gone or changed.
+   */
+  publishChanges(before: CompendiumView, after: CompendiumView, seq: number, by: 'filing' | 'historian', key: string): void {
+    const first = new Map<string, OpEffect['change']>();
+    for (const x of after.effects) if (x.seq === seq && !first.has(x.key)) first.set(x.key, x.change);
+    for (const [ref, change] of first) {
+      const was = before.entries.get(ref);
+      const now = after.entries.get(ref);
+      if (!now || sameEntry(was, now)) continue;
+      const how = change === 'created' && was !== undefined ? 'merged' : change;
+      this.publish({ type: 'memory', change: how, ref, kind: entryKind(now), name: now.name, by });
+    }
+    const replaced = before.tasks.get(key);
+    if (replaced?.status !== 'applied') return;
+    const told = new Set(first.keys());
+    for (const x of before.effects) {
+      if (x.seq !== replaced.seq || told.has(x.key)) continue;
+      told.add(x.key);
+      const was = before.entries.get(x.key);
+      if (!was || sameEntry(was, after.entries.get(x.key))) continue;
+      this.publish({ type: 'memory', change: 'reverted', ref: x.key, kind: entryKind(was), name: was.name, by });
+    }
+  }
+
   /**
    * The view an export reads (the lead's ruling I): folded with the readable books' seed even while
    * the Compendium is off, since exporting is a data operation, so the session's changes to library
@@ -1514,7 +1710,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal {
     const seed = this.library().seed;
     const seq = this.log.lastSeq() + 1;
     const row: MemEntry = { t: 'mem', seq, ts, key: null, on: null, by: 'user', ops: [op] };
-    const c = foldCompendium([...tree.mems, row], { pathSet: view.pathSet, path: view.path.map((m) => m.id), touched: tree.touched, library: seed });
+    const c = foldCompendium([...tree.mems, row], { pathSet: view.pathSet, path: view.path.map((m) => m.id), touched: tree.touched, library: seed, msgs: tree.msgs, trial: true });
     const issue = c.issues.find((i) => i.seq === seq && i.why !== 'large_entry');
     if (issue) throw new Refusal('invalid_params', refusalWords(issue, op, c, seed));
     const made = rowEffect(c, seq);

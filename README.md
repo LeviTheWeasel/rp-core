@@ -4,12 +4,14 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M5a**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+- **Status:** milestone **M5b**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
   koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
   it notes to remember. The [Compendium](#the-compendium) keeps typed world knowledge (characters,
-  places, items…) from RoleCall exports and from your own entries, and sends the narrator the
-  entries the story names. A Story Director can plan the story before each answer (off by default).
+  places, items…) from RoleCall exports, from your own entries and, in the background, from the
+  story itself: a filing agent writes down what each answer established, and a historian summarises
+  the story for the narrator once old messages leave its prompt. The narrator gets the entries the
+  story names. A Story Director can plan the story before each answer (off by default).
   Besides the line chat there is a [full-screen TUI](#the-full-screen-tui) with the models, the chat
   and the agents side by side.
 - **Built with:** TypeScript on [Bun](https://bun.sh), with four runtime dependencies: `re2js`
@@ -30,7 +32,8 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 8. [Presets and lorebooks](#presets-and-lorebooks)
 9. [Tools and search](#tools-and-search)
 10. [Notes](#notes)
-11. [The Compendium](#the-compendium)
+11. [The Compendium](#the-compendium): [its background agents](#the-background-agents), the
+    [`{{recap}}` slot](#the-recap-slot), [the /memory commands](#the-memory-commands), [the keys](#the-compendium-keys)
 12. [The Story Director](#the-story-director)
 13. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
 14. [Active probes](#active-probes)
@@ -44,7 +47,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
 ## What works today
 
-**Works now (M5a, and the M4.5 TUI):**
+**Works now (M5b, and the M4.5 TUI):**
 
 | Area | What you get |
 |---|---|
@@ -58,17 +61,17 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Tools and search | The narrator looks up earlier messages and lore before it answers, with the server's own tool calling or with calls written as text; `/search` runs the same search for you |
 | Notes | Author's note; your own notes for the narrator (`/memory add`), sent when their keys come up |
 | Compendium | Typed entries of 11 kinds (characters, places, items, events, plots…) from RoleCall Compendium exports and from your own `/memory new`. Each answer, the entries the story names go to the narrator in one block, short or whole by the window; the Director sees the characters and places in the scene. You edit library entries without touching the book, and export the session's entries as a lorebook or a RoleCall file (`/memory`) |
+| Compendium agents | In the background, between turns: a filing agent writes what each accepted answer established into the Compendium, and a historian writes summaries and `[Arc]` overviews of the story. Once old messages leave the prompt, the `{{recap}}` slot gives the narrator those overviews and summaries. Swipes and rewinds take an answer's records off the path, edits file it again; `/memory undo`, `refile`, `retry`, `wait` and `status` steer the work. On a local server they wait until you pause, and a turn never waits for them |
 | Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
-| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, which Compendium entries were picked, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
+| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, which Compendium entries were picked, what the `{{recap}}` slot held, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
 | Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls; `rp-core compact` shrinks a session's journal |
 
 **Not yet:**
 
 | Milestone | Arrives |
 |---|---|
-| M5b | The Compendium's agents: entries filed from the story, summaries and arc overviews by a historian, `/memory undo`, `refile`, `retry` |
-| M5c | Recall: a model picks the entries before the answer; `/memory recall`, `profile`, `mode` |
+| M5c | Recall: a model picks the Compendium entries before each answer (or ahead of it, between turns, on a local server); `/memory recall`, `profile`, `mode`; slot pinning on llama.cpp and latency measurements ([details](#not-in-m5b-yet)) |
 | M6 | `--stdio` for other UIs |
 | M7, M8 | Native Anthropic, then native Gemini |
 
@@ -206,11 +209,11 @@ Your message stays in the session: fix the window, then press `/r` to ask for th
 downloaded again.
 
 ```bash
-printf 'FROM hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M\nPARAMETER num_ctx 16384\n' > /tmp/magmell-16k.Modelfile
+printf 'FROM hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M\nPARAMETER num_ctx 16384\n' > magmell-16k.Modelfile
 ```
 
 ```bash
-ollama create magmell-16k -f /tmp/magmell-16k.Modelfile
+ollama create magmell-16k -f magmell-16k.Modelfile
 ```
 
 This creates `magmell-16k:latest`. Use that id in bindings and in the `[caps]` block.
@@ -327,7 +330,7 @@ Maren Vell › …
 | `/rewind n` | Go back to message *n*; your next message starts a new branch |
 | `/tails` | List the branches that leave the current path; `/goto <id>` switches to one |
 | `/fork [n]` | Copy the story (up to message *n*) into a new session and open it |
-| `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session. `/model director narrator` makes the Director follow the narrator again |
+| `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session. `/model director narrator` makes the Director follow the narrator again; `/model recorder <conn:model>` gives the Compendium's agents a model of their own ([details](#the-recorder-their-model)) |
 | `/note <text> [@depth]`, `/note off` | The author's note, inserted *depth* messages from the end (default 4) |
 | `/think show`, `/think hide` | Show the model's reasoning, or fold it |
 | `/preset [id\|file]` | Show the preset, or switch it ([details](#presets-and-lorebooks)) |
@@ -338,6 +341,7 @@ Maren Vell › …
 | `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, the tool rounds and calls |
 | `/search <words> [before=n]` | Find earlier messages of this path, newest first ([details](#tools-and-search)) |
 | `/memory`, `/memory list\|show\|tree\|new\|edit\|retire\|restore\|export\|on\|off` | The Compendium of this path: list its entries, write and change them, export them ([details](#the-compendium)) |
+| `/memory undo\|refile <n>`, `/memory retry\|wait\|status` | The Compendium's background work: take back or redo what the agents wrote from message *n*, run failed tasks again, wait for the work, see it ([details](#the-memory-commands)) |
 | `/memory add <title> \| <keys> \| <text>` | A note for the narrator ([details](#notes)) |
 | `/director`, `/director show` | The Story Director's plan at this point of the story: chapter, arcs, seeds, hidden arcs, and the last directive in full, as the narrator got it ([details](#the-story-director)) |
 | `/director on`, `/director off` | Let the Director plan every reply from the next turn, or stop it. Its plan is kept |
@@ -529,7 +533,14 @@ still shows on palette grey.
 - **Director.** `off`, `planning…`, `planned`, `reused`, `skipped` or `failed (<code>)`, with the
   time it took and the plan's summary. Then the stored plan: turn, profile, transport, model, the
   last attempts, the chapter, live arcs and seeds due.
-- **Usage** at the bottom: calls, tokens in and out, and the cost (as `/usage`).
+- **Filing** and **Historian**, the [Compendium's agents](#the-background-agents), once they have
+  work: `Filing · queued`, `started`, `done (n)` (n changes written), `preempted` (it gave way to a
+  turn), `failed [<code>]`, `parked [<code>]`, `skipped` (a run that something newer replaced) or
+  `idle`; below it the time of the last pass and its last change, as `memory: created character
+  "Фрол"`. A session that opens with work queued shows it at once. The REPL's `⋯ memory:` lines go
+  to the chat as well.
+- **Usage** at the bottom: calls, tokens in and out, and the cost (as `/usage`), the agents' calls
+  included.
 
 From a live session on Ollama with the Director on:
 
@@ -999,13 +1010,17 @@ ports it; [`PROVENANCE.md`](PROVENANCE.md) lists what was taken and what changed
 [`docs/COMPENDIUM-DEVIATIONS.md`](docs/COMPENDIUM-DEVIATIONS.md) lists every place where it differs
 on purpose, for her review.
 
-M5a is the data and the manual part. Entries come from:
+M5a built the data and the manual part; M5b adds the agents that write by themselves. Entries come
+from:
 
 - **library books:** a RoleCall Compendium export, added to the session like any lorebook;
 - **you:** `/memory new` writes an entry in your editor, `/memory edit` changes one;
-- **your notes** (`/memory add`, see [Notes](#notes)): Compendium entries without a type.
+- **your notes** (`/memory add`, see [Notes](#notes)): Compendium entries without a type;
+- **the agents:** in the background, the filing agent writes what each answer established, and the
+  historian writes summaries and `[Arc]` overviews of the story ([below](#the-background-agents)).
 
-The agents that write entries by themselves come later ([Not in M5a yet](#not-in-m5a-yet)).
+Picking the entries before the answer with a model (recall) is still to come ([Not in M5b
+yet](#not-in-m5b-yet)).
 
 **Notes and typed entries.** `/memory` lists both, with one numbering, but they reach the narrator
 differently. A note is lore: it fires by its keys, 4 messages from the end.
@@ -1036,8 +1051,11 @@ take the file itself and import it on the way.
 - **Typed entries** keep their type, their fields and their aliases. A typed entry with no filled
   field stays plain lore.
 - **The rest.** RoleCall's plain entries become ordinary lorebook entries, with their keys,
-  positions and settings; the warnings name the settings rp-core does not honour. `[Arc]` overviews
-  stay plain lore in M5a (a constant one fires every turn); M5b moves them into a recap.
+  positions and settings; the warnings name the settings rp-core does not honour.
+- **`[Arc]` overviews** become arc entries of the Compendium (`/memory list arc`). They no longer
+  fire as lore every turn: they reach the narrator through the [`{{recap}}` slot](#the-recap-slot)
+  once the story is long enough to be trimmed. With the Compendium off, or the book set `"off"`, they
+  are plain lore again.
 - **The tree.** RoleCall's stored tree is dropped: rp-core builds the tree from the entries
   (`/memory tree`).
 - **The book file never changes.** When you edit one of its entries, the change is kept in the
@@ -1108,8 +1126,10 @@ How much of each entry goes in depends on the profile:
   send, the lorebooks may use 60 % of it, and the block gets what they leave (`min_share = 0.4`). An
   entry that does not fit is cut, and the next one is tried. With nothing picked, the request is the
   same as without the Compendium.
-- **Never held back:** your entries and the books'. The rule that holds back facts the prompt's
-  messages still show applies to what the M5b agents will file from them.
+- **Held back while the prompt still shows them:** what the agents filed from messages that are
+  still in the prompt. A summary waits until its messages are trimmed, an event or a plot until the
+  answer it was filed from is, and a character's memories one by one. `/trace` counts them as
+  `hidden by freshness`. Your entries, the books' and the arcs are never held back.
 
 `/trace` gives the block one line. From the same answer:
 
@@ -1157,6 +1177,280 @@ Key Locations:
 
 Only characters and places go in. Building it calls no model.
 
+### The background agents
+
+Two agents keep the Compendium up to date while you play. Both run in the session's *background
+lane*: one call at a time, between turns, on the [recorder's model](#the-recorder-their-model) (by
+default the narrator's). They are on whenever the Compendium is on.
+
+- **The filing agent** reads an answer once it is *accepted*: once you have answered it with your
+  next message (`[compendium.filing] wait = 1`). It reads the answer and the message it answers, and
+  files what lasts: a new character, place, item, event or plot, or a change to one already there
+  (a memory, a relationship, a new state). A name or alias the Compendium already has extends that
+  entry instead of making a second one, and a book's entry gets an overlay, as with `/memory edit`.
+  The greeting is card material and is never filed; neither are hidden messages.
+- **The historian** comes after filing. Every `interval` player turns (default 20), or once
+  `recap_after` messages (default 24) since its last pass have been trimmed from the narrator's
+  prompt, it reads the messages since its last pass, with a few before them for context. It writes
+  summaries, each under a plot (the plot names the Compendium already has are reused, a book's
+  included), and for each plot its summaries name, an `[Arc]` overview of the whole thread,
+  rewritten each time.
+- **The narrator** gets their work like any other entry: [the block](#what-the-narrator-gets) sends
+  the filed entries the story names, and the [`{{recap}}` slot](#the-recap-slot) sends the overviews
+  and summaries once old messages are trimmed.
+
+From the third live run on Mag-Mell 12B (Ollama, window 16 384, the Director on, the innkeeper
+book, `idle_delay_sec = 2` and the historian every 2 turns for a short run), from the first
+`/memory wait`, after the second message:
+
+```
+you   › /memory wait 300
+⋯ memory: filing #3 → +1: C11 "Марфа"
+the background lane is idle
+you   › Расскажите, кто у вас тут бывает. Кажется, вон тот охотник на меня косится.
+  ⋯ director: planned — no changes
+Марфа › Марфа бросила взгляд через залу на угрюмого бородача в волчьей шапке у дальней стенки, …
+  [swipe 1/1 · 300 tok · 13.9s · length]   /r swipe  /c continue  /e edit
+you   › /memory wait 300
+⋯ memory: filing #5 → +1: C4 "Горелая балка"
+⋯ memory: historian #1–#5 → +4: C12 "Прибытие землемера в трактир", C13 "Размещение в трактире", C14 "Разговор о дороге в Велеград", C15 [Arc] "Пропавший обоз"
+the background lane is idle
+you   › /memory list summary
+Summary entries on this path: 3 live · /memory show <ref> prints one
+Narrative (3)
+  C12 Прибытие землемера в трактир — В трактир «Сонный гусь» заходит уставший землемер Елисей, направляющийся в… [441]
+  C13 Размещение в трактире — Марфа предлагает Елисею комнату на ночь и угощает его ужином. [398]
+  C14 Разговор о дороге в Велеград — Елисей спрашивает Марфу о шуме на дороге и узнаёт, что мост в Горелой балке в… [410]
+```
+
+- **`filing #3`** is the pass of answer #3 (the numbers are `/show`'s). It made C11, Марфа (the
+  card's character, from what the story said about her); the next pass added to the book's «Горелая
+  балка» (C4) as an overlay.
+- **`historian #1–#5`** read messages #1 to #5. Its three summaries went under the book's plot
+  «Пропавший обоз», and C15 is that plot's overview.
+- **`/memory wait`** made the script wait for the passes. Without it each line still prints, at the
+  next pause.
+
+`/memory show` names the pass that wrote an entry. Printed by today's code from that run's journal:
+
+```
+you   › /memory show C14
+C14 Разговор о дороге в Велеград · summary · summary:75a397f6.2
+  origin: this session, filed by the historian from #5 (hist:d3c818d8-75a397f6) at journal row 34
+  covers messages #1 … #5
+
+  # Разговор о дороге в Велеград
+
+  Елисей спрашивает Марфу о шуме на дороге и узнаёт, что мост в Горелой балке в плохом состоянии. Марфа советует быть осторожным и не застревать там на ночь.
+
+  ## Parent plot
+  Пропавший обоз
+…
+you   › /memory show C15
+C15 [Arc] Пропавший обоз · arc · arc:пропавший обоз
+  origin: this session, filed by the historian from #5 (hist:d3c818d8-75a397f6) at journal row 34
+
+  # [Arc] Пропавший обоз
+
+  Елисей, землемер, направляющийся в Велеград, останавливается на ночь в трактире «Сонный гусь». Он беседует с хозяйкой Марфой о цели своей поездки и узнаёт о плохом состоянии моста в Горелой балке, что может осложнить его путь. Марфа советует быть осторожным и не застревать там на ночь.
+```
+
+**Reading what a model sends.** Small models rarely answer in exactly the asked shape, so the
+answer is read leniently: JSON in a fence or among prose, several envelopes, type names in English
+or Russian («персонаж», «место»), camelCase field names. A field that cannot be used is dropped and
+the rest of the item kept; `· 1 skipped` on the line counts them. A memory must say what changed in
+the character (`changed_belief` or `changed_behavior`): a plain record of events is dropped.
+
+### When they run
+
+The lane works out what is owed after every change (an answer, a swipe, an edit, `/memory on`),
+from the story itself, so there is no queue to manage.
+
+- **Never during a turn.** A pass starts only once the turn has ended, and a turn never waits for a
+  pass: the message you send goes to the narrator at once.
+- **On a local server** (`localhost`, a private address, a `.local` name) the narrator and the
+  agents share the server. A pass waits until the server has been quiet for `idle_delay_sec` (8 s)
+  after the last answer, swipe, continue or edit, so a `/r` right after an answer is served first. A
+  message you send while a pass runs takes the server: the pass gives way and runs again at the
+  next pause, and that does not count as a failed attempt. A pass that gives way 3 times in a row
+  goes first at the next pause (notice `memory_starved`).
+- **On a hosted API** a pass starts when the turn has ended and may run beside the next turn while
+  the connection has a free place (`max_in_flight`). When it has none, the turn takes the place and
+  the pass gives way.
+- **Failures** are tried again after a wait (15 s, then 30 s, doubling up to 5 min). After
+  `max_attempts` (3) failed attempts the task is *parked* until `/memory retry`. When two tasks of one
+  agent park in a row, that agent pauses (notice `memory_paused`) until `/memory retry` or the next
+  open. A pass too big for the recorder's window parks at once (`no_room`).
+- **Leaving.** `/quit` does not wait. A pass that was running is dropped and runs again when the
+  session opens next, as after a crash; nothing is written twice (the demo kills a filing call with
+  `kill -9` and checks it). A piped script does not wait for the lane either, unless it says
+  `/memory wait`.
+- **One-shot commands** (`send`, `preview`, `compact`, and `new` without the chat) start no
+  background work. The next `chat` or `tui` on the session files what they left.
+- **`RP_CORE_LANE=manual`** runs the background work only at `/memory wait`. The tests set it; the
+  default is `auto`.
+
+In the live runs the script waited for every pass (`/memory wait`), so no pass raced a turn there.
+Giving way and the idle wait are checked by the tests, with a one-place server and fake clocks
+(`test/lane-m5b`, `test/sched-m5b`; [`docs/M5B-DEMO.md`](docs/M5B-DEMO.md) §3).
+
+### Swipes, rewinds and edits
+
+What an agent writes is bound to the answer it came from (the historian's pass to the last answer it
+read), and the Compendium is read from the current path:
+
+- **A swipe or a rewind** takes the replaced answer's entries and changes off the path. Going back
+  to it (`/[`, `/]`, `/goto`) brings them back, without a call. A swipe before the answer was
+  accepted costs no call at all: the new version is filed once you answer it.
+- **An edit or a hide** of a message a pass read makes that pass stale. The lane files it again from
+  the new text, and the new record replaces the old. Your own `/memory edit` of an agent's entry is
+  kept: it applies after the new pass.
+- **A fork** copies what was filed. Answers that were not yet accepted at the fork point are filed on
+  the fork.
+- **Turning the Compendium on** mid-story (`/memory on`) files only the answers after that moment,
+  and the historian starts there too. A session made with the Compendium on (every new session, and
+  the sessions made since M5a) owes its whole story, so an older one may open with many answers to
+  file (notice `memory_backlog`; `/memory status` counts them). `/memory off` and then `/memory on`
+  starts from that moment instead.
+
+### The `{{recap}}` slot
+
+While the whole story fits the window, the slot is empty and the request is the same as without
+it. Once the oldest messages are trimmed, one system message goes where they were, right after the
+greeting:
+
+1. **`[Arc] <plot>`** and its overview, for the plots of the summaries in the slot (the most recently
+   active first), then the books' `[Arc]` overviews. Together they take at most half of the slot;
+   lite takes at most two, each cut to 1 200 characters. A session arc replaces the book's arc of
+   the same plot.
+2. **`[Summary: <title>]`** and its text, for the summaries that cover the trimmed messages, oldest
+   first. When they do not fit, the oldest go first.
+
+- **Its size:** at most 10 % of the narrator's window, taken from the history's share.
+- **Stable while the cut stays.** Until the cut moves, every request gets the same overviews and
+  summaries, an overview the historian rewrote meanwhile included (as it was), so a server that
+  caches the prompt keeps its cache.
+- **In a preset.** A preset with `{{recap}}` in an enabled block gets the slot there instead.
+- **Compendium off:** no slot.
+
+From the M5b demo on a scripted model with a 4 096-token window, once trimming started
+([`docs/M5B-DEMO.md`](docs/M5B-DEMO.md) §2 g), the `/trace` line and the slot in `/preview`:
+
+```
+  recap: 1 arc: C21 "Украденный свет" rev 41 · 1 summary: C20 "Переправа к маяку" · boundary 1f6b8745
+```
+
+```
+#7 system · recap · 156 tok
+[Arc] Украденный свет
+Маяк погас, Латунный фонарь сняли. Ян привёз Мире стекло фонаря, а лодочник Фрол видел в ночь кражи лодку с солью у Старой пристани: след ведёт к Соляному суду.
+
+[Summary: Переправа к маяку]
+Лодочник Фрол перевёз Яна через гавань к Серому маяку и рассказал, что в ночь кражи у Старой пристани стояла лодка с солью, а один мешок звенел. У маяка Мира развернула свёрток Яна: в нём было целое стекло Латунного фонаря.
+```
+
+`rev 41` is the journal row that wrote the overview; the boundary is the first message kept after
+the cut. The live runs' 16 384-token window held the whole story, so their `/trace` has no `recap:`
+line.
+
+### The recorder, their model
+
+- **By default the narrator's** connection and model, nothing else: not its reply limit or
+  samplers. The agents use temperature 0.3 and up to 4 096 tokens per answer (1 500 on lite).
+- **A model of their own:** `recorder = "conn:model"` under `[roles]` for new sessions, or
+  `/model recorder <conn:model>` in the chat; `/model recorder narrator` makes it follow the narrator
+  again. A cheaper hosted model costs less; a connection to another server keeps the agents off the
+  narrator's place and its prompt cache. Two connections to one server share its places (notice
+  `slots_shared`).
+- **Profile.** By the recorder's window: `profile = "auto"` runs them lite below 24 576 tokens. Lite
+  sends a roster of up to 60 entry names instead of the whole Compendium and asks for at most 6
+  items per pass; full sends the Compendium (up to 30 % of the window) and runs lite when that would
+  not leave 4 096 tokens for the answer.
+- **Time:** `timeout_sec` under `[compendium.filing]`, for both agents: 300 s on a local server and
+  120 s on a remote one.
+- **No connection:** when the recorder's connection is not in `config.toml`, nothing runs, and the
+  notice `recorder_unavailable` says so once.
+
+`/model` lists it. From the third live run's journal:
+
+```
+you   › /model
+  narrator ollama:magmell-16k:latest
+  director narrator (follows)
+  recorder narrator (follows)
+  recall   narrator (follows)
+```
+
+### The language they write in
+
+`language` under `[compendium]` names it for new sessions (`language = "Russian"`): both agents'
+prompts then end with «Write every field value in Russian.» Left blank (the default), rp-core names
+the story's language itself, from the script of the texts the agent reads: Cyrillic is Russian, or
+Ukrainian, Belarusian, Serbian or Macedonian by their own letters; Greek, Japanese, Chinese,
+Korean, Arabic, Hebrew and Thai are named too. A Latin or mixed text names nothing, and the prompt
+says «Write every field value in the language the story is written in.» instead.
+
+Naming it matters on small models. In the second live run the prompts had only that general line:
+Mag-Mell 12B filed in Russian, but its historian wrote English summaries of the Russian story:
+
+```
+⋯ memory: historian #1–#7 → +4: C15 "The Sleeping Goose's History", C16 "The Traveler's Arrival", C17 "The Innkeeper's Tale", C18 [Arc] "The Sleeping Goose's History"
+```
+
+With the language named, the third run's historian wrote «Прибытие землемера в трактир», «Разговор о
+дороге в Велеград» and the arc of «Пропавший обоз» in Russian (above). The narrator's own drift into
+English is the Director's matter ([Language](#language)).
+
+### Lines, the agents pane and notices
+
+Each pass that ended prints one dim line between turns, never inside an answer: at the next pause,
+during `/memory wait`, or above a fresh prompt. The numbers are `/show`'s.
+
+| Line | What it means |
+|---|---|
+| `⋯ memory: filing #3 → +2: C17 "Фрол", C6 "Серый маяк"` | The pass of answer #3 changed these entries, new ones and overlays alike. `· 1 skipped` counts what the reader dropped |
+| `⋯ memory: historian #1–#7 → …` | The historian's pass over messages #1 to #7 |
+| `⋯ memory: filing #13 → nothing to file` | Nothing worth filing; the historian says `nothing to record`, and `nothing new` means what it wrote changed nothing |
+| `⋯ memory: filing #7 gave way to a turn; it runs again at the next pause` | A turn took the server; not a failed attempt |
+| `⋯ memory: filing #7 failed [<code>] (attempt 1 of 3)` | A failed attempt; it is tried again after a wait |
+| `⋯ memory: filing #7 parked after 3 failed attempts: /memory retry #7 runs it again` | Parked until `/memory retry` |
+| `⋯ memory: undo → −2: C17 "Фрол", event "Лодка с солью"` | What `/memory undo` took back |
+
+In the [TUI](#the-agents-pane) the agents pane gives each agent a block. Notices print as yellow
+`! <text> (<code>)` lines, once each:
+
+| Notice | When | Do |
+|---|---|---|
+| `memory_backlog` | More than `every_n + 3` accepted answers wait to be filed: the recorder cannot keep up | A second slot on the server, a separate connection for the recorder (`/model recorder`), or a larger `[compendium.filing] every_n` |
+| `memory_starved` | Turns took the same pass away 3 times in a row; it goes first at the next pause | The same; a server that keeps prompts in a host cache helps too |
+| `memory_paused` | Two tasks of one agent were parked in a row: that agent starts nothing new until `/memory retry` or the next open | Check the recorder's connection and model (`--debug` shows the server's words), then `/memory retry` |
+| `recorder_unavailable` | The recorder's connection is not in `config.toml` (or its model cannot be resolved): nothing runs | `/model recorder <conn:model>` with a connection you have, or add the connection |
+| `filing_classic_conflict` | The filing agent wanted to file a name that a book has as a plain, untyped entry; it was not filed | Give the book's entry a type, or let the name go |
+| `slots_shared` | Two connections the session uses are one server: they share its places, so the background waits for turns there | Nothing; it is information |
+
+### Cost and speed
+
+- **One call per accepted answer**, plus a historian call every `interval` player turns. On a hosted
+  API that is money: `[compendium.filing] every_n = 3` files three answers in one call, and a
+  cheaper [recorder](#the-recorder-their-model) costs less.
+- **On Mag-Mell 12B** (Ollama, window 16 384, lite, tagged answers), over the three live runs, a
+  filing pass took 1.4–11.2 s and a historian pass 6.9–10.5 s, each on its first attempt.
+- **`/usage`** has a row per agent, each priced by its own model. From the third live run, printed
+  by today's code from its journal:
+
+  ```
+  usage on this path:
+    narrator   3 generations · in 10100 tok · out 900 tok · cost unknown
+    director   3 calls · in 13766 tok · out 1278 tok · cost unknown
+    filing     2 calls · in 3373 tok · out 266 tok · cost unknown
+    historian  1 call · in 1363 tok · out 628 tok · cost unknown
+    total      in 28602 tok · out 3072 tok · cost unknown
+  ```
+
+- **On a one-place local server** each pass also pushes the narrator's prompt out of the server's
+  cache, so the next answer processes its prompt again. The idle wait keeps a swipe or a quick reply
+  from paying for that; a second slot or a separate server for the recorder avoids it.
+
 ### The /memory commands
 
 | Command | What it does |
@@ -1171,9 +1465,15 @@ Only characters and places go in. Building it calls no model.
 | `/memory export <name> [--format core\|compendium] [--force]` | Copy this session's entries out ([below](#exporting)) |
 | `/memory on`, `/memory off` | Send the Compendium from the next answer, or stop. The entries are kept either way |
 | `/memory add <title> \| <keys> \| <text>` | A note ([Notes](#notes)) |
+| `/memory undo <n> [file\|hist]` | Take back what the agents wrote from message *n*: the filing pass bound to it and the historian's pass whose window holds it, or only the one you name. Their changes leave from the next turn, and the lane does not repeat an undone pass (an edit of the message later still files it again) |
+| `/memory refile <n> [file\|hist]` | Run the passes bound to message *n* again, or only the one you name; an accepted answer that was never filed gets its filing pass. The new pass replaces the old one, an undo too. A refile lasts while the session is open |
+| `/memory retry [n]` | Run the parked tasks again (those that failed every attempt), or only message *n*'s. It also wakes a paused agent |
+| `/memory wait [sec]` | Wait until the background work is done, at most *sec* seconds (up to 24 h). Ctrl+C stops the waiting, not the work |
+| `/memory status` | The background work: what runs, what is queued, held or parked, and how many accepted answers are not filed yet |
 
 `<ref>` is the entry's handle (`C16`), its key (`character:мира`), or a name or alias only one entry
-has. For example:
+has. `<n>` is a message: its number as `/show` prints it (`5` or `#5`), or its id. `undo`, `refile`
+and `retry` are refused while an answer is being written. For example:
 
 ```
 /memory list character
@@ -1182,7 +1482,38 @@ has. For example:
 /memory edit Ульяна
 /memory retire C2 уехала из города
 /memory export lantern2 --format compendium
+/memory undo 9
+/memory refile 9 file
+/memory wait 60
 ```
+
+An undo and a refile from the second live run (Mag-Mell 12B). The second call filed less than the
+first: the agents run at temperature 0.3, so a refile can come out differently.
+
+```
+you   › /memory wait 300
+⋯ memory: filing #9 → +2: C2 "Сыч", C19 "Происшествия на дороге" · 1 skipped
+the background lane is idle
+you   › /memory undo 9
+undone: filing #9; what it wrote leaves the Compendium from the next turn (/memory refile #9 file runs it again)
+⋯ memory: undo → −2: C2 "Сыч", event "Происшествия на дороге"
+you   › /memory refile 9
+filing #9 queued again (/memory wait waits for it)
+you   › /memory wait 300
+⋯ memory: filing #9 → +1: C2 "Сыч"
+the background lane is idle
+you   › /memory status
+the Compendium's background lane is idle: nothing queued, nothing parked
+```
+
+- **`/memory status`** while work is waiting starts with the counts, as `the Compendium's background
+  lane: 1 running, 2 queued, 1 parked · 3 answers not filed yet`, then one line for the running pass
+  (with ` · waiting for a place on the server` while it waits for the server), the queued ones, the
+  held ones (their agent is off for this session) and each parked one with the `/memory retry` that
+  runs it again. `blocked:` or `paused:` under the first line says why nothing can start.
+- **`/memory wait`** prints the passes as they end, then `the background lane is idle` (`: nothing
+  to do` when nothing ran), with what is parked or not filed yet; after *sec* seconds it says what
+  still runs.
 
 `/memory list` right after adding the book `lantern` (from the demo):
 
@@ -1226,7 +1557,8 @@ are none).
 - **Saved in the session.** Every change is one line in the journal, and shows from the next turn.
   A change is refused while an answer is being written.
 - **On every branch.** Your entries and edits belong to no message: a swipe or a rewind keeps them,
-  and a fork copies them with the same keys.
+  and a fork copies them with the same keys. What the agents wrote belongs to its answer
+  ([Swipes, rewinds and edits](#swipes-rewinds-and-edits)).
 
 ### Writing entries in the editor
 
@@ -1307,37 +1639,71 @@ Imported again, that file gives the same types, names, aliases and fields.
 
 ### Turning it on and off
 
-- **New sessions** have the Compendium on. Sessions made before M5a have it off: `/memory on` turns
-  it on, and `/memory` says when it is off.
-- **`/memory off`** keeps every entry and stops the block and the Director's snapshot. A book's
-  typed entries are then sent as plain lore again, with their text from the file. Notes are sent
-  either way. While it is off, `/memory new` refuses a name that a book's entry of that type has:
-  turn the Compendium on and edit that entry instead.
+- **New sessions** have the Compendium on, and with it the background agents, on the narrator's
+  model unless you [bind a recorder](#the-recorder-their-model). Sessions made before M5a have it
+  off: `/memory on` turns it on, and `/memory` says when it is off.
+- **`/memory off`** keeps every entry and stops the block, the `{{recap}}` slot, the Director's
+  snapshot and the background agents. A book's typed entries and `[Arc]` overviews are then sent as
+  plain lore again, with their text from the file. Notes are sent either way. While it is off,
+  `/memory new` refuses a name that a book's entry of that type has: turn the Compendium on and edit
+  that entry instead.
+- **`/memory on`** later files the answers from then on, not the ones in between
+  ([Swipes, rewinds and edits](#swipes-rewinds-and-edits)).
+- **One agent only:** `enabled = false` under `[compendium.filing]` stops filing, `interval = 0`
+  under `[compendium.historian]` stops the historian (new sessions).
 - **One book as a plain lorebook:** set it `"off"` under `[compendium.books]` (new sessions).
 
 ### The [compendium] keys
 
 `[compendium]` in `config.toml` sets new sessions only: a session keeps the values it was created
-with, as with `[director]`. M5a reads these:
+with, as with `[director]`. M5b reads these:
 
 | Key | Default | What it does |
 |---|---|---|
-| `enabled` | `true` | Use the Compendium; `/memory on` and `/memory off` switch a session |
-| `profile` | `"auto"` | `auto`, `full` or `lite` ([above](#what-the-narrator-gets)) |
+| `enabled` | `true` | Use the Compendium, its agents included; `/memory on` and `/memory off` switch a session |
+| `profile` | `"auto"` | `auto`, `full` or `lite`: for the block by the narrator's window ([above](#what-the-narrator-gets)), for the agents by the recorder's ([details](#the-recorder-their-model)) |
 | `min_share` | `0.4` | The part of the lore budget kept for the block when it has something to send, 0–1 |
+| `language` | `""` | The language the agents write in, up to 80 characters; blank: the story's, named from its script ([details](#the-language-they-write-in)) |
+| `guidance` | `""` | Your standing instructions to the filing agent and the historian, up to 4 000 characters. They cannot widen what the agents may write |
+| `max_attempts` | `3` | Failed attempts (1–10) before a task is parked until `/memory retry` |
+| `idle_delay_sec` | `8` | On a local server: how long (0–60 s) it must be quiet after an answer, a swipe or an edit before a background call starts ([details](#when-they-run)) |
 | `[compendium.books]` | every book `"read"` | `<library id> = "read"` or `"off"`; an `"off"` book is a plain lorebook |
+
+`[compendium.filing]`, the filing agent:
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `true` | File answers |
+| `wait` | `1` | How many of your messages (0–5) must follow an answer before it is filed; `0` files it as soon as it is written, also before a swipe |
+| `every_n` | `1` | Accepted answers (1–10) per filing call; a group waits until it is full |
+| `allow` | every type but `summary` | The types it may write, e.g. `["character", "location", "item"]`. Summaries are the historian's |
+| `timeout_sec` | 300 local, 120 remote | One call's time (1–3600 s), the corrective pass and retries included; the historian's too |
+
+`[compendium.historian]`:
+
+| Key | Default | What it does |
+|---|---|---|
+| `interval` | `20` | Player turns (0–100) between its passes; `0` turns it off |
+| `recap_after` | `24` | It also runs once this many messages (1–1000) after its last pass were trimmed from the narrator's prompt |
+| `overlap` | 10 full, 6 lite | Messages (1–100) of the part it already summarised that it reads again for context |
 
 ```toml
 [compendium]
 profile = "lite"
+language = "Russian"
 
 [compendium.books]
 harbor = "off"
+
+[compendium.filing]
+every_n = 2
+
+[compendium.historian]
+interval = 10
 ```
 
-The other keys (`language`, `guidance`, `max_attempts`, `idle_delay_sec`, and the tables
-`[compendium.recall]`, `[compendium.filing]` and `[compendium.historian]`) are checked, so a typo is
-still an error, but nothing uses them yet: they are for the agents (M5b) and recall (M5c).
+The `[compendium.recall]` table is checked, so a typo is still an error, but nothing uses it yet:
+it is for recall (M5c), as is the `recall` role.
 
 ### Keeping the requests
 
@@ -1349,23 +1715,31 @@ file:
 ```
 
 In the live run, one answer with the Director on left `t_89099cd6_director_0.json` and
-`t_89099cd6_narrator_0.json`; its swipe reused the plan and left only a narrator file. A call key
-that comes again (a retry, a fallback) gets `-2`, `-3`. The file is the engine's request (messages,
+`t_89099cd6_narrator_0.json`; its swipe reused the plan and left only a narrator file. The
+background agents' requests are kept too, by their job: the third M5b live run left
+`j_2dbb27cd_filing_0.json` and `j_8b2fcecd_historian_0.json` among them. A call key that comes again
+(a retry, a fallback) gets `-2`, `-3`. The file is the engine's request (messages,
 tools, samplers), not the HTTP body (`/preview --wire` shows that), and never holds headers or keys.
 It holds your story, so keep it where you keep sessions. Off by default; `send` and `preview` refuse
 the flag.
 
-### Not in M5a yet
+### Not in M5b yet
 
-- **Filing (M5b):** agents that read each answer and write entries by themselves, with `/memory
-  undo`, `refile` and `retry`. Until then only you write entries.
-- **The historian (M5b):** summaries of the story as old messages leave the prompt, and arc
-  overviews in a `{{recap}}` slot. Until then `[Arc]` entries are plain lore.
-- **Recall (M5c):** a model that picks the entries before the answer, with `/memory recall`,
-  `profile` and `mode`.
+M5c, the last part of the Compendium, is **recall**:
 
-Those commands already answer, with the milestone they come in. The demo of this milestone, step by
-step: [`docs/M5A-DEMO.md`](docs/M5A-DEMO.md).
+- **A model picks the entries.** Today the block holds the entries the story names, found by their
+  words. Recall asks a model which entries the next answer needs, from an index of the Compendium
+  (its tree on full, a short list found by words on lite). On a local server it can run ahead, between
+  turns, so the answer does not wait for it; without a model the word match stays (`lexical`).
+- **Its commands and keys:** `/memory recall`, `profile` and `mode`, the `[compendium.recall]` table
+  and the `recall` role (`/model recall`). The commands already answer that they come with M5c.
+- **Local servers:** pinning the narrator and the agents to their own slots on llama.cpp
+  (`id_slot`), warnings about Ollama and LM Studio settings that make the server reload or swap the
+  model, and
+  `rp-core bench ttft` to measure the time to the first token.
+
+The demos of the Compendium, step by step: [`docs/M5A-DEMO.md`](docs/M5A-DEMO.md) (the data and the
+manual part) and [`docs/M5B-DEMO.md`](docs/M5B-DEMO.md) (the agents and the slot).
 
 ## The Story Director
 
@@ -1597,8 +1971,11 @@ sent: `failed (no_room)`, with a notice once per session.
 
 The directive and the contract are in English. The contract tells the narrator to write in the
 story's own language. Small models may still drift: in the live run Mag-Mell 12B kept a Russian story
-in Russian in 5 of 6 answers and switched to English in the middle of one. `/r` asks again; `/director
-off` removes the English directive.
+in Russian in 5 of 6 answers and switched to English in the middle of one. In the first M5b live run
+(the same model, the Director on) it mixed English and Spanish into its third answer and wrote the
+fourth and fifth in English («Марфа испуганно перекрестилась и шепотом начала свой story: " Months
+ago, …»). `/r` asks again; `/director off` removes the English directive. The Compendium's agents
+are told the story's language separately ([details](#the-language-they-write-in)).
 
 ### The [director] keys
 
@@ -1741,10 +2118,10 @@ the round trip.
 | Table | Holds |
 |---|---|
 | `[connections.<name>]` | One per server. Fields: `dialect` (`"openai-chat"`), `base_url`, `key_env`, `key_cmd`, `max_in_flight` (1–64), `local` (overrides the guess from the URL), `headers` (header name → *name of the env variable* holding its value), `extra_body` (fields added to every request; `model`, `messages`, `stream`, `tools`, `tool_choice` are protected), `exclude_body`. Names may hold letters, digits, `_` and `-`, never `:` |
-| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), and `recorder`/`recall` (M5b, M5c; they may say `"narrator"`). A session keeps its own copy; `/model` changes it there |
+| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), `recorder` (the Compendium's agents; unset or `"narrator"` likewise; see [The recorder](#the-recorder-their-model)) and `recall` (M5c; it may say `"narrator"` or `"recorder"`). A session keeps its own copy; `/model` changes it there |
 | `[narrator]` | `max_rounds` (rounds of lookups per answer, 1–8, default 4; see [Rounds](#rounds)) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
 | `[director]` | The Story Director for new sessions: `enabled` (default `false`), `profile` (`"auto"`, `"full"`, `"lite"`), `on_swipe` (`"reuse"`, `"replan"`), `instructions` (up to 2 000 characters), `style` (a personality, default `"the-balanced"`), `creativity` (`"subtle"`, `"moderate"`, `"dramatic"`), `timeout_sec` (1–3600); see [The \[director\] keys](#the-director-keys) |
-| `[compendium]` | The Compendium for new sessions: `enabled` (default `true`), `profile` (`"auto"`, `"full"`, `"lite"`), `min_share` (0–1, default 0.4) and `[compendium.books]` (`<library id> = "read"` or `"off"`). The other keys and the `[compendium.recall]`, `[compendium.filing]` and `[compendium.historian]` tables are checked and kept for M5b and M5c; see [The \[compendium\] keys](#the-compendium-keys) |
+| `[compendium]` | The Compendium for new sessions: `enabled` (default `true`), `profile` (`"auto"`, `"full"`, `"lite"`), `min_share` (0–1, default 0.4), `language`, `guidance`, `max_attempts` (default 3), `idle_delay_sec` (default 8) and `[compendium.books]` (`<library id> = "read"` or `"off"`); the agents' tables `[compendium.filing]` (`enabled`, `wait`, `every_n`, `allow`, `timeout_sec`) and `[compendium.historian]` (`interval`, `recap_after`, `overlap`). `[compendium.recall]` is checked and kept for M5c; see [The \[compendium\] keys](#the-compendium-keys) |
 | `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, … Override only after checking (`rp-core probe` shows the current values) |
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
 
@@ -1780,7 +2157,11 @@ rp-core send "$id" "Hello there"
 - **The Director** on a session that has it on: `send` prints its line on stderr like a lookup
   (`⋯ director: planned — seeds +1 · chapter 1`, `reused`, `failed (<code>)`); with `--json` these are
   `director` events with `status` `planning`, `planned`, `reused` or `failed` (the code in `reason`).
-- **Piped input** to `chat` works as a script: each line waits for the previous answer.
+- **The Compendium's agents** do not run in `send`, `preview` or `compact`: a one-shot command never
+  starts work it cannot finish. The next `rp-core chat` or `tui` on the session files what is owed.
+- **Piped input** to `chat` works as a script: each line waits for the previous answer. The
+  background lane runs between the lines but does not hold the script: end it with `/memory wait`
+  to have every answer filed before it exits.
 
   ```bash
   printf 'Hi\n/r\n/quit\n' | rp-core chat "$id"
@@ -1856,7 +2237,7 @@ a temporary folder that is removed at exit.
   library/lorebooks/   imported world info, lorebooks and Compendium books
   sessions/<id>.jsonl  one session = one append-only journal
   sessions/<id>.lock   held while a process has the session open
-  sessions/<id>.requests/  with --keep-requests: every model request of each turn
+  sessions/<id>.requests/  with --keep-requests: every model request of each turn and of the agents
   exports/             RoleCall files written by /memory export --format compendium
   logs/tui.log         what the full-screen TUI said and logged
 ```
@@ -1864,7 +2245,9 @@ a temporary folder that is removed at exit.
 A session file is plain JSONL that only ever grows. Everything in it stays recoverable: every swipe,
 edit and hidden message is still there. Back it up by copying the file. With the Director on, each
 answer's line also holds the Director's plan at that point (its state is at most 32 768 bytes). Your
-notes, Compendium entries and edits of book entries are lines of the same journal.
+notes, Compendium entries and edits of book entries are lines of the same journal, and so is the
+agents' work: a `job` line before each call, then one `mem` line with what the pass wrote (or a
+`job` line saying it failed).
 
 ### Compacting a session
 
@@ -1912,6 +2295,11 @@ That is a copy of the M4 live session (6 answers with the Director on). A second
 | `the Compendium is off for this session` | The session was made before M5a, or `/memory off` was used. Entries are kept but not sent | `/memory on` |
 | A Compendium entry the message names is not in the block | Every significant word of its name must be in one message, matched by its roots; the block also has an entry limit and a budget | `/trace` names each pick and each cut; add an alias the story uses (`/memory edit`) |
 | notice `library_entry_missing` | You changed a book's entry in this session, and the entry or its book is gone | Add the book back (`/lore add <id>`): the change applies again |
+| `⋯ memory: filing #7 parked after 3 failed attempts` | Every attempt of that pass failed: a timeout, a server error, or an answer that held nothing the reader could use | `--debug` shows the server's words; `/memory retry #7` runs it again. `parked: it does not fit the recorder's window [no_room]`: give the recorder a bigger window or another model ([The recorder](#the-recorder-their-model)) |
+| notice `memory_backlog`, or `memory_starved` | Answers come faster than the recorder files them, or turns keep taking the server away from a pass | A separate connection for the recorder (`/model recorder <conn:model>`), a second slot on the server, or a larger `every_n` under `[compendium.filing]` (new sessions). `/memory wait` lets it catch up |
+| `the background lane cannot run: …` (`/memory wait`), notice `recorder_unavailable` | The recorder's connection is not in `config.toml`, so nothing runs | `/model recorder <conn:model>` with a connection you have, or add the connection |
+| The historian writes English summaries of a story in another language | A small model does not follow the general language line | Set `language` under `[compendium]` for new sessions. A story in Cyrillic, Greek, CJK, Arabic, Hebrew or Thai script is named without it ([details](#the-language-they-write-in)) |
+| A piped chat ends before its last answers are filed | The background lane never holds the process | End the script with `/memory wait`; otherwise the next `chat` on the session files them |
 | `rp-core tui needs a terminal; use rp-core chat` (exit 64) | `tui` or `new --tui` was run with stdin or stdout not a terminal (a pipe or a script) | Run it in a terminal window, or use `rp-core chat` |
 | TUI: white text on a white background, or text missing on a light theme | An early build of the TUI drew text in OpenTUI's bright white | Update rp-core. The TUI now takes every colour from the terminal's theme ([Colours](#colours)) |
 | TUI: text cannot be selected, or a selection does not reach the clipboard | The mouse is on (the default), so a plain drag is the TUI's own selection, copied with OSC 52; some terminals (GNOME Terminal, other VTE ones) ignore OSC 52, and there the status row says so | Hold Shift while you drag for the terminal's own selection, or press F3 to turn the mouse off ([details](#mouse-selecting-and-copying)) |
@@ -1942,8 +2330,12 @@ redacted.
 **`--provider`** takes `script:<file>` (a scripted fake model), `record:<file>` or `replay:<file>`
 ([details](#recording-and-replaying-a-chat)).
 
-**`--keep-requests`** writes every model request of each turn to
+**`--keep-requests`** writes every model request of each turn, and of the Compendium's agents, to
 `<home>/sessions/<session>.requests/` ([details](#keeping-the-requests)).
+
+**`RP_CORE_LANE=manual`** in the environment makes `chat` and `tui` run the Compendium's background
+work only at `/memory wait` (the tests set it). The default, `auto`, runs it between turns
+([details](#when-they-run)); `send`, `preview` and `compact` never run it.
 
 **Global flags** may go anywhere on the line: `--home <dir>`, `--sandbox`, `--debug`, `--help`
 (also `rp-core help <command>`) and `--version`.
@@ -1972,16 +2364,18 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite: 5044 tests in 250 files (5041 pass), a little over two minutes; the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
-| `bun test test/tui` | The full-screen TUI (268 tests in 15 files, about 11 seconds) on a headless OpenTUI renderer with a scripted model: the layout at several widths, typing and streaming, Ctrl+C, every slash command, hotkeys (also on a Russian layout), the mouse and copying, colours, signals and the lock. The frame-time checks run only with `RP_CORE_PERF=1` |
+| `bun test` | The full suite: 5573 tests in 299 files (5570 pass); the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
+| `bun test test/tui` | The full-screen TUI (279 tests in 17 files, about 12 seconds) on a headless OpenTUI renderer with a scripted model: the layout at several widths, typing and streaming, Ctrl+C, every slash command, hotkeys (also on a Russian layout), the mouse and copying, colours, signals and the lock, and the Compendium agents' blocks. The frame-time checks run only with `RP_CORE_PERF=1` |
 | `bun test test/demo-m4` | The M4 demos on a scripted model (5 tests, a few seconds): 30 turns with chapters, arcs, seeds and hidden arcs; swipe reuse, `/regen` and rollback; a broken plan on a small window; 300 verbose Russian turns under the state cap. They print what they did ([`docs/M4-DEMO.md`](docs/M4-DEMO.md)) |
 | `bun test test/demo-m5a` | The M5a demo on a scripted model (9 tests, about a second): the real CLI imports a RoleCall Compendium, writes an entry in an editor, sends its brief in the block, edits a book entry as an overlay, swipes, rewinds and forks, exports and imports again, and keeps the Director's request with `[COMPENDIUM CONTEXT]`. It prints the transcript ([`docs/M5A-DEMO.md`](docs/M5A-DEMO.md)) |
+| `bun test test/demo-m5b` | The M5b demo on a scripted model (16 tests in 3 files, about 7 seconds): the real CLI, with the background lane in auto mode, files answers once they are accepted (also from fenced or loosely shaped JSON), takes a swipe's entries off the path and brings them back, files an edited answer again, undoes and refiles a pass, runs the historian twice, shows the `{{recap}}` slot once trimming starts and keeps it while the cut holds, and after a `kill -9` during filing reopens with exactly one record per pass. It prints the transcript ([`docs/M5B-DEMO.md`](docs/M5B-DEMO.md)) |
+| `bun test test/{sched,lane,filing,historian,recap,fold,language,repl}-m5b` | M5b's own tests besides the demo (447 tests in 38 files, a few seconds), on scripted models and fake clocks: the scheduler (37) and the background lane (70: preemption without an attempt, the idle wait, retries, parking, recovery after a crash), the filing prompts against Bunraku's text, reading and staging (85), the historian (100), the `{{recap}}` slot (66), the fold with the agents' rows (38), the language names (3) and the REPL's commands and lines (48). 64 more sit beside older tests: `test/memory/fold-m5b*.test.ts`, `test/structured/{review-m5b,ruling-k}.test.ts`, `test/session/fork-recap.test.ts`, `test/cli/lane-m5b.test.ts` and `test/tui/lane-*.test.ts` |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
 | `RP_CORE_LIVE=1 bun test test/live/m3-ollama.test.ts` | The M3 demo question on a real Ollama with prompted or native tools (up to 3 tries of 3 calls). Set the model with `RP_CORE_OLLAMA_M3_MODEL` (default `magmell-16k:latest`), its window with `RP_CORE_OLLAMA_CTX` (default 16384), the transport with `RP_CORE_OLLAMA_TOOLS` (`prompted`, the default, or `native`), the reply cap with `RP_CORE_OLLAMA_MAX_TOKENS` (default 300; a thinking model's thinking counts against it) and the URL with `RP_CORE_OLLAMA_URL`. A thinking model with native tools: `RP_CORE_LIVE=1 RP_CORE_OLLAMA_M3_MODEL=gemma4:26b RP_CORE_OLLAMA_CTX=4096 RP_CORE_OLLAMA_TOOLS=native RP_CORE_OLLAMA_MAX_TOKENS=1024 bun test test/live/m3-ollama.test.ts` |
 | `RP_CORE_LIVE=1 RP_CORE_CLOUD_URL=… bun test test/live/m3-cloud.test.ts` | The same M3 demo on a hosted API (OpenRouter, DeepSeek, …). It costs money: at most 9 answered calls, each prompt under the window minus the reply reserve (12 288 tokens with the defaults); a request refused with 429/5xx is retried once. It reads the server's model list first (free), as `probe --write` does, so a refused key stops it before any paid call. Set the base URL with `RP_CORE_CLOUD_URL` (as `base_url` in `config.toml`; the test is skipped without it), the model id with `RP_CORE_CLOUD_MODEL`, and the *name* of the variable that holds the key with `RP_CORE_CLOUD_KEY_ENV` (never the key itself). Optional: `RP_CORE_CLOUD_CTX` (default 16384, smaller than the chat, so the history is trimmed and the history tools are offered), `RP_CORE_CLOUD_TOOLS` (`native`, the default, or `prompted`), `RP_CORE_CLOUD_MAX_TOKENS` (default 4096; a thinking model's thinking counts), `RP_CORE_CLOUD_TIMEOUT_MS` (default 30 minutes). The logged transcript has the answers, the lookups and the usage (with the cost, when the API reports it); see [`docs/M3-DEMO.md`](docs/M3-DEMO.md#on-a-hosted-model) |
-| `bun tools/fixtures/seed-innkeeper.ts [--home <dir>] [--model conn:model] [--max-tokens n] [--max-rounds n]` | Puts the M3 demo chat (199 messages, no model called) into a home as a new session, to play the demo by hand in `rp-core chat`; the connection must be in that home's `config.toml` ([`docs/M3-DEMO.md`](docs/M3-DEMO.md#how-to-rerun)) |
+| `bun tools/fixtures/seed-innkeeper.ts [--home <dir>] [--model conn:model] [--max-tokens n] [--max-rounds n] [--compendium off\|on]` | Puts the M3 demo chat (199 messages, no model called) into a home as a new session, to play the demo by hand in `rp-core chat`; the connection must be in that home's `config.toml` ([`docs/M3-DEMO.md`](docs/M3-DEMO.md#how-to-rerun)). The session's Compendium is off unless `--compendium on`, so the chat does not open with 98 answers to file; `/memory on` in the chat files only what comes after it |
 
 **Temporary files.** The test run makes one temporary folder under `$TMPDIR` (else `/tmp`) and points
 `RP_CORE_HOME` and `TMPDIR` inside it, so the homes, sessions and child processes of every test land
@@ -1993,7 +2387,7 @@ run).
 
 | Folder | Holds |
 |---|---|
-| `src/engine` | Turns, the Director's call before the narrator, the narrator's tool loop, recovery, scheduling |
+| `src/engine` | Turns, the Director's call before the narrator, the narrator's tool loop, recovery, scheduling with priorities, the Compendium's background lane (`lane.ts`) |
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
 | `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
@@ -2001,16 +2395,18 @@ run).
 | `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
 | `src/tools` | The narrator's tools, their arguments, prompted calls and leak recovery |
 | `src/text` | Word folding and light stemming for search and note keys |
-| `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and the Compendium (`agents/compendium`: the fold of its journal lines, merge, render, tree, the selector and the block, the Director's world snapshot, export) |
+| `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and the Compendium (`agents/compendium`: the fold of its journal lines, merge, render, tree, the selector and the block, the Director's world snapshot, export, the filing agent, the historian and the `{{recap}}` slot) |
 | `src/config` | Config and keys |
 | `src/cli` | Commands and the chat; the full-screen TUI in `src/cli/tui` |
 
-The design and its decisions (D-1…D-169; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
-D-140…D-169) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The milestone demos with
-transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md), [`docs/M1B-DEMO.md`](docs/M1B-DEMO.md),
-[`docs/M2-DEMO.md`](docs/M2-DEMO.md), [`docs/M3-DEMO.md`](docs/M3-DEMO.md),
-[`docs/M4-DEMO.md`](docs/M4-DEMO.md) and [`docs/M5A-DEMO.md`](docs/M5A-DEMO.md). How rp-core differs
-from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](docs/PARITY-RC.md) and
+The design and its decisions (D-1…D-184; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
+D-140…D-169, M5b's D-170…D-184) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
+milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md),
+[`docs/M1B-DEMO.md`](docs/M1B-DEMO.md), [`docs/M2-DEMO.md`](docs/M2-DEMO.md),
+[`docs/M3-DEMO.md`](docs/M3-DEMO.md), [`docs/M4-DEMO.md`](docs/M4-DEMO.md),
+[`docs/M5A-DEMO.md`](docs/M5A-DEMO.md) and [`docs/M5B-DEMO.md`](docs/M5B-DEMO.md). How rp-core differs
+from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](docs/PARITY-RC.md),
+[`docs/COMPENDIUM-DEVIATIONS.md`](docs/COMPENDIUM-DEVIATIONS.md) (the Compendium, for Chi's review) and
 [`test/golden/st/README.md`](test/golden/st/README.md).
 
 **Ported code.** Code taken from RoleCall and Bunraku keeps its copyright headers and is listed in

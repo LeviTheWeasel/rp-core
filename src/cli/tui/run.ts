@@ -33,6 +33,7 @@ import { stripAnsi } from '../repl-render.ts';
 import type { ReplView, TurnView } from '../repl-view.ts';
 import { engineOptions } from '../runtime.ts';
 import { EXIT_SIGINT } from '../signals.ts';
+import { isLaneEvent } from './agents.ts';
 import { applyWidth, createUi, rendererConfig, type HostUi } from './app.ts';
 import { fileLog, tuiIo, tuiLogPath, type FileLog, type TuiIo } from './io.ts';
 import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
@@ -161,6 +162,8 @@ export async function cmdTui(a: TuiArgs & { sessionId: string; tty?: boolean }):
     return EXIT.usage;
   }
   const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt) });
+  // Before the open: the lane's notices at open are on the bus only (ChatArgs.events).
+  const events = engine.events();
   let session: SessionHandle;
   try {
     session = engine.session(a.sessionId);
@@ -169,7 +172,7 @@ export async function cmdTui(a: TuiArgs & { sessionId: string; tty?: boolean }):
     if (e instanceof Refusal) return reportRefusal(a.io, e, false, a.rt);
     throw e;
   }
-  return runTui(engine, session, a);
+  return runTui(engine, session, { ...a, events });
 }
 
 /** A write to a terminal that may be gone (EIO after a hangup): never throws. */
@@ -323,7 +326,7 @@ export interface MountOptions {
   renderer: CliRenderer;
   engine: EngineHandle;
   session: SessionHandle;
-  a: Pick<TuiArgs, 'rt' | 'fetch' | 'clock' | 'env' | 'exitWindowMs' | 'pasteIdleMs' | 'workingAfterMs'>;
+  a: Pick<TuiArgs, 'rt' | 'fetch' | 'clock' | 'env' | 'exitWindowMs' | 'pasteIdleMs' | 'workingAfterMs' | 'events'>;
   io: TuiIo;
   log: FileLog;
   parts: TuiParts;
@@ -508,6 +511,8 @@ export function mountTui(o: MountOptions): MountedTui {
   });
 
   // Session-level events the turn views never see (/memory verbs, /hide, /goto…) for the agents pane.
+  // M5b (D-181): the background lane's (filing, the historian) whenever they come, a turn streaming or
+  // not: they are never part of a turn's stream, so the pane cannot see them twice.
   const tail = engine.events()[Symbol.asyncIterator]();
   void (async () => {
     try {
@@ -516,7 +521,8 @@ export function mountTui(o: MountOptions): MountedTui {
         if (r.done) return;
         const ev: Event = r.value;
         const v = view as TuiView | null; // set by the Repl's view factory
-        if (v && !v.turning && live() && ev.sessionId === v.sessionId && (ev.type === 'memory' || ev.type === 'changed')) agents.event(ev);
+        if (!v || !live() || ev.sessionId !== v.sessionId) continue;
+        if (isLaneEvent(ev) || (!v.turning && (ev.type === 'memory' || ev.type === 'changed'))) agents.event(ev);
       }
     } catch (e) {
       log.error(e, 'events');
@@ -571,7 +577,10 @@ export function mountTui(o: MountOptions): MountedTui {
   delete replEnv.EDITOR;
   const kitty = (): boolean => renderer.capabilities?.kitty_keyboard === true;
   const done = runReplWith(
-    { ...chatDeps(engine, o.session, { rt: a.rt, io, ...(a.fetch ? { fetch: a.fetch } : {}), ...(a.clock ? { clock: a.clock } : {}) }), color: true },
+    {
+      ...chatDeps(engine, o.session, { rt: a.rt, io, ...(a.fetch ? { fetch: a.fetch } : {}), ...(a.clock ? { clock: a.clock } : {}), ...(a.events ? { events: a.events } : {}) }),
+      color: true,
+    },
     {
       source: { source, interrupts: o.interrupts.interrupts },
       view: (ctx) =>

@@ -55,13 +55,13 @@ describe('/memory on|off (engine#3)', () => {
     // A note is sent whatever the switch says.
     expect(after(out, '/memory add Ключи | | Ключи у Арсения.')).toBe('note C2 "Ключи" added (note:ключи): from the next turn it is sent when Ключи comes up\n');
     expect(after(out, '/memory off')).toBe('the Compendium is already off for this session (/memory on)\n');
-    // On: the book's 15 entries come first, the session's handles follow them.
-    expect(out.split('› /memory on\n')[1]).toStartWith('the Compendium is on for this session: 17 live entries on this path, sent as they come up from the next turn (/memory lists them)\n');
+    // On: the book's 16 entries (15 typed, the [Arc] overview, D-177) come first, the session's handles follow them.
+    expect(out.split('› /memory on\n')[1]).toStartWith('the Compendium is on for this session: 18 live entries on this path, sent as they come up from the next turn (/memory lists them)\n');
     const list = after(out, '/memory list character');
     expect(list).not.toContain(OFF);
-    expect(list).toContain('C16 Мира');
+    expect(list).toContain('C17 Мира');
     expect(list).toContain('C1  Арсений Кеттер');
-    expect(out).toContain('character C18 "Ян" filed (from the next turn)\n');
+    expect(out).toContain('character C19 "Ян" filed (from the next turn)\n');
     expect(out.endsWith('the Compendium is already on for this session\n')).toBe(true);
     expect(enabledOf(r)).toBe(true);
   });
@@ -90,10 +90,10 @@ describe('notices and warnings (engine#2, fidelity#5, breaker#10)', () => {
     await r.close();
     const out = r.out();
     const first = after(out, '/memory new character Большой').split('\n');
-    expect(first[0]).toBe('character C16 "Большой" filed (from the next turn)');
-    expect(first[1]).toMatch(/^! The Compendium entry "Большой" \(C16\) holds \d+ characters.*\(compendium_large_entry\)$/);
+    expect(first[0]).toBe('character C17 "Большой" filed (from the next turn)');
+    expect(first[1]).toMatch(/^! The Compendium entry "Большой" \(C17\) holds \d+ characters.*\(compendium_large_entry\)$/);
     // The second entry's notice has the same code: it is shown too (one per entry, not one per code).
-    expect(after(out, '/memory new character Огромный').split('\n')[1]).toMatch(/^! The Compendium entry "Огромный" \(C17\) holds/);
+    expect(after(out, '/memory new character Огромный').split('\n')[1]).toMatch(/^! The Compendium entry "Огромный" \(C18\) holds/);
     expect(out.split('(compendium_large_entry)').length - 1).toBe(2);
   });
 
@@ -106,8 +106,8 @@ describe('notices and warnings (engine#2, fidelity#5, breaker#10)', () => {
     await r.until('Мира кивает.');
     await r.close();
     const out = r.out();
-    expect(out).toMatch(/^! The Compendium entry "Большой" \(C16\) holds .*\(compendium_large_entry\)$/m);
-    expect(out).toMatch(/^! The Compendium entry "Огромный" \(C17\) holds .*\(compendium_large_entry\)$/m);
+    expect(out).toMatch(/^! The Compendium entry "Большой" \(C17\) holds .*\(compendium_large_entry\)$/m);
+    expect(out).toMatch(/^! The Compendium entry "Огромный" \(C18\) holds .*\(compendium_large_entry\)$/m);
   });
 
   test('/memory export --format compendium prints the warnings the export returns', async () => {
@@ -146,7 +146,7 @@ describe('the editor after an error (engine#5)', () => {
     r.type('/memory new character');
     r.end();
     expect(await r.done).toBe(0);
-    expect(after(r.out(), '/memory new character')).toBe('/memory new: a character needs name; the editor opens again\ncharacter C16 "Ян" filed (from the next turn)\n');
+    expect(after(r.out(), '/memory new character')).toBe('/memory new: a character needs name; the editor opens again\ncharacter C17 "Ян" filed (from the next turn)\n');
   });
 });
 
@@ -159,7 +159,7 @@ describe('/lore rm of a book the Compendium reads (engine#8)', () => {
     const out = r.out();
     const rm = out.split('› /lore rm lantern\n')[1]!.split('\n')[0];
     expect(rm).toBe(
-      'lorebook lantern removed (from the next turn; it stays in the library); its 15 Compendium entries leave /memory now, and the C<n> of the entries after them change; ' +
+      'lorebook lantern removed (from the next turn; it stays in the library); its 16 Compendium entries leave /memory now, and the C<n> of the entries after them change; ' +
         "this session's changes to 1 of them are kept and come back if the book returns (/lore add lantern)",
     );
     expect(after(out, '/memory list character')).toContain('  C1 Мира (aka Фонарщица)');
@@ -172,7 +172,7 @@ describe('/lore rm of a book the Compendium reads (engine#8)', () => {
     r.type('/lore rm lantern');
     r.end();
     expect(await r.done).toBe(0);
-    expect(after(r.out(), '/lore rm lantern')).toBe('lorebook lantern removed (from the next turn; it stays in the library); its 15 Compendium entries leave /memory now\n');
+    expect(after(r.out(), '/lore rm lantern')).toBe('lorebook lantern removed (from the next turn; it stays in the library); its 16 Compendium entries leave /memory now\n');
   });
 });
 

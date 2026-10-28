@@ -70,7 +70,11 @@ export interface Trace {
      */
     unsent?: Record<string, string>;
   };
-  recap: { ids: string[]; arcs: { key: string; rev: number }[]; boundary: string | null };
+  /**
+   * M5b (D-178): the {{recap}} slot's summary ids, arc revisions and boundary; since ruling K also the
+   * profile and the share (⌊10 % × window⌋) it was chosen under, absent on an empty slot and in older traces.
+   */
+  recap: { ids: string[]; arcs: { key: string; rev: number }[]; boundary: string | null; profile?: 'full' | 'lite'; share?: number };
   /** M5a (D-155): present when the request had Compendium input (enabled, ≥ 1 live typed entry). */
   compendium?: CompendiumTrace;
   prefill: 'sent' | 'tools_off' | 'skipped_for_tools' | 'unsupported' | null;
@@ -380,7 +384,8 @@ export interface JobEntry {
   key: string;
   task: 'file' | 'hist';
   on: string;
-  state: 'begin' | 'failed';
+  /** 'retry' (M5b, D-171): /memory retry reset the key's failure count; the lane queues it again. */
+  state: 'begin' | 'failed' | 'retry';
   attempt: number;
   code?: string;
 }
@@ -749,7 +754,7 @@ const ENTRY_CHECKS: Record<EntryKind, Check> = {
       key: str,
       task: oneOf('file', 'hist'),
       on: str,
-      state: oneOf('begin', 'failed'),
+      state: oneOf('begin', 'failed', 'retry'),
       attempt: num,
     },
     { code: str },

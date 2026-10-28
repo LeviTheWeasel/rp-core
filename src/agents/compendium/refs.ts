@@ -2,12 +2,15 @@
 // Copyright (C) 2026 the rp-core authors
 //
 // Handles of Compendium entries (.notes/m5a-decisions.md D-150, amends D-59). One numbering over the
-// whole view: the i-th entry of `view.entries` in Map order is C<i+1>. The fold inserts the library
-// seed first (config order, book order), then session entries in creation order, and never removes
-// an entry (retired ones keep their numbers), so:
+// whole view: the i-th entry of `view.entries` in Map order is C<i+1>. The fold's entries come in that
+// order: the library seed first (config order, book order), then session entries by the seq of the row
+// that created them, then the op index (.notes/m5b-decisions.md K, order#3: not the order the fold
+// applies rows in, so a lagging pass never takes the number of an entry a person made earlier), and
+// it never removes an entry (retired ones keep their numbers), so:
 // - without a typed book, M3 note numbers are unchanged;
 // - attaching a book shifts session handles by its entry count; a session entry never shifts a library
-//   handle; path-bound rows can shift later session handles after a rewind.
+//   handle; path-bound rows can shift later session handles after a rewind, and a refile or a re-write
+//   re-creates its entries under its own (newer) seq.
 // `/memory`, the lore tools and the block's brief tail all print these.
 
 import { resolveRefIn } from './apply.ts';

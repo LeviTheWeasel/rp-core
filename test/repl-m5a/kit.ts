@@ -14,7 +14,7 @@ import { entriesOf, LEVI, MIRA, replRig, writeRaw, type ReplRig, type ReplRigOpt
 export { calls, entriesOf } from '../repl/kit.ts';
 
 const FIXTURES = join(import.meta.dir, '..', 'fixtures', 'ru', 'lantern');
-/** RoleCall's export of the lantern world: 18 rows, 15 live typed entries once imported (D-167). */
+/** RoleCall's export of the lantern world: 18 rows, 15 live typed entries and an [Arc] overview once imported (D-167, D-177). */
 export const LANTERN_FILE = join(FIXTURES, 'lantern.compendium.json');
 /** The /memory new payload of the M5a demo: Мира, who is not in the book. */
 export const MIRA_TEXT = readFileSync(join(FIXTURES, 'mira.character.json'), 'utf8');

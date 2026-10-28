@@ -1,5 +1,5 @@
 // M5a REPL (D-161, D-163): /memory export in both formats, the --force rule, its parsing; the help
-// lines and the subcommands that arrive with M5b and M5c.
+// lines and the subcommands that arrive with M5c.
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,7 +80,7 @@ describe('/memory export', () => {
 });
 
 describe('help and later', () => {
-  test('/help lists the M5a subcommands; the agents\' and recall\'s are later', async () => {
+  test('/help lists the M5a subcommands; recall\'s are later (the agents\' arrived with M5b)', async () => {
     const help = helpText();
     for (const s of [
       '/memory [list] [type|note|arc] [--retired]',
@@ -91,17 +91,16 @@ describe('help and later', () => {
       '/memory edit <ref> <title> | <keys> | <text>',
       '/memory retire <ref> [reason], /memory restore <ref>',
       '/memory export <name> [--format core|compendium] [--force]',
-      'Later: /memory undo|refile|retry (M5b, the Compendium agents), /memory recall|profile|mode (M5c, recall).',
+      'Later: /memory recall|profile|mode (M5c, recall).',
     ]) {
       expect(help).toContain(s);
     }
     const r = await lanternRig(calls());
-    r.type('/memory undo 3', '/memory refile 3', '/memory retry', '/memory recall', '/memory profile lite', '/memory mode sync', '/memory forget C1');
+    r.type('/memory recall', '/memory profile lite', '/memory mode sync', '/memory forget C1');
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    for (const s of ['undo', 'refile', 'retry']) expect(out).toContain(`/memory ${s} arrives with M5b (Compendium agents)\n`);
     for (const s of ['recall', 'profile', 'mode']) expect(out).toContain(`/memory ${s} arrives with M5c (recall)\n`);
-    expect(after(out, '/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off\n');
+    expect(after(out, '/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status\n');
   });
 });

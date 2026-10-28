@@ -18,6 +18,7 @@
 import { Engine } from '../engine/engine.ts';
 import { systemClock } from '../engine/system.ts';
 import { Refusal, type Connection, type EngineHandle, type EngineOptions, type SessionHandle } from '../engine/api.ts';
+import type { Event } from '../protocol/events.ts';
 import type { Io } from './io.ts';
 import { EXIT, reportRefusal } from './oneshot.ts';
 import { runRepl, type ReplDeps } from './repl.ts';
@@ -37,11 +38,19 @@ export interface ChatArgs {
   /** For /probe --active (default globalThis.fetch and the system clock). */
   fetch?: typeof fetch;
   clock?: () => Date;
+  /**
+   * M5b (D-181): the engine's bus, subscribed before the session was opened (cmdChat, cmdTui), so what
+   * the background lane says at open reaches the REPL (ReplDeps.events). Absent: the REPL subscribes as
+   * it starts.
+   */
+  events?: AsyncIterable<Event>;
 }
 
 /** `rp-core chat <session>`: open (lock + recovery) and run the REPL until /quit or EOF. */
 export async function cmdChat(a: ChatArgs & { sessionId: string }): Promise<number> {
   const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt) });
+  // Before the open: the lane's notices at open (a backlog, shared slots) are on the bus only.
+  const events = engine.events();
   let session: SessionHandle;
   try {
     session = engine.session(a.sessionId);
@@ -50,7 +59,7 @@ export async function cmdChat(a: ChatArgs & { sessionId: string }): Promise<numb
     if (e instanceof Refusal) return reportRefusal(a.io, e, false, a.rt);
     throw e;
   }
-  return runChat(engine, session, a);
+  return runChat(engine, session, { ...a, events });
 }
 
 /** ReplDeps.override of a --provider script: / replay: connection (its origin says which). */
@@ -85,12 +94,12 @@ export async function runChat(engine: EngineHandle, session: SessionHandle, a: C
  * replay: failExit plus the override. `a.io` becomes deps.io (the REPL writes only io.out, through
  * its default view, and flushes it at the end).
  */
-export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<ChatArgs, 'rt' | 'io' | 'fetch' | 'clock'>): ReplDeps {
+export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<ChatArgs, 'rt' | 'io' | 'fetch' | 'clock' | 'events'>): ReplDeps {
   // --debug: while the REPL runs, raw provider failures go through its screen (engineOptions reads
   // rt.debug at the moment of a failure), so they never glue into a streamed answer.
   const plainDebug = a.rt.debug;
   const debugTap = plainDebug
-    ? (print: (line: string) => void): (() => void) => {
+    ? (print: (line: string, call?: { job?: string }) => void): (() => void) => {
         a.rt.debug = print;
         return () => {
           a.rt.debug = plainDebug;
@@ -133,6 +142,7 @@ export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<C
     // A script or a replay is a test of the turn loop: a failed answer fails the run (exit 3).
     // Every turn runs on that connection: the banner takes its window from it.
     ...(a.rt.provider ? { failExit: true, override: overrideOf(a.rt.provider) } : {}),
+    ...(a.events ? { events: a.events } : {}),
   };
 }
 

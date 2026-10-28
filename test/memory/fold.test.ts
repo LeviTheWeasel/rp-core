@@ -219,10 +219,14 @@ describe('foldCompendium: notes', () => {
     const shuffled = [rows[3]!, rows[1]!, rows[2]!, rows[0]!];
     expect(fold(shuffled)).toEqual(fold(rows));
     expect(shuffled.map((r) => r.seq)).toEqual([4, 2, 3, 1]); // the input is not reordered in place
-    // An op that refers to a note created by a LATER row finds nothing.
+    // M5b (D-179): an op addressed by a key that a LATER row creates waits for it and applies right
+    // after the creation; one addressed by a name or a handle resolves at once and finds nothing.
     const early = fold([row(1, [{ op: 'edit', ref: 'note:мост', set: { content: 'x' } }]), row(2, [note('Мост', 'y')])]);
-    expect(early.issues).toEqual([{ seq: 1, op: 0, why: 'not_found' }]);
-    expect(early.entries.get('note:мост')!.content).toBe('y');
+    expect(early.issues).toEqual([]);
+    expect(early.entries.get('note:мост')!.content).toBe('x');
+    const byName = fold([row(1, [{ op: 'edit', ref: 'Мост', set: { content: 'x' } }]), row(2, [note('Мост', 'y')])]);
+    expect(byName.issues).toEqual([{ seq: 1, op: 0, why: 'not_found' }]);
+    expect(byName.entries.get('note:мост')!.content).toBe('y');
   });
 
   test('several ops in one row apply in order', () => {

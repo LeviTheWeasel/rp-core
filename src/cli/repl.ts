@@ -41,7 +41,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
-import { Refusal, type EngineHandle, type MemoryRow, type MemoryWrite, type PreviewOptions, type SessionHandle, type TurnHandle, type TurnOutcome } from '../engine/api.ts';
+import {
+  Refusal,
+  type EngineHandle,
+  type MemoryLaneWrite,
+  type MemoryRow,
+  type MemoryWrite,
+  type PreviewOptions,
+  type SessionHandle,
+  type TurnHandle,
+  type TurnOutcome,
+} from '../engine/api.ts';
 import { ConfigError, type RpConfig } from '../config/config.ts';
 import { listLibrary } from '../formats/library.ts';
 import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
@@ -57,7 +67,7 @@ import type { ImportWarning } from '../formats/native.ts';
 import type { Event, Notice } from '../protocol/events.ts';
 import { ACTIVE_PROBE_MAX_CALLS, ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS } from '../providers/probe-active.ts';
 import type { ModelCaps } from '../providers/types.ts';
-import type { DeepPartial, Roles, SessionConfig, Trace } from '../session/entries.ts';
+import type { DeepPartial, JobEntry, MemEntry, Roles, SessionConfig, Trace } from '../session/entries.ts';
 import { readSessionFile } from '../session/log.ts';
 import type { TreeIndex } from '../session/tree.ts';
 import type { MessageView, PathView } from '../session/view.ts';
@@ -74,6 +84,7 @@ import {
   resolveBindingArg,
   type Command,
   type LocalCommand,
+  type MessageAt,
   type RoleName,
 } from './repl-commands.ts';
 import {
@@ -89,8 +100,15 @@ import {
   type Journal,
 } from './repl-journal.ts';
 import {
+  laneAgentLine,
+  laneHeldLine,
+  laneKeysInWords,
+  laneResumedWords,
+  laneUndoneLine,
   labels,
   makeStyle,
+  passName,
+  taskOfKey,
   noticeText,
   prefix,
   previewFailureText,
@@ -100,6 +118,8 @@ import {
   renderImported,
   renderLoreBooks,
   renderEntryCard,
+  renderLaneStatus,
+  renderLaneWait,
   renderMemoryList,
   renderMemoryTree,
   renderNote,
@@ -116,6 +136,9 @@ import {
   renderUsage,
   renderVerdicts,
   renderWire,
+  type EntryProvenance,
+  type LaneWords,
+  type RowOrigin,
   type Style,
 } from './repl-render.ts';
 import { diffEntry, editEntryText, namesOf, newEntryText, parseEntryText } from './repl-memory.ts';
@@ -144,9 +167,10 @@ export interface ReplDeps {
   redact?: (text: string) => string;
   /**
    * --debug: the REPL attaches its own line printer for raw provider failures (so they never glue into
-   * a streamed answer) and gets back the function that detaches it. Absent without --debug.
+   * a streamed answer) and gets back the function that detaches it. Absent without --debug. `call.job`:
+   * a background lane pass's call (M5b): its line waits for a pause like the lane's own lines.
    */
-  debugTap?: (print: (line: string) => void) => () => void;
+  debugTap?: (print: (line: string, call?: { job?: string }) => void) => () => void;
   /**
    * Why `conn` cannot serve a binding (not in config.toml, or a dialect that arrives later), or null.
    * /model refuses with this reason. Default: only config.toml's [connections] names are checked.
@@ -186,6 +210,12 @@ export interface ReplDeps {
    * model. The banner and /preset then take the window from it, not from config.toml's caps.
    */
   override?: { conn: string; plays: 'script' | 'recording'; windowOf(model: string): number | null; capsOf?(model: string): ModelCaps | null };
+  /**
+   * M5b (D-181): the engine's bus (engine.events()), subscribed before the session was opened, so what
+   * the background lane says at open (memory_backlog, slots_shared, a recovered pass) reaches the screen
+   * too. Default: engine.events() as the REPL starts.
+   */
+  events?: AsyncIterable<Event>;
 }
 
 /** Knobs outside the fixed contract (tests and hosts that inject their own input). */
@@ -499,6 +529,30 @@ function sentBefore(tree: TreeIndex, from: string): { turn: number; from: string
   return undefined;
 }
 
+/**
+ * M5b (D-181): what the REPL shows of the engine's bus between turns — the background lane's agent
+ * events (no turn), the agents' memory events and an undo's `reverted` ones, and every notice (a turn's
+ * own were shown inside it: the code-and-message dedupe skips their copies here).
+ */
+function laneEvent(ev: Event): boolean {
+  switch (ev.type) {
+    case 'agent':
+      return ev.turnId === undefined && (ev.agent === 'filing' || ev.agent === 'historian');
+    case 'memory':
+      return ev.by !== 'user' || ev.change === 'reverted';
+    case 'notice':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** A --debug line about a lane call's provider failure (M5b): it waits for a pause in lanePending, as the lane's events do. */
+interface LaneDebug {
+  type: 'debug';
+  line: string;
+}
+
 // ---- the REPL ---------------------------------------------------------------------------------------
 
 type Item = { t: 'line'; line: string; during: boolean } | { t: 'end' } | { t: 'quit' };
@@ -542,6 +596,14 @@ class Repl {
   private readonly commandName: 'chat' | 'tui';
   /** The text is edited outside the input line: a named $VISUAL / $EDITOR, or the host's editText. */
   private readonly ownEditor: boolean;
+  /** M5b (D-181): the open session's lane events (and --debug lines of its calls) not shown yet: shown at a pause, never inside an answer. */
+  private lanePending: (Event | LaneDebug)[] = [];
+  /** A flush is scheduled after the burst of lane events that arrived (a pass publishes its events in one tick). */
+  private laneFlushing = false;
+  /** Set while /memory wait waits: its passes' lines print as they end; calling it stops waiting (Ctrl+C). */
+  private laneWaitStop: (() => void) | null = null;
+  /** Lane passes that ended (done, failed, preempted) since the REPL started: /memory wait says whether any ran. */
+  private laneEnded = 0;
 
   constructor(
     private readonly deps: ReplDeps,
@@ -574,14 +636,22 @@ class Repl {
 
   async run(): Promise<number> {
     const unsubscribe = this.interrupts(() => this.interrupt());
-    // --debug: raw provider failures print as a dim line of this screen, never glued into an answer.
-    const untap = this.deps.debugTap?.((line) => this.say(this.style.dim(`debug: ${line}`)));
+    // --debug: raw provider failures print as a dim line of this screen, never glued into an answer. A
+    // background lane call's waits for a pause with the lane's lines (D-181: never inside an answer).
+    const untap = this.deps.debugTap?.((line, call) => {
+      if (call?.job === undefined) return this.say(this.style.dim(`debug: ${line}`));
+      this.lanePending.push({ type: 'debug', line });
+      this.laneArrived();
+    });
     const forced = new Promise<number>((resolve) => {
       this.leaveNow = resolve;
     });
+    // M5b: the background lane speaks on the engine's bus only (D-181: shown between turns).
+    const tail = (this.deps.events ?? this.deps.engine.events?.())?.[Symbol.asyncIterator]();
     let code = 0;
     try {
       this.greet();
+      if (tail) void this.listen(tail);
       void this.readLoop();
       code = await Promise.race([this.loop(), forced]);
     } catch (e) {
@@ -592,6 +662,7 @@ class Repl {
       unsubscribe();
       untap?.();
       this.disarmExit();
+      void tail?.return?.()?.catch(() => {});
       this.source.close();
       if (this.left) {
         // The turn would not settle: do not wait for it. If it ever does, close() still unlocks.
@@ -620,8 +691,19 @@ class Repl {
         this.prompt();
       }
       const item = await this.take();
-      if (item.t !== 'line') return this.endCode();
+      if (item.t !== 'line') {
+        // What the lane said last (a pass that ended with the input) is shown before the session closes.
+        await this.laneSettle();
+        this.flushLane();
+        return this.endCode();
+      }
       await this.process(item);
+      // M5b (D-181): what the line set going on the bus (the lane's passes and notices) is shown now,
+      // after its own output and before the next prompt. A script waits for the bus to deliver it, so
+      // its transcript keeps that order; a person's prompt comes back at once (what arrives later is
+      // shown above a fresh one).
+      if (!this.source.interactive) await this.laneSettle();
+      this.flushLane();
       // A piped script or replay that ran out of calls, or a request the recording no longer
       // matches: every later call would be misaligned.
       const last = this.failedTurns.at(-1);
@@ -754,6 +836,11 @@ class Repl {
       this.leaveNow?.(EXIT_SIGINT);
       return;
     }
+    if (this.laneWaitStop) {
+      // Ctrl+C during /memory wait stops waiting; the background work goes on.
+      this.laneWaitStop();
+      return;
+    }
     if (this.probing) {
       // Ctrl+C during /probe --active stops the probe (its calls can wait minutes on a busy server).
       this.probing.abort(new Error('the probe was stopped'));
@@ -810,10 +897,15 @@ class Repl {
    */
   private notice(n: { level: string; code: string; message: string }): void {
     const message = this.redact(n.message);
-    const seen = `${n.code}\u0000${message}`;
+    const seen = this.noticeKey(n);
     if (this.noticed.has(seen)) return;
     this.noticed.add(seen);
     this.say(this.style.yellow(noticeText({ ...n, message })));
+  }
+
+  /** What notice() dedupes a notice by: its code and its (redacted) message. */
+  private noticeKey(n: { code: string; message: string }): string {
+    return `${n.code}\u0000${this.redact(n.message)}`;
   }
 
   /** deps.redact (scrub of known secrets), or the text as is. */
@@ -934,6 +1026,135 @@ class Repl {
     return m;
   }
 
+  // ---- the background lane on the bus (M5b, D-181) ------------------------------------------------------
+
+  /** The engine's bus: the open session's lane events wait in lanePending for a pause. */
+  private async listen(tail: AsyncIterator<Event>): Promise<void> {
+    for (;;) {
+      const r = await tail.next();
+      if (r.done || this.finished) return;
+      const ev = r.value;
+      // A switched session's events are not this one's (/open, /fork).
+      if (ev.sessionId !== this.session.id || !laneEvent(ev)) continue;
+      if (ev.type === 'agent' && (ev.status === 'done' || ev.status === 'failed' || ev.status === 'preempted')) this.laneEnded++;
+      this.lanePending.push(redactEvent(ev, this.deps.redact));
+      this.laneArrived();
+    }
+  }
+
+  /**
+   * Lane events arrived: once their burst is in (a pass publishes its memory events, its notices and its
+   * end in one tick), they are shown at once where nothing else prints — at the prompt, above a fresh
+   * one, or while /memory wait waits; otherwise at the next pause (loop()).
+   */
+  private laneArrived(): void {
+    if (this.laneFlushing) return;
+    this.laneFlushing = true;
+    setImmediate(() => {
+      this.laneFlushing = false;
+      if (this.finished || this.lanePending.length === 0) return;
+      if (this.laneWaitStop) return this.flushLane();
+      if (this.wake !== null && this.turn === null && this.editing === null) this.flushLane(true);
+    });
+  }
+
+  /** One turn of the event loop: the bus has delivered what was published before it. */
+  private laneSettle(): Promise<void> {
+    return new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  /**
+   * The lane's events since the last pause, shown: one dim line per pass that ended (`⋯ memory: filing
+   * #7 → +2: C12 "Фрол", C3 "Серый маяк"`), one for an undo's entries, every notice once (`! <text>
+   * (<code>)`, by code and message). A pass's memory events wait for its end when it has not arrived
+   * yet. `atPrompt`: the prompt is on screen; the lines go above a fresh one (typed text comes back).
+   * Never throws: a journal that cannot be read now is said in one line, as a command's error would be.
+   */
+  private flushLane(atPrompt = false): void {
+    try {
+      this.showLane(atPrompt);
+    } catch (e) {
+      this.report(e);
+    }
+  }
+
+  private showLane(atPrompt: boolean): void {
+    const sid = this.session.id;
+    // A --debug line is the engine's, whichever session's lane made the call: it is always shown.
+    const evs = this.lanePending.filter((ev) => ev.type === 'debug' || ev.sessionId === sid);
+    this.lanePending = [];
+    if (evs.length === 0) return;
+    const words = this.laneWords();
+    const out: ({ line: string } | { notice: Extract<Event, { type: 'notice' }> })[] = [];
+    const told = new Set<string>();
+    const held: Record<'filing' | 'historian', Extract<Event, { type: 'memory' }>[]> = { filing: [], historian: [] };
+    let undone: Extract<Event, { type: 'memory' }>[] = [];
+    const endUndo = (): void => {
+      if (undone.length > 0) out.push({ line: laneUndoneLine(undone, words) });
+      undone = [];
+    };
+    for (const ev of evs) {
+      if (ev.type === 'debug') {
+        endUndo();
+        out.push({ line: `debug: ${ev.line}` });
+        continue;
+      }
+      if (ev.type === 'memory') {
+        if (ev.by === 'user') undone.push(ev);
+        else held[ev.by].push(ev);
+        continue;
+      }
+      endUndo();
+      if (ev.type === 'notice') {
+        const key = this.noticeKey(ev);
+        if (this.noticed.has(key) || told.has(key)) continue;
+        told.add(key);
+        out.push({ notice: ev });
+      } else if (ev.type === 'agent' && (ev.agent === 'filing' || ev.agent === 'historian')) {
+        const line = laneAgentLine(ev, held[ev.agent], words);
+        if (ev.status === 'done') held[ev.agent] = [];
+        if (line !== null) out.push({ line });
+      }
+    }
+    endUndo();
+    this.lanePending.push(...held.filing, ...held.historian);
+    if (out.length === 0) return;
+    if (atPrompt && this.source.echoes) this.view.cursor?.write('\n'); // the cursor sits after the prompt
+    for (const o of out) {
+      // A lane notice names a pass as the lines do (ruling K: never a raw task key).
+      if ('notice' in o) this.notice({ ...o.notice, message: laneKeysInWords(o.notice.message, words) });
+      else this.say(this.style.dim(this.redact(o.line)));
+    }
+    if (atPrompt) this.prompt();
+  }
+
+  /** What the lane's lines read from the session now (each part read once, when first needed). */
+  private laneWords(): LaneWords {
+    let positions: Map<string, number> | undefined;
+    let handles: Map<string, string> | undefined;
+    let jobs: Map<string, JobEntry> | undefined;
+    let j: Journal | undefined;
+    const journal = (): Journal => (j ??= this.journal());
+    return {
+      at: (id) => {
+        positions ??= new Map(this.session.view().path.map((m, i) => [m.id, i + 1]));
+        const n = positions.get(id);
+        return n !== undefined ? `#${n}` : id;
+      },
+      handle: (key) => (handles ??= new Map(this.entryRows().map((r) => [r.key, r.ref]))).get(key),
+      job: (id) => {
+        if (!jobs) {
+          jobs = new Map();
+          for (const rows of journal().tree.jobs.values()) for (const r of rows) if (!jobs.has(r.job)) jobs.set(r.job, r);
+        }
+        return jobs.get(id);
+      },
+      get maxAttempts(): number {
+        return resolveCompendium(configOf(journal()).compendium).maxAttempts;
+      },
+    };
+  }
+
   // ---- turns ---------------------------------------------------------------------------------------
 
   private submit(text: string): Promise<void> {
@@ -955,7 +1176,11 @@ class Repl {
     this.turnView = tv;
     let outcome: TurnOutcome;
     try {
-      for await (const ev of turn.events) tv.push(redactEvent(ev, this.deps.redact));
+      for await (const ev of turn.events) {
+        tv.push(redactEvent(ev, this.deps.redact));
+        // A notice the turn carried is told, whatever the view did with it: its copy on the bus is not shown again.
+        if (ev.type === 'notice') this.noticed.add(this.noticeKey(ev));
+      }
       outcome = await turn.result;
     } finally {
       tv.finish();
@@ -1391,8 +1616,12 @@ class Repl {
       const t = latestTrace(j, m.id);
       if (!t) continue;
       const titles = this.titles();
-      const names = t.trace.compendium ? new Map(this.entryRows().map((r) => [r.key, r.name])) : undefined;
-      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles), names)));
+      // M5b: the {{recap}} slot's entries are named with their C<n> (trace.recap keeps keys only).
+      const recap = t.trace.recap !== undefined && (t.trace.recap.ids.length > 0 || t.trace.recap.arcs.length > 0);
+      const rows = t.trace.compendium || recap ? this.entryRows() : undefined;
+      const names = rows ? new Map(rows.map((r) => [r.key, r.name])) : undefined;
+      const refs = rows && recap ? new Map(rows.map((r) => [r.key, r.ref])) : undefined;
+      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles), names, refs)));
     }
     this.say(this.style.dim('no answer with a trace on this path yet (greetings have none)'));
   }
@@ -1719,6 +1948,15 @@ class Repl {
       case 'on':
       case 'off':
         return this.compendiumSwitch(c.action === 'on');
+      case 'undo':
+      case 'refile':
+        return this.lanePass(c.action, c.at, c.task);
+      case 'retry':
+        return this.laneRetry(c.at);
+      case 'wait':
+        return this.laneWait(c.sec);
+      case 'status':
+        return this.laneStatus();
       case 'show': {
         let got: ReturnType<SessionHandle['memoryGet']>;
         try {
@@ -1726,7 +1964,7 @@ class Repl {
         } catch (e) {
           return fail(e);
         }
-        return this.say(isNote(got.entry) ? renderNoteCard(got.ref, got.entry) : renderEntryCard(got.ref, got.entry, got.render));
+        return this.say(isNote(got.entry) ? renderNoteCard(got.ref, got.entry) : renderEntryCard(got.ref, got.entry, got.render, this.provenance(got.entry)));
       }
       case 'tree': {
         let trees: ReturnType<SessionHandle['memoryTree']>;
@@ -1842,9 +2080,154 @@ class Repl {
   }
 
   /**
-   * A live entry of `type` that one of `names` names, by the fold's own matching (D-144: names,
-   * aliases, former names), with the name that matched; null when none does.
+   * /memory show (D-181): the rows that created and last changed an entry — the agent, the message its
+   * row is bound to, the task key — and a summary's range by position.
    */
+  private provenance(e: CEntry): EntryProvenance {
+    const words = this.laneWords();
+    const mems = this.journal().tree.mems;
+    const origin = (seq: number): RowOrigin | undefined => {
+      const row: MemEntry | undefined = seq > 0 ? mems.find((m) => m.seq === seq) : undefined;
+      return row ? { by: row.by, key: row.key, at: row.on !== null ? words.at(row.on) : null } : undefined;
+    };
+    const created = origin(e.prov.createdSeq);
+    const last = e.prov.lastSeq !== e.prov.createdSeq ? origin(e.prov.lastSeq) : undefined;
+    return {
+      ...(created ? { created } : {}),
+      ...(last ? { last } : {}),
+      ...(e.range ? { range: [words.at(e.range[0]), words.at(e.range[1])] as [string, string] } : {}),
+    };
+  }
+
+  /** The message a lane verb names (its /show number, or an id or a unique prefix), or null after saying why not. */
+  private messageAt(verb: string, at: MessageAt): string | null {
+    if ('n' in at) return this.at(this.session.view(), at.n)?.id ?? null;
+    const found = resolveMessageId(this.journal(), at.id);
+    if (found.ok) return found.id;
+    this.say(this.style.red(`/memory ${verb}: ${found.message}`));
+    return null;
+  }
+
+  /**
+   * A lane verb's refusal, one red line; the message's id reads as its /show number when it is on this
+   * path, a task key as the lane lines name the pass (`filing #3`, the lead's ruling K), the way back
+   * for a parked pass as `/memory retry #n`, and the way to turn the Compendium on is this REPL's command.
+   */
+  private laneRefusal(verb: string, e: unknown, id: string | undefined, words: LaneWords): void {
+    if (!(e instanceof Refusal)) throw e;
+    let text = laneKeysInWords(this.redact(e.message), words).replace('(turn it on first)', '(/memory on)');
+    if (id !== undefined) {
+      const at = words.at(id);
+      text = text.split(`message ${id}`).join(`message ${at}`).replace('/memory retry queues it again', `/memory retry ${at} runs it again`);
+    }
+    this.say(this.style.red(`/memory ${verb}: ${text}`));
+  }
+
+  /**
+   * /memory undo|refile <ref|#n> [file|hist] (D-180, D-181): the pass bound to the message taken back (a
+   * revert row; the line of its entries follows from the bus) or queued again (a refile lasts while the
+   * session is open). changed:false says so; nothing is written.
+   */
+  private async lanePass(verb: 'undo' | 'refile', at: MessageAt, task: 'file' | 'hist' | undefined): Promise<void> {
+    const id = this.messageAt(verb, at);
+    if (id === null) return;
+    const words = this.laneWords();
+    const input = { messageId: id, ...(task !== undefined ? { task } : {}) };
+    let w: MemoryLaneWrite;
+    try {
+      w = verb === 'undo' ? this.session.memoryUndo(input) : this.session.memoryRefile(input);
+    } catch (e) {
+      return this.laneRefusal(verb, e, id, words);
+    }
+    const where = words.at(id);
+    const passes = w.keys.map((k) => passName(k, words)).join(' and ');
+    const it = w.keys.length === 1 ? 'it' : 'them';
+    if (verb === 'undo') {
+      if (!w.changed) return this.say(this.style.dim(`/memory undo: the pass bound to message ${where} is already undone or being filed again; nothing changed`));
+      // The way back names the kind of pass undone: a bare refile runs every pass bound to the message,
+      // the historian's too when only the filing was undone (the lead's ruling I).
+      const kinds = new Set(w.keys.map(taskOfKey));
+      const pick = kinds.size === 1 ? ` ${[...kinds][0]!}` : '';
+      this.say(this.style.dim(`undone: ${passes}; what ${w.keys.length === 1 ? 'it' : 'they'} wrote leaves the Compendium from the next turn (/memory refile ${where}${pick} runs ${it} again)`));
+      // The entries it took back (memory{reverted}, published as it wrote) follow on the next line.
+      await this.laneSettle();
+      return this.flushLane();
+    }
+    const held = this.heldKeys();
+    if (!w.changed) {
+      if (w.keys.length > 0 && w.keys.every((k) => held.has(k))) return this.say(this.style.dim(`/memory refile: ${passes} already ${w.keys.length === 1 ? 'waits for its agent' : 'wait for their agents'}; nothing changed (/memory status)`));
+      return this.say(this.style.dim(`/memory refile: ${passes !== '' ? passes : `the pass of message ${where}`} is already queued or running; nothing changed`));
+    }
+    this.say(this.style.dim(this.queuedAgain(w.keys, held, words, (names) => `${names.join(' and ')} queued again (/memory wait waits for ${names.length === 1 ? 'it' : 'them'})`)));
+  }
+
+  /** The keys the lane holds for their agent (asked for by name while that agent is off; the lead's ruling I). */
+  private heldKeys(): Set<string> {
+    return new Set((this.session.memoryStatus().held ?? []).map((t) => t.key));
+  }
+
+  /** A verb's queued tasks in `queued`'s words; one line for each held one (its agent is off: it waits). */
+  private queuedAgain(keys: readonly string[], held: ReadonlySet<string>, words: LaneWords, queued: (names: string[]) => string): string {
+    const run = keys.filter((k) => !held.has(k)).map((k) => passName(k, words));
+    const lines = run.length > 0 ? [queued(run)] : [];
+    for (const k of keys) if (held.has(k)) lines.push(laneHeldLine(k, words));
+    return lines.join('\n');
+  }
+
+  /**
+   * /memory retry [#n] (D-180): the parked tasks on this path (or those bound to the message) queued again;
+   * their failure count starts over. Ruling K: it also resumes an agent the circuit breaker paused, which
+   * is said when nothing was parked.
+   */
+  private laneRetry(at: MessageAt | undefined): void {
+    const id = at === undefined ? undefined : this.messageAt('retry', at);
+    if (id === null) return;
+    const words = this.laneWords();
+    const was = this.session.memoryStatus().blocked;
+    let w: MemoryLaneWrite;
+    try {
+      w = this.session.memoryRetry(id !== undefined ? { messageId: id } : {});
+    } catch (e) {
+      return this.laneRefusal('retry', e, id, words);
+    }
+    const where = id !== undefined ? `for message ${words.at(id)}` : 'on this path';
+    if (!w.changed) return this.say(this.style.dim(`/memory retry: nothing is parked ${where}; nothing changed`));
+    if (w.keys.length === 0) return this.say(this.style.dim(`/memory retry: nothing is parked ${where}; ${laneResumedWords(was)}`));
+    this.say(this.style.dim(this.queuedAgain(w.keys, this.heldKeys(), words, (names) => `queued again: ${names.join(', ')} (/memory wait waits for ${names.length === 1 ? 'it' : 'them'})`)));
+  }
+
+  /**
+   * /memory wait [sec] (D-171, D-181): until the background lane has nothing left to run (in manual mode
+   * this runs it), or `sec` passed. The passes' lines print as they end; then one line on where it stands.
+   * Ctrl+C stops waiting (the work goes on).
+   */
+  private async laneWait(sec: number | undefined): Promise<void> {
+    if (!this.compendiumOn()) return this.say(this.style.dim('the Compendium is off for this session: nothing runs in the background (/memory on)'));
+    const ended = this.laneEnded;
+    const waiting = this.session.memoryWait(sec !== undefined ? { timeoutMs: sec * 1000 } : {});
+    const stopped = new Promise<null>((resolve) => {
+      this.laneWaitStop = () => resolve(null);
+    });
+    let r: Awaited<typeof waiting> | null;
+    try {
+      r = await Promise.race([waiting, stopped]);
+    } finally {
+      this.laneWaitStop = null;
+    }
+    // Stopped: the lane goes on; what it says comes at the next pause.
+    if (r === null) waiting.catch(() => {});
+    await this.laneSettle();
+    this.flushLane();
+    if (r === null) return this.say(this.style.dim('(stopped waiting; the background work goes on: /memory status shows it)'));
+    this.say(this.style.dim(renderLaneWait(r, this.laneEnded !== ended, sec, this.laneWords())));
+  }
+
+  /** /memory status (D-180): what runs, what waits, what is parked, the answers not filed yet. */
+  private laneStatus(): void {
+    if (!this.compendiumOn()) this.say(this.style.yellow(COMPENDIUM_OFF));
+    this.say(renderLaneStatus(this.session.memoryStatus(), this.laneWords()));
+  }
+
   /**
    * /memory retire <ref> [reason] with an unquoted name of several words («Арсений Кеттер устарел»):
    * the longest run of leading words that names a live entry is the ref, the rest the reason. A C<n>
@@ -1865,6 +2248,10 @@ class Repl {
     return keep;
   }
 
+  /**
+   * A live entry of `type` that one of `names` names, by the fold's own matching (D-144: names,
+   * aliases, former names), with the name that matched; null when none does.
+   */
   private liveMatch(type: EntryType, names: readonly string[]): { ref: string; name: string; by: string } | null {
     const entries = this.session.compendium().entries;
     for (const row of this.session.memoryList({ type })) {

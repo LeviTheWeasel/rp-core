@@ -50,7 +50,8 @@ function refuse(a: CompactArgs, code: string, message: string): number {
 
 export async function cmdCompact(a: CompactArgs): Promise<number> {
   // 1. Open (lock + recovery) and close: an interrupted turn is committed or ended before the rewrite.
-  const engine = await Engine.open({ ...a.engine, home: a.home });
+  // M5b (ruling H): the lane 'manual', so opening it starts no Compendium task the rewrite would cut off.
+  const engine = await Engine.open({ ...a.engine, home: a.home, lane: 'manual' });
   /** The turn whose draft recovery set aside (shown, never saved): its chk rows are the only copy. */
   let draft: string | null = null;
   try {

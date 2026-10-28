@@ -21,12 +21,14 @@ describe('C<n> = entryRefs', () => {
       'C1 lib:lantern:e1',
       'C2 lib:lantern:e2',
       'C3 lib:lantern:e3',
-      'C4 note:брат',
-      'C5 character:мира',
-      'C6 arc:украденный свет',
-      'C7 location:старая пристань',
-      'C8 summary:m0000005.0',
-      'C9 character:тихон',
+      // M5b (D-177): the book's [Arc] overview, seeded in its book place.
+      'C4 lib:lantern:k2',
+      'C5 note:брат',
+      'C6 character:мира',
+      'C7 arc:украденный свет',
+      'C8 location:старая пристань',
+      'C9 summary:m0000005.0',
+      'C10 character:тихон',
     ]);
     const h = new HandleTable(view.compendium);
     for (const { ref, entry } of refs) {
@@ -54,9 +56,9 @@ describe('C<n> = entryRefs', () => {
   test('read_lore resolves a C<n> no search listed (the brief tail names it), with a fresh table each turn', async () => {
     const view = world();
     const ref = refOf(view.compendium, 'character:тихон')!;
-    expect(ref).toBe('C9');
+    expect(ref).toBe('C10');
     const out = await readLoreTool.run({ ids: [ref] }, worldCtx(view, { handles: new HandleTable() }));
-    expect(out.text).toStartWith('C9 Тихон (character):\n# Тихон');
+    expect(out.text).toStartWith('C10 Тихон (character):\n# Тихон');
   });
 
   test('without a typed book the notes keep their M3 numbers; attaching one shifts session handles by its entry count', async () => {
@@ -72,8 +74,8 @@ describe('C<n> = entryRefs', () => {
       'C7 character:тихон',
     ]);
     const booked = world();
-    expect(refOf(booked.compendium, 'note:брат')).toBe('C4');
+    expect(refOf(booked.compendium, 'note:брат')).toBe('C5');
     expect(handlesOf((await searchLoreTool.run({ query: 'Тихон' }, worldCtx(bare, { lore: [] }))).text)).toEqual(['C7', 'C1']);
-    expect(handlesOf((await searchLoreTool.run({ query: 'Тихон' }, worldCtx(booked))).text)).toEqual(['C9', 'C4']);
+    expect(handlesOf((await searchLoreTool.run({ query: 'Тихон' }, worldCtx(booked))).text)).toEqual(['C10', 'C5']);
   });
 });

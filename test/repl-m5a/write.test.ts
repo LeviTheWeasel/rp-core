@@ -30,8 +30,8 @@ describe('/memory new', () => {
     // The template is pretty JSON, one field per line.
     expect(r.edited[0]!.split('\n')[1]).toStartWith('  "//": "fill what you know');
     const out = r.out();
-    expect(after(out, '/memory new character Мира')).toBe('character C16 "Мира" filed (from the next turn)\n');
-    expect(out).toContain('  C16 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]');
+    expect(after(out, '/memory new character Мира')).toBe('character C17 "Мира" filed (from the next turn)\n');
+    expect(out).toContain('  C17 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]');
     const rows = memRows(r);
     expect(rows).toHaveLength(1);
     expect(rows[0]!).toMatchObject({ key: null, on: null, by: 'user' });
@@ -55,8 +55,8 @@ describe('/memory new', () => {
     expect(Object.keys(parse(r.edited[2]!))).toEqual(['//', 'topic', 'category', 'description', 'key_facts', 'rules']);
     expect(parse(r.edited[2]!)['//']).toBe('fill what you know; blank fields are ignored.');
     const out = r.out();
-    expect(out).toContain('character C16 "Ян" filed (from the next turn)');
-    expect(out).toContain('summary C17 "Ночь у маяка" filed (from the next turn)');
+    expect(out).toContain('character C17 "Ян" filed (from the next turn)');
+    expect(out).toContain('summary C18 "Ночь у маяка" filed (from the next turn)');
     expect(after(out, '/memory new worldbuilding')).toBe('/memory new: nothing changed, nothing written\n');
     expect(memRows(r).map((m) => m.ops[0])).toEqual([
       { op: 'file', type: 'character', data: { name: 'Ян', description: 'Мальчишка с пристани.' }, target: 'character:ян' },
@@ -70,7 +70,7 @@ describe('/memory new', () => {
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    expect(after(out, '/memory new character мира')).toBe('/memory new: "мира" is already C16; use /memory edit C16\n');
+    expect(after(out, '/memory new character мира')).toBe('/memory new: "мира" is already C17; use /memory edit C17\n');
     expect(after(out, '/memory new location маяк')).toBe('/memory new: "маяк" is already C6 (Серый маяк); use /memory edit C6\n');
     // Another type may share the name: the editor opens (and is cancelled here).
     expect(after(out, '/memory new item Мира')).toBe('/memory new cancelled: nothing written\n');
@@ -92,7 +92,7 @@ describe('/memory new', () => {
     const first = after(out, '/memory new character Ян').split('\n');
     expect(first[0]).toMatch(/^\/memory new: the text is not valid JSON \(.+\); the editor opens again$/);
     expect(first[1]).toBe('/memory new: the text must be one JSON object, { … }; the editor opens again');
-    expect(first[2]).toBe('character C16 "Ян" filed (from the next turn)');
+    expect(first[2]).toBe('character C17 "Ян" filed (from the next turn)');
     // Each re-opening starts from the text that failed.
     expect(r.edited[1]).toBe(broken);
     expect(r.edited[2]).toBe('[1, 2]');
@@ -206,22 +206,22 @@ describe('/memory edit', () => {
     });
     r.type(
       '/memory new character Мира',
-      '/memory edit C16',
+      '/memory edit C17',
       '/memory add Ключи | | Ключи у Арсения.',
-      '/memory edit C17',
-      '/memory edit C17',
-      '/memory edit C16 Новое имя | |',
+      '/memory edit C18',
+      '/memory edit C18',
+      '/memory edit C17 Новое имя | |',
       '/memory edit C99',
     );
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    expect(after(out, '/memory edit C16')).toBe('character C16 "Мира" changed: set role (from the next turn)\n');
+    expect(after(out, '/memory edit C17')).toBe('character C17 "Мира" changed: set role (from the next turn)\n');
     expect(r.edited[2]).toBe('Ключи у Арсения.');
-    expect(out).toContain('note C17 "Ключи" changed: text (from the next turn)');
+    expect(out).toContain('note C18 "Ключи" changed: text (from the next turn)');
     expect(out).toContain('/memory edit cancelled: nothing written');
-    expect(after(out, '/memory edit C16 Новое имя | |')).toBe(
-      '/memory edit: C16 "Мира" is a character; /memory edit C16 opens it in the editor (the one-line form is a note\'s)\n',
+    expect(after(out, '/memory edit C17 Новое имя | |')).toBe(
+      '/memory edit: C17 "Мира" is a character; /memory edit C17 opens it in the editor (the one-line form is a note\'s)\n',
     );
     expect(after(out, '/memory edit C99')).toBe('/memory edit: no single entry matches "C99" (use its C<n> handle or key)\n');
     expect(memRows(r).map((m) => m.ops[0]!.op)).toEqual(['file', 'edit', 'note', 'edit']);
@@ -286,7 +286,7 @@ describe('retire, restore, add', () => {
     // new, edit, retire and export (an export writes no row, but one rule holds for every memory verb).
     expect(r.out().split('refused [session_busy]: /memory changes the story').length - 1).toBe(4);
     r.provider.release('p');
-    await r.until('Lantern (lib: lantern) · 15');
+    await r.until('Lantern (lib: lantern) · 16');
     r.type('/quit');
     expect(await r.done).toBe(0);
     expect(memRows(r)).toEqual([]);

@@ -8,9 +8,11 @@
 // (test/fixtures/ru/lantern) is RoleCall's export of 18 rows; the card is a narrator (card.json), the
 // persona Ян (persona.json).
 //   a. rp-core import lantern.compendium.json → the library book `lantern`;
-//   b. a new session; /lore add lantern; /memory tree (Cast, Places, Narrative…); /memory list (C1…C15);
+//   b. a new session; /lore add lantern; /memory tree (Cast, Places, Narrative…); /memory list (C1…C16:
+//      M5b seeds the book's [Arc] overview too, D-177);
 //   c. /memory new character Мира in the editor; «…отдай это Мире…» with the Director on; /preview shows
-//      [Retrieved World Knowledge] with her brief at depth 1, above the Director's directive;
+//      [Retrieved World Knowledge] with her brief at depth 1, above the Director's directive (and, since
+//      M5b, the book's [Arc] overview in the {{recap}} slot right after the greeting, D-177/D-178);
 //   d. /memory edit of a library entry (Ульяна): the book file stays byte-identical, /memory show shows
 //      the overlay;
 //   e. a swipe and a rewind leave the human rows in place; a fork keeps the entry keys;
@@ -176,11 +178,12 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
     expect(book.entries.filter((e) => e.meta?.arc !== undefined).map((e) => e.title)).toEqual(['[Arc] Украденный свет']);
   });
 
-  test('b. /lore add lantern; /memory tree: the session tree, then the book’s (Cast, Places, Narrative…); /memory list: C1…C15', () => {
+  test('b. /lore add lantern; /memory tree: the session tree, then the book’s (Cast, Places, Narrative…); /memory list: C1…C16', () => {
     // Section I: /lore add says what /memory gains (nothing follows the book here: no handle moves).
-    expect(saidFor('/lore add lantern')).toBe('lorebook lantern "Lantern" added: 18 entries (from the next turn); its 15 Compendium entries join /memory now\n');
+    // M5b (D-177): the book's 15 typed entries and its [Arc] overview.
+    expect(saidFor('/lore add lantern')).toBe('lorebook lantern "Lantern" added: 18 entries (from the next turn); its 16 Compendium entries join /memory now\n');
     const tree = saidFor('/memory tree').split('\n');
-    expect(tree.slice(0, 2)).toEqual(['World Knowledge (this session) · 0', 'Lantern (lib: lantern) · 15']);
+    expect(tree.slice(0, 2)).toEqual(['World Knowledge (this session) · 0', 'Lantern (lib: lantern) · 16']);
     for (const line of [
       '  Cast · 3',
       '    Unaffiliated · 1: C3 Ульяна',
@@ -188,28 +191,28 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
       '    C4 Вельмар · 3',
       '      C6 Серый маяк',
       '  Events · 1',
-      '  Narrative · 1',
-      '    Украденный свет · 1: C14 Фонарь погас',
+      '  Narrative · 2',
+      '    Украденный свет · 2: C16 [Arc] Украденный свет, C14 Фонарь погас',
       '  Bestiary · 1',
     ]) {
       expect(tree).toContain(line);
     }
     const list = saidFor('/memory list').split('\n');
-    expect(list[0]).toBe('The Compendium of this path: 15 live · /memory show <ref> prints one');
+    expect(list[0]).toBe('The Compendium of this path: 16 live · /memory show <ref> prints one');
     const rows = list.filter((l) => /^ {2}C\d+ /.test(l));
     const refs = rows.map((l) => Number(/^ {2}C(\d+)/.exec(l)![1]));
-    expect(refs.sort((a, b) => a - b)).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
+    expect(refs.sort((a, b) => a - b)).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
     for (const l of rows) expect(l).toContain('[lib: lantern]');
     expect(list).toContain('  C6  Серый маяк (aka маяк) — Каменная башня на краю мыса; на её крюке висел Латунный фонарь. [lib: lantern] [featured] [217]');
     expect(list).toContain('  C3  Ульяна (aka Смотрительница) — Смотрительница Серого маяка, тридцать зим не пропустившая ни одной ночи. [lib: lantern] [338]');
   });
 
   test('c. /memory new character Мира (the editor), then «…отдай это Мире…»: her brief in the block at depth 1, above the directive', () => {
-    expect(saidFor('/memory new character Мира')).toBe('character C16 "Мира" filed (from the next turn)\n');
+    expect(saidFor('/memory new character Мира')).toBe('character C17 "Мира" filed (from the next turn)\n');
     // One human row (path-free), the editor's JSON as saved.
     const rows = memRowsOf(sessionId);
     expect(rows[0]).toMatchObject({ key: null, on: null, by: 'user', ops: [{ op: 'file', type: 'character', data: MIRA_DATA }] });
-    expect(saidFor('/memory show Мира').split('\n').slice(0, 3)).toEqual(['C16 Мира · character · character:мира', '  aka: Фонарщица', '  origin: this session, written by you at journal row 3']);
+    expect(saidFor('/memory show Мира').split('\n').slice(0, 3)).toEqual(['C17 Мира · character · character:мира', '  aka: Фонарщица', '  origin: this session, written by you at journal row 3']);
 
     // The turn: the Director planned, the narrator answered.
     const turn = saidFor(MESSAGE);
@@ -218,7 +221,10 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
     // /trace: picked by mention (Мира by her name in another case, the lighthouse by its alias, the
     // library summary by its RoleCall trigger «Мира»), all three as briefs (lite: an 8 192 window).
     const trace = saidFor('/trace');
-    expect(trace).toContain('  compendium: lite · picked 3: C16 "Мира" (mention), C6 "Серый маяк" (mention), C14 "Фонарь погас" (mention) · injected 3: C16 "Мира" brief');
+    expect(trace).toContain('  compendium: lite · picked 3: C17 "Мира" (mention), C6 "Серый маяк" (mention), C14 "Фонарь погас" (mention) · injected 3: C17 "Мира" brief');
+    // M5b (D-177, D-178): the book's [Arc] overview is no longer lore; it rides in the {{recap}} slot.
+    expect(trace).toMatch(/\n {2}recap: 1 arc: C16 "Украденный свет" rev 0 · boundary [0-9a-f]{8}\n/);
+    expect(trace).toContain('  lore: nothing fired');
 
     // /preview (the next turn: a swipe of that answer, whose user message is «…отдай это Мире…»).
     const preview = saidFor('/preview');
@@ -230,7 +236,12 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
     const directive = msgs.find((m) => m.src === 'director')!;
     // Depth 1: the block and the directive sit right above the last message, the block first.
     expect([block.n, directive.n]).toEqual([last.n - 2, last.n - 1]);
-    expect(msgs[block.n - 2]).toMatchObject({ role: 'assistant', src: 'history' });
+    // M5b: the {{recap}} slot at the cut (nothing is cut: right after the greeting), ahead of the inserts.
+    const recap = msgs[block.n - 2]!;
+    expect(recap).toMatchObject({ role: 'system', src: 'recap' });
+    expect(recap.text).toStartWith('[Arc] Украденный свет\nМаяк погас, фонарь пропал вместе со смотрительницей.');
+    expect(msgs[recap.n - 2]).toMatchObject({ role: 'assistant', src: 'history' });
+    expect(msgs.filter((m) => m.src.startsWith('lore'))).toEqual([]);
     expect(block.role).toBe('system');
     expect(directive.text).toStartWith('[DIRECTOR CONSTRAINTS - BINDING THIS TURN]');
     expect(block.text).toStartWith(
@@ -266,7 +277,7 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
     // The second tree: the session's own (Мира; under 5 entries Bunraku's tree is one General group),
     // and the book's tree still holds Ульяна.
     const tree = saidFor('/memory tree', 2).split('\n');
-    expect(tree.slice(0, 3)).toEqual(['World Knowledge (this session) · 1', '  General · 1: C16 Мира', 'Lantern (lib: lantern) · 15']);
+    expect(tree.slice(0, 3)).toEqual(['World Knowledge (this session) · 1', '  General · 1: C17 Мира', 'Lantern (lib: lantern) · 16']);
     expect(tree).toContain('    Unaffiliated · 1: C3 Ульяна');
   });
 
@@ -279,7 +290,7 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
     // After the swipe, after the rewind, in the fork: the same four characters, Ульяна still edited.
     expect(lists[1]).toBe(lists[0]!);
     expect(lists[2]).toBe(lists[0]!);
-    expect(lists[0]).toContain('  C16 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]\n');
+    expect(lists[0]).toContain('  C17 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]\n');
     expect(lists[0]).toContain('  C3  Ульяна (aka Смотрительница) — Смотрительница Серого маяка, тридцать зим не пропустившая ни одной ночи. [lib: lantern, edited] [348]\n');
 
     // The fork copied the human rows (renumbered in its own journal); the engine folds both sessions to
@@ -290,7 +301,7 @@ describe('the M5a demo (lantern, scripted model, the real CLI)', () => {
     const c = await compendiumOf([sessionId, forkId]);
     const keys = (id: string) => c.get(id)!.rows.map((r) => `${r.ref} ${r.key}`);
     expect(keys(forkId)).toEqual(keys(sessionId));
-    expect(keys(sessionId)).toContain('C16 character:мира');
+    expect(keys(sessionId)).toContain('C17 character:мира');
     expect(keys(sessionId)).toContain(`C3 ${ULYANA_KEY}`);
     expect(c.get(forkId)!.rows.find((r) => r.ref === 'C3')).toMatchObject({ overlay: true });
     expect(c.get(forkId)!.data.get('C3')).toMatchObject({ current_state: ULYANA_STATE });

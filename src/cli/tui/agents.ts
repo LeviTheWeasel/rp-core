@@ -8,12 +8,14 @@
 
 import { ageOf, directorAt, isFinishedArc } from '../../agents/director/state.ts';
 import { SURFACE_TURNS, type DirectorRecord } from '../../agents/director/types.ts';
+import type { MemoryStatus } from '../../engine/api.ts';
 import type { Event } from '../../protocol/events.ts';
 import type { SessionConfig } from '../../session/entries.ts';
 import { effectiveMessage } from '../../session/tree.ts';
 import type { MessageView } from '../../session/view.ts';
 import { toolArgsText, toolLine } from '../render.ts';
 import { latestTrace, pathUsage, type Journal, type PriceTable, type UsageCounts } from '../repl-journal.ts';
+import { taskOfKey } from '../repl-render.ts';
 import { LAYOUT } from './types.ts';
 
 export type NarratorPhase =
@@ -171,8 +173,62 @@ export function statsOf(id: string, gen: MessageView['gen'], trace?: { rounds?: 
 const cancelRunning = (tools: ToolCall[], turnId: string): ToolCall[] =>
   tools.some((t) => t.turnId === turnId && t.status === 'running') ? tools.map((t) => (t.turnId === turnId && t.status === 'running' ? { ...t, status: 'cancelled' } : t)) : tools;
 
-/** The agent a callKey names: `${turnId}:narrator:0`, `${turnId}:director:1`. */
+/** The agent a callKey names: `${turnId}:narrator:0`, `${turnId}:director:1`; the lane's `${job}:filing:0`. */
 const agentOfKey = (callKey: string): string => callKey.split(':')[1] ?? 'narrator';
+
+const isLaneAgent = (agent: string): boolean => agent === 'filing' || agent === 'historian';
+
+/**
+ * M5b (D-181): an event of the session's background lane (filing, the historian): its agent events (no
+ * turn), the memory changes its passes made, its calls' retries and usage (ruling I: the usage block
+ * counts them), its idle{background} count. Never part of a turn's stream: the host hands them to the
+ * pane from the engine's bus, a turn streaming or not.
+ */
+export function isLaneEvent(ev: Event): boolean {
+  switch (ev.type) {
+    case 'agent':
+      return ev.turnId === undefined && isLaneAgent(ev.agent);
+    case 'memory':
+      return isLaneAgent(ev.by);
+    case 'retry':
+      return isLaneAgent(agentOfKey(ev.callKey));
+    case 'usage':
+      return isLaneAgent(ev.agent);
+    case 'idle':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Lane block statuses that say a pass waits or runs: stale once the lane says nothing is left (idle{background: 0}). */
+const LANE_BUSY: ReadonlySet<string> = new Set(['queued', 'started', 'retry']);
+
+/**
+ * The background lane as memoryStatus() says it now, into the blocks (a session the pane starts showing:
+ * the lane's events at its open came before the pane): the running pass `started` (`queued` while it
+ * waits for a place on the server), else a queued one `queued`, else a parked one `parked [code]`.
+ * Those start at `now`.
+ */
+export function withLane(s: AgentsState, lane: MemoryStatus, now: Date): AgentsState {
+  let others = s.others;
+  for (const [task, agent] of [
+    ['file', 'filing'],
+    ['hist', 'historian'],
+  ] as const) {
+    const running = lane.running?.task === task ? lane.running : undefined;
+    const parked = lane.parked.find((p) => taskOfKey(p.key) === task);
+    const block: AgentBlock | null = running
+      ? { agent, status: running.waiting ? 'queued' : 'started', startedMs: now.getTime() }
+      : lane.queued.some((q) => q.task === task)
+        ? { agent, status: 'queued', startedMs: now.getTime() }
+        : parked
+          ? { agent, status: 'parked', ...(parked.code !== undefined ? { code: parked.code } : {}) }
+          : null;
+    if (block) others = upsertAgent(others, agent, () => block);
+  }
+  return others === s.others ? s : { ...s, others };
+}
 
 const FINAL_AGENT_STATUSES: ReadonlySet<string> = new Set(['preempted', 'adopted', 'recalled', 'reused', 'fallback', 'skipped', 'done', 'failed', 'parked']);
 
@@ -255,10 +311,14 @@ export function reduceAgents(s: AgentsState, ev: Event, now: Date): AgentsState 
     }
     case 'agent': {
       const at = msOf(ev, now);
+      // M5b: the lane queues the next pass while one runs; the running one keeps its block (status, start).
+      if (ev.status === 'queued' && s.others.some((b) => b.agent === ev.agent && b.status === 'started')) return s;
       return {
         ...s,
         others: upsertAgent(s.others, ev.agent, (b) => {
-          const next: AgentBlock = { agent: b.agent, status: ev.status, ...(b.memory !== undefined ? { memory: b.memory } : {}) };
+          // A pass that starts is a new job: the last one's memory change is not its.
+          const keep = b.memory !== undefined && ev.status !== 'started';
+          const next: AgentBlock = { agent: b.agent, status: ev.status, ...(keep ? { memory: b.memory } : {}) };
           if (ev.count !== undefined) next.count = ev.count;
           if (ev.code !== undefined) next.code = ev.code;
           if (ev.source !== undefined) next.source = ev.source;
@@ -272,6 +332,13 @@ export function reduceAgents(s: AgentsState, ev: Event, now: Date): AgentsState 
     case 'memory':
       if (ev.by === 'user') return s;
       return { ...s, others: upsertAgent(s.others, ev.by, (b) => ({ ...b, memory: `${ev.change} ${ev.kind} "${ev.name}"` })) };
+    case 'idle': {
+      // Nothing queued or running in the lane: a block still saying so missed its pass's end (a pass
+      // dropped from the queue by /memory off, a run cut short with nothing to tell).
+      if (ev.background !== 0 || !s.others.some((b) => isLaneAgent(b.agent) && b.status !== undefined && LANE_BUSY.has(b.status))) return s;
+      const others = s.others.map((b) => (isLaneAgent(b.agent) && b.status !== undefined && LANE_BUSY.has(b.status) ? { agent: b.agent, status: 'idle', ...(b.memory !== undefined ? { memory: b.memory } : {}) } : b));
+      return { ...s, others };
+    }
     case 'usage': {
       const u = ev.usage;
       const live = { ...s.usage.live };

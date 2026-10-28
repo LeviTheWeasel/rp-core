@@ -119,7 +119,9 @@ message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /t
 /quit). The
 banner says whether the narrator can use tools (native, prompted or off). Ctrl+C stops an answer and keeps
 what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
-previous answer.
+previous answer. The Compendium files the story in the background between turns (its lines start
+with ⋯ memory:); a script does not wait for it unless it says /memory wait. RP_CORE_LANE=manual
+runs that work only at /memory wait.
 ${KEEP_HELP}
 ${PROVIDER_HELP}
 Exit 0 at /quit or the end of input; 3 under --provider script: or replay: when an answer failed
@@ -266,7 +268,7 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M5a)
+  return `rp-core — headless roleplay agent core (milestone M5b)
 
 Usage: rp-core <command> [flags]
 

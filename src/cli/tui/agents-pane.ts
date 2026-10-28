@@ -9,6 +9,7 @@
 // arguments come from files and models.
 
 import { StyledText, TextRenderable, type RGBA, type TextChunk } from '@opentui/core';
+import type { MemoryStatus } from '../../engine/api.ts';
 import type { Event } from '../../protocol/events.ts';
 import type { SessionConfig } from '../../session/entries.ts';
 import type { Journal, PriceTable } from '../repl-journal.ts';
@@ -18,6 +19,7 @@ import {
   reduceAgents,
   storedFacts,
   usageTotal,
+  withLane,
   withStored,
   type AgentsState,
   type DirectorLive,
@@ -198,7 +200,7 @@ function directorStatus(s: AgentsState): Line {
   }
 }
 
-const AGENT_TONE: Readonly<Record<string, Tone>> = { failed: 'red', fallback: 'yellow', preempted: 'yellow', retry: 'yellow', parked: 'yellow' };
+const AGENT_TONE: Readonly<Record<string, Tone>> = { failed: 'red', fallback: 'yellow', preempted: 'yellow', retry: 'yellow', parked: 'yellow', skipped: 'dim', idle: 'dim' };
 
 /** The pane's body: Narrator, Director, the M5 agents (usage is usageLines, at the bottom). */
 export function agentsLines(s: AgentsState, width: number, o: PaneOptions = {}): Line[] {
@@ -314,9 +316,9 @@ export function createAgentsPane(ui: Ui, theme: Theme, clock: () => Date, o: Pan
       state = withStored(state, storedFacts(j, head, config, prices));
       draw();
     },
-    reset(id: string): void {
+    reset(id: string, lane?: MemoryStatus): void {
       sessionId = id;
-      state = initialAgents();
+      state = lane ? withLane(initialAgents(), lane, clock()) : initialAgents();
       draw();
     },
   };

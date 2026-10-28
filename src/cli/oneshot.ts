@@ -129,6 +129,9 @@ export async function runSend(o: SendOptions): Promise<number> {
     ...(o.rt ? engineOptions(o.rt) : {}),
     home: o.home,
     ...(o.provider ? { providerOverride: o.provider } : {}),
+    // M5b (the lead's ruling H): a one-shot never starts a Compendium task it cannot finish (close()
+    // would abort it and leave a begin row for the next open); the chat's lane files that answer.
+    lane: 'manual',
   });
   let session: SessionHandle | null = null;
   try {

@@ -9,7 +9,7 @@
 // small state machines (the prose styler and the turn printer); nothing here touches a session.
 
 import type { Event } from '../protocol/events.ts';
-import type { MemoryRow, PreviewResult, RefusalCode } from '../engine/api.ts';
+import type { MemoryRow, MemoryStatus, PreviewResult, RefusalCode } from '../engine/api.ts';
 import type { ImportWarning } from '../formats/native.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import { entryLabel } from '../lore/engine.ts';
@@ -619,6 +619,7 @@ export function renderTrace(
   titles?: ReadonlyMap<string, string>,
   after: readonly string[] = [],
   names?: ReadonlyMap<string, string>,
+  refs?: ReadonlyMap<string, string>,
 ): string {
   const tr = t.trace;
   const tok = `prompt ~${tr.tokens.estimated} tok${tr.tokens.reported !== undefined ? ` (server: ${tr.tokens.reported})` : ''}`;
@@ -630,10 +631,33 @@ export function renderTrace(
   ];
   lines.push(...loreTraceLines(tr, titles), ...after);
   if (tr.compendium) lines.push(compendiumTraceLine(tr.compendium, names));
+  const recap = recapTraceLine(tr.recap, names, refs);
+  if (recap !== null) lines.push(recap);
   if (tr.calls.length > 0) lines.push(`  calls: ${tr.calls.map((c) => `${c.agent} ${c.model} ${(c.ms / 1000).toFixed(1)}s`).join(', ')}`);
   lines.push(...toolTraceLines(tr));
   if (tr.partial) lines.push('  (partial: recovered after an interruption)');
   return lines.join('\n');
+}
+
+/**
+ * /trace (M5b, D-178): what the request's {{recap}} slot held — its arcs with the revision rendered
+ * (rev = the journal row of the overview's text; 0: the book's own), its summaries in render order, and
+ * the boundary (the first history message sent after the cut) that keeps it stable. null when the slot
+ * was empty (or the trace predates it). `names` and `refs`: entry key → its name and C<n> now.
+ */
+export function recapTraceLine(r: Trace['recap'] | undefined, names?: ReadonlyMap<string, string>, refs?: ReadonlyMap<string, string>): string | null {
+  if (!r || (r.ids.length === 0 && r.arcs.length === 0)) return null;
+  const who = (key: string): string => {
+    const ref = refs?.get(key);
+    const name = names?.get(key);
+    if (ref !== undefined) return name !== undefined ? `${ref} ${JSON.stringify(name)}` : ref;
+    return name !== undefined ? `${JSON.stringify(name)} ${key}` : key;
+  };
+  const parts: string[] = [];
+  if (r.arcs.length > 0) parts.push(`${plural(r.arcs.length, 'arc')}: ${r.arcs.map((a) => `${who(a.key)} rev ${a.rev}`).join(', ')}`);
+  if (r.ids.length > 0) parts.push(`${plural(r.ids.length, 'summary', 'summaries')}: ${r.ids.map(who).join(', ')}`);
+  parts.push(`boundary ${r.boundary ?? 'none'}`);
+  return `  recap: ${parts.join(' · ')}`;
 }
 
 /** Why a tool loop stopped calling tools (Trace.rounds.ended), in a few words. */
@@ -1083,24 +1107,55 @@ export function renderMemoryList(
   return lines.join('\n');
 }
 
+/** M5b (D-181): the journal row behind an entry's creation or last change, as /memory show names it. */
+export interface RowOrigin {
+  by: 'filing' | 'historian' | 'user';
+  /** The row's task key (`file:<id>`, `hist:<from>-<to>`); null for a person's row. */
+  key: string | null;
+  /** The message it is bound to: `#n` on the active path, else its id; null when it has none. */
+  at: string | null;
+}
+
+/** What repl.ts reads from the journal for /memory show: the rows that created and last changed the entry, the summary's range as `#n`. */
+export interface EntryProvenance {
+  created?: RowOrigin;
+  last?: RowOrigin;
+  range?: [string, string];
+}
+
+const AGENT_NAME: Readonly<Record<string, string>> = { filing: 'the filing agent', historian: 'the historian' };
+
+/** `the filing agent from #7 (file:<id>)`. */
+const agentRow = (o: RowOrigin): string => `${AGENT_NAME[o.by] ?? o.by}${o.at !== null ? ` from ${o.at}` : ''}${o.key !== null ? ` (${o.key})` : ''}`;
+
+/** ` by the historian from #9 (hist:…)` for an agent row, '' for a person's (or an unknown) one. */
+const changedBy = (o: RowOrigin | undefined): string => (o !== undefined && o.by !== 'user' ? ` by ${agentRow(o)}` : '');
+
 /**
  * /memory show <ref> of a typed entry or an arc (D-161): who it is, where it came from (origin, the
  * row that created it, the last row that changed it, the overlay, a retirement, former names), then
- * its full render as read_lore gives it.
+ * its full render as read_lore gives it. M5b (D-181): `prov` names the agent behind those rows
+ * (`filed by the filing agent from #7 (file:<id>)`) and the summary's range by position.
  */
-export function renderEntryCard(ref: string, e: CEntry, render: string): string {
+export function renderEntryCard(ref: string, e: CEntry, render: string, prov: EntryProvenance = {}): string {
   const kind = e.type ?? (e.arc !== undefined ? 'arc' : 'note');
   const lines = [`${ref} ${shownName(kind, e.name)} · ${kind} · ${e.key}`];
   if (e.aliases.length > 0) lines.push(`  aka: ${e.aliases.join(', ')}`);
   if (e.origin.kind === 'library') {
     const overlay = e.origin.overlay ? '; changed in this session (an overlay: the book file stays as it is)' : '';
     lines.push(`  origin: the library book ${e.origin.book}, entry ${e.origin.id}${overlay}`);
-    if (e.prov.lastSeq > 0) lines.push(`  last changed at journal row ${e.prov.lastSeq}`);
+    if (e.prov.lastSeq > 0) lines.push(`  last changed at journal row ${e.prov.lastSeq}${changedBy(prov.last)}`);
   } else {
-    const how = e.prov.created === null ? `written by you at journal row ${e.prov.createdSeq}` : `filed on message ${e.prov.created} at journal row ${e.prov.createdSeq}`;
-    lines.push(`  origin: this session, ${how}${e.prov.lastSeq !== e.prov.createdSeq ? `; last changed at row ${e.prov.lastSeq}` : ''}`);
+    const made = prov.created;
+    const how =
+      e.prov.created === null
+        ? `written by you at journal row ${e.prov.createdSeq}`
+        : made !== undefined && made.by !== 'user'
+          ? `filed by ${agentRow(made)} at journal row ${e.prov.createdSeq}`
+          : `filed on message ${e.prov.created} at journal row ${e.prov.createdSeq}`;
+    lines.push(`  origin: this session, ${how}${e.prov.lastSeq !== e.prov.createdSeq ? `; last changed at row ${e.prov.lastSeq}${changedBy(prov.last)}` : ''}`);
   }
-  if (e.range) lines.push(`  covers messages ${e.range[0]} … ${e.range[1]}`);
+  if (e.range) lines.push(`  covers messages ${(prov.range ?? e.range)[0]} … ${(prov.range ?? e.range)[1]}`);
   if (e.keys.length > 0) lines.push(`  keys: ${e.keys.join(', ')}`);
   if (e.prov.formerNames && e.prov.formerNames.length > 0) lines.push(`  former names: ${e.prov.formerNames.join(', ')}`);
   if (e.featured) lines.push('  featured');
@@ -1357,4 +1412,192 @@ export function renderDirector(d: DirectorShow, style: Style): string {
   else if (s.lastDirective) block(`last directive (turn ${s.lastDirective.turn}, as the Director wrote it; turn ${r.turn} sent none)`, s.lastDirective.directive);
   else lines.push(label('no directive yet'));
   return lines.join('\n');
+}
+
+// ---- the Compendium's background lane (M5b, D-181) -------------------------------------------------------
+
+type MemoryEvent = Extract<Event, { type: 'memory' }>;
+type AgentEvent = Extract<Event, { type: 'agent' }>;
+
+/** What the lane's lines need from the session: positions, handles, the job rows, the attempt limit. */
+export interface LaneWords {
+  /** `#n` for a message on the active path (its /show number), else its id. */
+  at(id: string): string;
+  /** An entry's C<n> on this path now; undefined when it is gone (an undone entry). */
+  handle(key: string): string | undefined;
+  /** The job row a job id names (its task key, message and attempt), or undefined. */
+  job(id: string): { key: string; on: string; attempt: number } | undefined;
+  /** compendium.maxAttempts of the session. */
+  readonly maxAttempts: number;
+}
+
+/** A lane task as the lines name it, from its key: `filing #7`, `historian #2–#7`. */
+export function passName(key: string, words: Pick<LaneWords, 'at'>): string {
+  if (key.startsWith('file:')) return `filing ${words.at(key.slice('file:'.length))}`;
+  if (key.startsWith('hist:')) {
+    const [from, to] = key.slice('hist:'.length).split('-');
+    if (from && to) return `historian ${words.at(from)}–${words.at(to)}`;
+  }
+  return key;
+}
+
+/** A lane task key in an engine text: `file:<id>`, `hist:<first id>-<last id>`. */
+const LANE_KEY = String.raw`(?:file:[A-Za-z0-9_]+|hist:[A-Za-z0-9_#]+-[A-Za-z0-9_]+)`;
+
+/**
+ * The lead's ruling K: task keys in an engine text (a verb's refusal, a lane notice) named as the lane
+ * lines name them — `the filing task file:<id>` → `filing #3`, a bare `hist:<a>-<b>` → `historian #1–#7`.
+ */
+export function laneKeysInWords(text: string, words: Pick<LaneWords, 'at'>): string {
+  return text
+    .replace(new RegExp(String.raw`\b(?:filing|historian) task (${LANE_KEY})\b`, 'g'), (_, key: string) => passName(key, words))
+    .replace(new RegExp(String.raw`\b${LANE_KEY}\b`, 'g'), (key) => passName(key, words));
+}
+
+/** The agent a task key belongs to: `file:…` the filing agent's, `hist:…` the historian's. */
+export const taskOfKey = (key: string): 'file' | 'hist' => (key.startsWith('hist:') ? 'hist' : 'file');
+
+/** Why a task asked for by name waits instead of running (the lead's ruling I: its agent is off). */
+const HELD_WHY: Readonly<Record<'file' | 'hist', string>> = {
+  file: 'the filing agent is off for this session (compendium.filing.enabled)',
+  hist: 'the historian is off for this session (compendium.historian.interval is 0)',
+};
+
+/** One task a verb asked for that waits for its agent: `filing #3 waits: the filing agent is off … ; it runs once the agent is on`. */
+export function laneHeldLine(key: string, words: Pick<LaneWords, 'at'>): string {
+  return `${passName(key, words)} waits: ${HELD_WHY[taskOfKey(key)]}; it runs once the agent is on`;
+}
+
+/** At most this many entries are named on one lane line; the rest are counted. */
+const LANE_NAMED = 8;
+
+/** Each entry of a pass's memory events once, in the order it was first changed, with its last change. */
+function lastChanges(changes: readonly MemoryEvent[]): MemoryEvent[] {
+  const last = new Map<string, MemoryEvent>();
+  for (const c of changes) last.set(c.ref, c);
+  return [...last.values()];
+}
+
+/**
+ * Entries as a lane line names them: `C12 "Фрол", C3 "Серый маяк"`; an arc as `C4 [Arc] "<plot>"` (beside
+ * its plot's own entry); a gone entry by its kind; at most LANE_NAMED, the rest counted.
+ */
+function laneEntries(changes: readonly MemoryEvent[], words: Pick<LaneWords, 'handle'>): { n: number; text: string } {
+  const items = changes.map((c) => {
+    const handle = words.handle(c.ref);
+    const name = JSON.stringify(c.name);
+    if (handle === undefined) return `${c.kind} ${name}`;
+    return c.kind === 'arc' ? `${handle} [Arc] ${name}` : `${handle} ${name}`;
+  });
+  const text = items.length > LANE_NAMED ? `${items.slice(0, LANE_NAMED).join(', ')}, … ${items.length - LANE_NAMED} more` : items.join(', ');
+  return { n: items.length, text };
+}
+
+/**
+ * One lane pass that ended, as the REPL prints it between turns (dim): `⋯ memory: filing #7 → +2: C12
+ * "Фрол", C3 "Серый маяк"` (`changes`: the memory events the pass published before its end; what a
+ * re-run took back of the key's earlier row follows as `· −1: character "Старый"`), `→ nothing to file`,
+ * a preemption, a failure with its attempt, a parked task with the way out. null for the statuses that
+ * say nothing (queued, started, a superseded run's skipped) and for a no_room failure (its parked line
+ * follows at once and says why).
+ */
+export function laneAgentLine(ev: AgentEvent, changes: readonly MemoryEvent[], words: LaneWords): string | null {
+  const job = ev.job !== undefined ? words.job(ev.job) : undefined;
+  const who = job ? passName(job.key, words) : ev.agent;
+  switch (ev.status) {
+    case 'done': {
+      const skipped = (ev.skipped ?? 0) > 0 ? ` · ${ev.skipped} skipped` : '';
+      const last = lastChanges(changes);
+      const made = laneEntries(last.filter((c) => c.change !== 'reverted'), words);
+      const gone = laneEntries(last.filter((c) => c.change === 'reverted'), words);
+      const parts = [made.n > 0 ? `+${made.n}: ${made.text}` : '', gone.n > 0 ? `−${gone.n}: ${gone.text}` : ''].filter(Boolean);
+      if (parts.length > 0) return `⋯ memory: ${who} → ${parts.join(' · ')}${skipped}`;
+      const none = (ev.count ?? 0) > 0 ? 'nothing new' : ev.agent === 'historian' ? 'nothing to record' : 'nothing to file';
+      return `⋯ memory: ${who} → ${none}${skipped}`;
+    }
+    case 'preempted':
+      return `⋯ memory: ${who} gave way to a turn; it runs again at the next pause`;
+    case 'failed':
+      if (ev.code === 'no_room') return null;
+      return `⋯ memory: ${who} failed [${ev.code ?? 'unknown'}]${job ? ` (attempt ${job.attempt} of ${words.maxAttempts})` : ''}`;
+    case 'parked': {
+      const retry = `/memory retry${job ? ` ${words.at(job.on)}` : ''} runs it again`;
+      if (ev.code === 'no_room') return `⋯ memory: ${who} parked: it does not fit the recorder's window [no_room]; ${retry}`;
+      return `⋯ memory: ${who} parked after ${plural(words.maxAttempts, 'failed attempt')}: ${retry}`;
+    }
+    default:
+      return null;
+  }
+}
+
+/** /memory undo's reverted entries (memory{reverted, by:'user'}), one line: `⋯ memory: undo → −2: C16 "Фрол", event "Лодка с солью"`. */
+export function laneUndoneLine(changes: readonly MemoryEvent[], words: Pick<LaneWords, 'handle'>): string {
+  const e = laneEntries(lastChanges(changes), words);
+  return `⋯ memory: undo → −${e.n}: ${e.text}`;
+}
+
+const attemptText = (n: number): string => (n > 1 ? ` (attempt ${n})` : '');
+
+/**
+ * What a /memory retry that queued nothing did (ruling K): it resumed the agents the circuit breaker paused
+ * (`was`: the status's `blocked` before it; a recorder with no route hides which).
+ */
+export function laneResumedWords(was: MemoryStatus['blocked']): string {
+  if (was?.reason !== 'paused') return 'the paused agents run again';
+  if (was.agent === 'both') return 'the filing agent and the historian run again (they were paused)';
+  return `${was.agent === 'filing' ? 'the filing agent' : 'the historian'} runs again (it was paused)`;
+}
+
+/** Why the lane cannot start a task (ruling K: no recorder route, an agent paused), one status line. */
+const blockedLine = (b: NonNullable<MemoryStatus['blocked']>): string => `  ${b.reason === 'paused' ? 'paused' : 'blocked'}: ${b.message}`;
+
+/**
+ * /memory status (D-180): what runs (and whether it still waits for a place on the server), what waits in
+ * order, what waits for its agent (held), what is parked and how to retry it, the backlog; and (ruling K)
+ * what stops the lane: a recorder with no route, an agent paused after two parked tasks in a row.
+ */
+export function renderLaneStatus(s: MemoryStatus, words: Pick<LaneWords, 'at'>): string {
+  const held = s.held ?? [];
+  const counts = [
+    s.running ? '1 running' : '',
+    s.queued.length > 0 ? `${s.queued.length} queued` : '',
+    held.length > 0 ? `${held.length} held` : '',
+    s.parked.length > 0 ? `${s.parked.length} parked` : '',
+  ].filter(Boolean);
+  const backlog = s.backlog > 0 ? ` · ${plural(s.backlog, 'answer')} not filed yet` : '';
+  const blocked = s.blocked ? [blockedLine(s.blocked)] : [];
+  if (counts.length === 0) return [`the Compendium's background lane is idle: nothing queued, nothing parked${backlog}`, ...blocked].join('\n');
+  const lines = [`the Compendium's background lane: ${counts.join(', ')}${backlog}`, ...blocked];
+  if (s.running) {
+    const waiting = s.running.waiting ? ' · waiting for a place on the server' : '';
+    lines.push(`  running: ${passName(s.running.key, words)}${attemptText(s.running.attempt)} · job ${s.running.job}${waiting}`);
+  }
+  if (s.queued.length > 0) lines.push(`  queued: ${s.queued.map((q) => `${passName(q.key, words)}${attemptText(q.attempt)}`).join(', ')}`);
+  for (const h of held) lines.push(`  held: ${passName(h.key, words)}: ${HELD_WHY[h.task]}`);
+  for (const p of s.parked) {
+    const why = p.code === 'no_room' ? ": it does not fit the recorder's window [no_room]" : ` after ${plural(p.failures, 'failed attempt')}`;
+    lines.push(`  parked: ${passName(p.key, words)}${why} (/memory retry ${words.at(p.on)} runs it again)`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * /memory wait's last line: idle (`: nothing to do` when no pass ended while it waited), what is parked
+ * and not filed; a lane that cannot run (queued, no recorder model; ruling K: an agent paused); or still
+ * working after `sec`.
+ */
+export function renderLaneWait(r: MemoryStatus & { idle: boolean }, ran: boolean, sec: number | undefined, words: Pick<LaneWords, 'at'>): string {
+  if (r.idle && r.queued.length > 0) {
+    if (r.blocked?.reason === 'paused') return `the background lane cannot run: ${plural(r.queued.length, 'task')} queued. ${r.blocked.message}`;
+    return `the background lane cannot run: ${plural(r.queued.length, 'task')} queued and the recorder has no model to run on (/model recorder <connection:model>)`;
+  }
+  if (r.idle) {
+    const parked = r.parked.length > 0 ? ` · ${r.parked.length} parked (/memory retry runs ${r.parked.length === 1 ? 'it' : 'them'} again)` : '';
+    const n = r.held?.length ?? 0;
+    const held = n > 0 ? ` · ${n} held (${n === 1 ? 'its agent is' : 'their agents are'} off: /memory status)` : '';
+    const backlog = r.backlog > 0 ? ` · ${plural(r.backlog, 'answer')} not filed yet` : '';
+    return `the background lane is idle${ran ? '' : ': nothing to do'}${parked}${held}${backlog}`;
+  }
+  const what = [r.running ? `${passName(r.running.key, words)} runs` : '', r.queued.length > 0 ? `${r.queued.length} queued` : ''].filter(Boolean).join(', ');
+  return `${sec !== undefined ? `still working after ${sec} s` : 'still working'}${what !== '' ? `: ${what}` : ''} (/memory status)`;
 }

@@ -11,6 +11,10 @@ export type AbortReason =
   | 'timeout:idle'
   | 'budget:director'
   | 'budget:recall'
+  /** M5b (D-172, C-12): the filing and historian agents' time budgets. */
+  | 'budget:filing'
+  | 'budget:historian'
+  /** M5b (D-172): an interactive request took a background call's place (sched.ts). */
   | 'preempted'
   | 'superseded'
   | 'shutdown'
@@ -53,6 +57,22 @@ export function childController(parent: AbortSignal): AbortController {
   // dropping the listener keeps a long-lived parent from collecting dead children.
   child.signal.addEventListener('abort', () => parent.removeEventListener('abort', follow), { once: true });
   return child;
+}
+
+/**
+ * A second parent (M5b): `ctrl` aborts with `signal`'s reason when `signal` aborts (at once if it
+ * already has). Returns the unlink; the link also drops itself once `ctrl` aborts on its own.
+ */
+export function linkAbort(ctrl: AbortController, signal: AbortSignal): () => void {
+  if (signal.aborted) {
+    ctrl.abort(signal.reason);
+    return () => undefined;
+  }
+  const follow = (): void => ctrl.abort(signal.reason);
+  const unlink = (): void => signal.removeEventListener('abort', follow);
+  signal.addEventListener('abort', follow, { once: true });
+  ctrl.signal.addEventListener('abort', unlink, { once: true });
+  return unlink;
 }
 
 /** Abort with a typed reason. No-op if already aborted. */

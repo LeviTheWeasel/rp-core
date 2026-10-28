@@ -59,16 +59,30 @@ export function planFork(
   const entries: Entry[] = [];
   let seq = 0;
   let lastMsg: string | null = null;
+  const seqMap = new Map<number, number>();
   for (const e of source.entries) {
     // Orphans and duplicate ids never made it into the tree, so they are not copied either.
     if (e.t === 'msg' && idx.msgs.get(e.id) !== e) continue;
     if (!belongsToPath(e, pathSet)) continue;
+    seqMap.set(e.seq, seq + 1);
     if (e.t === 'msg' && e.tail) {
       // On the fork the path is the main line: a tail commit's "keep the head" no longer applies.
       const { tail: _tail, ...line } = e;
       entries.push({ ...line, seq: ++seq });
     } else entries.push({ ...e, seq: ++seq });
     if (e.t === 'msg') lastMsg = e.id;
+  }
+  // M5b (ruling K): a copied trace's {{recap}} pins name arc revisions by the seq of their mem row; the
+  // fork renumbers seq, so each pin follows its row, and a pin whose row was not copied is dropped.
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i]!;
+    if ((e.t !== 'msg' && e.t !== 'edit') || !e.trace?.recap) continue;
+    const recap = e.trace.recap;
+    const arcs = recap.arcs.flatMap((a) => {
+      const rev = seqMap.get(a.rev);
+      return rev === undefined ? [] : [{ ...a, rev }];
+    });
+    entries[i] = { ...e, trace: { ...e.trace, recap: { ...recap, arcs } } } as Entry;
   }
   // The newest copied msg is the fork's head; only if it is not `at` does the head need moving.
   if (lastMsg !== at) entries.push({ t: 'head', seq: ++seq, ts: opts.now, leaf: at });

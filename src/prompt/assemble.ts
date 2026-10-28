@@ -22,10 +22,23 @@
 // M5a (D-155): with Compendium candidates the lore run gets (1 − minShare) of the lore budget and
 // the block (agents/compendium/place.ts) what the lore left, as one fixed system insert at depth 1;
 // without the input, or with no candidates, the request is exactly M4's.
+// M5b (D-178): with the recap input (the Compendium on) the `{{recap}}` slot (agents/compendium/
+// recap.ts, through assemble/recap.ts chooseRecap). Its content depends on the cut and the cut on the
+// budget, so: the cut is computed without the slot (the M5a request); when the slot for that cut has
+// content, its cost is taken from the history's budget and the history is trimmed once more; the slot
+// is then chosen again for that cut, within ≤ 10 % of the window and what that cut left, the block is
+// placed again with the slot's keys as `inPrompt` (no larger than it was), and the whole is checked to
+// fit (it does by construction; else the request goes without the slot). No content for the first
+// cut: nothing reserved, the request byte-identical. The slot is one system message (src 'recap') at
+// the cut, right after the greeting (§10 layout: greeting → {{recap}} → … → the current message), ahead
+// of the depth inserts and the gap note in that gap; a preset that holds {{recap}} in an enabled block gets the text there instead (its first
+// {{recap}} only). Never macro-expanded. Both choices take the slot's whole share for the arcs' half
+// (the lead's ruling K), and trace.recap records the profile and share a pin holds under.
 
 import type { CompendiumBlockInput } from '../agents/compendium/types.ts';
-import { placeBlock } from '../agents/compendium/place.ts';
+import { placeBlock, type PlaceResult } from '../agents/compendium/place.ts';
 import { DEFAULT_MIN_SHARE } from '../agents/compendium/profile.ts';
+import { RECAP_SHARE, type RecapSlot } from '../agents/compendium/recap.ts';
 import type { Character, Persona, Preset, PresetBlock } from '../formats/native.ts';
 import { entryLabel, type LoreRunResult, type LoreSource, type LoreVerdict } from '../lore/engine.ts';
 import type { LorePlacement } from '../lore/place.ts';
@@ -55,6 +68,7 @@ import { renderCoreBlock } from '../tools/prompted.ts';
 import { guidanceText } from './assemble/guidance.ts';
 import { gapMsg, offersHistoryTools, remindMsg, widestGapMsgs } from './assemble/gap.ts';
 import { presetHash } from './assemble/hash.ts';
+import { chooseRecap, recapMsg, recapTraceOf, sameBooks, type RecapRequest } from './assemble/recap.ts';
 import {
   DEFAULT_NOTE_DEPTH,
   DEFAULT_NOTE_ROLE,
@@ -150,6 +164,13 @@ export interface AssembleInput {
    * Present → trace.compendium is written (picks: [] with no candidates). Absent: the M4 request.
    */
   compendium?: CompendiumBlockInput;
+  /**
+   * M5b (D-178): the `{{recap}}` slot's input while the Compendium is on (request.ts). The slot
+   * chooses from `view.compendium` (summaries, arcs); see the file comment for the budget and the
+   * place. trace.recap is written from it ({ids: [], arcs: [], boundary: null} when the slot is
+   * empty). Absent: no slot, the M5a request.
+   */
+  recap?: RecapRequest;
   prefillVsTools: 'prefill' | 'tools';
   /**
    * M3 (§8.4, DeepSeek): keep the raw reasoning blocks of the history's assistant messages generated
@@ -297,10 +318,21 @@ interface SlotsUsed {
 }
 
 /**
- * Values of the non-history slots: {{lore::x}} and {{outlet::x}} from this request's lore (M2).
- * The director slot arrives in M4 and {{recap}} in M5; until then they render ''.
+ * M5b (D-178): what {{recap}} in a preset block renders — the slot's text at the first {{recap}} the
+ * layout fills, '' at any other and while there is no slot. `asked` counts the {{recap}} slots filled,
+ * so a layout tells whether the preset places the slot itself.
  */
-function slotValue(ref: SlotRef, lore: LorePlacement, preset: Preset, used: SlotsUsed): string {
+interface RecapFill {
+  text: string;
+  asked: number;
+}
+
+/**
+ * Values of the non-history slots: {{lore::x}} and {{outlet::x}} from this request's lore (M2),
+ * {{recap}} from the slot (M5b); {{slot::x}} renders ''.
+ */
+function slotValue(ref: SlotRef, lore: LorePlacement, preset: Preset, used: SlotsUsed, recap: RecapFill): string {
+  if (ref.kind === 'recap') return recap.asked++ === 0 ? recap.text : '';
   if (ref.kind === 'lore') used.lore.add(ref.name.toLowerCase());
   if (ref.kind === 'outlet') used.outlets.add(ref.name);
   return ref.kind === 'lore' || ref.kind === 'outlet' ? loreSlotValue(ref, lore, preset.formats) : '';
@@ -353,20 +385,37 @@ const blockMsg = (block: PresetBlock, text: string): PromptMsg => ({
   placement: 'inline',
 });
 
-/** Expand every planned block once, in preset order (later blocks see earlier setvars), and sort it into place. */
-function layoutBlocks(plan: PlannedBlock[], run: MacroRun, preset: Preset, lore: LorePlacement, used: SlotsUsed): Layout {
-  const out: Layout = { top: [], before: [], after: [], bottom: [], depth: [] };
-  let pastHistory = false;
+/** A planned block expanded by the macro run, its structural slots still sentinels. */
+interface ExpandedBlock {
+  p: PlannedBlock;
+  expanded: string;
+  refs: SlotRef[];
+  scope: string;
+}
 
-  for (const p of plan) {
+/** Expand every planned block once, in preset order (later blocks see earlier setvars). */
+function expandBlocks(plan: PlannedBlock[], run: MacroRun): ExpandedBlock[] {
+  return plan.map((p) => {
     // Slots are numbered per block, in the block's own scope: what the macro engine sees of a block
     // (and so its {{pick}} seed, D-43) never changes when another block is added or toggled.
     const refs: SlotRef[] = [];
     const scope = slotScope(p.block.id);
-    const fill = (text: string): string => fillSlots(text, refs, (ref) => slotValue(ref, lore, preset, used), scope);
     const text = protectSlots(p.text, refs, scope);
     const original = p.original === undefined ? undefined : protectSlots(p.original, refs, scope);
-    const expanded = run.block(text, p.block.id, original === undefined ? undefined : { original });
+    return { p, refs, scope, expanded: run.block(text, p.block.id, original === undefined ? undefined : { original }) };
+  });
+}
+
+/**
+ * Fill the expanded blocks' slots and sort them into place. No macro runs here, so it can run again
+ * with the {{recap}} slot's text once the cut is known (M5b).
+ */
+function layoutBlocks(blocks: readonly ExpandedBlock[], value: (ref: SlotRef) => string): Layout {
+  const out: Layout = { top: [], before: [], after: [], bottom: [], depth: [] };
+  let pastHistory = false;
+
+  for (const { p, expanded, refs, scope } of blocks) {
+    const fill = (text: string): string => fillSlots(text, refs, value, scope);
 
     if (p.history) {
       // Text around the slot becomes its own message on either side of the chat (as Bunraku splits
@@ -489,11 +538,19 @@ function leftOut(view: PathView, chat: ChatArea, from: number, keepFrom: number)
  */
 function withGapNotes(chatPart: PromptMsg[], gap: LeftOut | null, transport: 'native' | 'prompted'): PromptMsg[] {
   if (gap === null) return chatPart;
-  const at = gap.next === undefined ? -1 : chatPart.indexOf(gap.next);
-  chatPart.splice(at < 0 ? chatPart.length : at, 0, gapMsg(gap.a, gap.b));
+  chatPart.splice(atMessage(chatPart, gap.next), 0, gapMsg(gap.a, gap.b));
   chatPart.push(remindMsg(transport));
   return chatPart;
 }
+
+/** Where a message is in the chat part (to insert before it); the end when it is not there. */
+function atMessage(chatPart: readonly PromptMsg[], m: PromptMsg | undefined): number {
+  const at = m === undefined ? -1 : chatPart.indexOf(m);
+  return at < 0 ? chatPart.length : at;
+}
+
+/** The Compendium block as its in-chat insert (D-155): depth 1, system, no order. */
+const blockInsert = (text: string): DepthInsert => ({ depth: 1, role: 'system', src: 'compendium', srcId: 'block', text });
 
 /**
  * How many newest chat messages the budget never cuts (§11: the current user message): the one the
@@ -628,10 +685,20 @@ export function assemble(input: AssembleInput): AssembleResult {
   });
   const place = lore.place;
   outlets = place.outlets;
-  const layout = layoutBlocks(plan, run, preset, place, used);
+  const expanded = expandBlocks(plan, run);
+  const valueWith =
+    (recap: RecapFill) =>
+    (ref: SlotRef): string =>
+      slotValue(ref, place, preset, used, recap);
+  // The first layout renders {{recap}} empty (the request without a slot); it also tells whether the
+  // preset places the slot itself.
+  const noRecap: RecapFill = { text: '', asked: 0 };
+  const layout = layoutBlocks(expanded, valueWith(noRecap));
+  const presetRecap = noRecap.asked > 0;
   // Lore with no slot of its own: top and bottom of the prompt, and the recap texts right before
-  // the chat area (M5 moves them to {{recap}}). A lore slot the preset does not hold is not sent,
-  // as in ST; its entries still fired and still counted against the lore budget.
+  // the chat area (they stay there in M5b, G-10: the {{recap}} slot is the Compendium's). A lore
+  // slot the preset does not hold is not sent, as in ST; its entries still fired and still counted
+  // against the lore budget.
   const loreTop = loreMsg(place.top, 'lore:top');
   const loreBottom = loreMsg(place.bottom, 'lore:bottom');
   const loreRecap = loreMsg(place.recap, 'lore:recap');
@@ -641,27 +708,33 @@ export function assemble(input: AssembleInput): AssembleResult {
   const newChat: PromptMsg[] =
     newChatText.trim() === '' ? [] : [{ role: 'system', blocks: [{ k: 'text', text: newChatText }], src: 'new_chat', placement: 'inline' }];
 
-  // Inserts in source order; injectAtDepth sorts them by depth, order and source rank (§10.1).
-  const inserts: DepthInsert[] = [...layout.depth, ...place.depth];
+  // Inserts in source order; injectAtDepth sorts them by depth, order and source rank (§10.1): the
+  // preset's in-chat blocks, depth lore, the card's depth prompt, the author's note, then the
+  // Compendium block, ahead of the agents' inserts (insertsOf, once the tools are known: below).
+  const ownInserts: DepthInsert[] = [...place.depth];
   const dp = character.depthPrompt;
   if (dp && dp.text.trim() !== '') {
-    inserts.push({ depth: dp.depth, role: dp.role, src: 'card_depth', text: run.block(dp.text, 'card_depth') });
+    ownInserts.push({ depth: dp.depth, role: dp.role, src: 'card_depth', text: run.block(dp.text, 'card_depth') });
   }
   // The author's note, wrapped in AN-top / AN-bottom lore as ST does. Without a note that lore still
   // goes to the note's place: ST's default, in-chat depth 4 as system.
   const note = input.authorNote;
   const noteText = noteWithLore(note && note.text.trim() !== '' ? run.block(note.text, 'author_note') : '', place);
   if (noteText !== '') {
-    inserts.push({ depth: note?.depth ?? DEFAULT_NOTE_DEPTH, role: note?.role ?? DEFAULT_NOTE_ROLE, src: 'author_note', text: noteText });
+    ownInserts.push({ depth: note?.depth ?? DEFAULT_NOTE_DEPTH, role: note?.role ?? DEFAULT_NOTE_ROLE, src: 'author_note', text: noteText });
   }
-  // The Compendium block goes here, ahead of the agents' inserts, once the tools are known (below).
-  const blockAt = inserts.length;
-  inserts.push(...input.placements);
+  const agentInserts: DepthInsert[] = [...input.placements];
   const g = input.guidance;
   if (g && g.text.trim() !== '') {
     // The direction is user-typed (identity macros only); the rejected draft is model output (inert).
-    inserts.push({ depth: 0, role: 'system', src: 'guidance', text: guidanceText(run.userText(g.text), g.rejected) });
+    agentInserts.push({ depth: 0, role: 'system', src: 'guidance', text: guidanceText(run.userText(g.text), g.rejected) });
   }
+  const insertsOf = (presetDepth: readonly DepthInsert[], blockText: string | null): DepthInsert[] => [
+    ...presetDepth,
+    ...ownInserts,
+    ...(blockText === null ? [] : [blockInsert(blockText)]),
+    ...agentInserts,
+  ];
 
   // caps.tools 'none' never carries tools (the request builder offers none then; defensive here).
   const prefill = decidePrefill(input, run, input.caps.tools === 'none' ? [] : input.tools);
@@ -674,17 +747,10 @@ export function assemble(input: AssembleInput): AssembleResult {
   // M5a (D-155): the block takes what the lore run left of the lore budget, counted like the lore
   // (budget tokens); the brief's tail only when read_lore survived the prefill rule. Never trimmed:
   // every insert is in the fixed part below.
-  const block = input.compendium
-    ? placeBlock(
-        input.compendium,
-        Math.max(0, loreShare - lore.run.used),
-        (text) => scaled(counter.count(text), factor),
-        tools.some((t) => t.name === READ_LORE),
-      )
-    : null;
-  if (block !== null && block.text !== null) {
-    inserts.splice(blockAt, 0, { depth: 1, role: 'system', src: 'compendium', srcId: 'block', text: block.text });
-  }
+  const blockBudget = Math.max(0, loreShare - lore.run.used);
+  const blockCount = (text: string): number => scaled(counter.count(text), factor);
+  const blockTail = tools.some((t) => t.name === READ_LORE);
+  const block = input.compendium ? placeBlock(input.compendium, blockBudget, blockCount, blockTail) : null;
   const transport = input.caps.tools === 'prompted' ? 'prompted' : 'native';
   const core = coreBlock(tools, transport, input.contract);
   const echo = tools.length > 0 ? input.echoReasoning : undefined;
@@ -696,9 +762,12 @@ export function assemble(input: AssembleInput): AssembleResult {
   // preset.context.maxMessages is applied by the same cut: same grid, same protections, recorded in
   // trace.trimmed.
   const available = input.window - input.reserve;
-  const blocksTok = measureAll(layout.top) + measureAll(layout.before) + measureAll(newChat) + measureAll(layout.after) + measureAll(layout.bottom);
+  const blocksTokOf = (l: Layout): number => measureAll(l.top) + measureAll(l.before) + measureAll(newChat) + measureAll(l.after) + measureAll(l.bottom);
+  // Every non-blank insert, measured as it will be sent.
+  const insertsTokOf = (l: Layout, b: PlaceResult | null): number => measureAll(injectAtDepth([], insertsOf(l.depth, b?.text ?? null)));
+  const blocksTok = blocksTokOf(layout);
   const loreOwnTok = measureAll(loreTop) + measureAll(loreRecap) + measureAll(loreBottom);
-  const insertsTok = measureAll(injectAtDepth([], inserts)); // every non-blank insert, measured as it will be sent
+  const insertsTok = insertsTokOf(layout, block);
   const prefillTok = prefill.prefill === null ? 0 : estimateTokens(prefill.prefill, counter) + MESSAGE_OVERHEAD_TOKENS;
   // What shape() adds after this budget: the continue cue for a model without prefill (§6.4), and
   // the 'strict' post-processing placeholder (one short user message at most).
@@ -714,7 +783,8 @@ export function assemble(input: AssembleInput): AssembleResult {
   // whole they are not sent and the reservation is simply unused.
   const gapping = offered && offersHistoryTools(tools);
   const gapTok = gapping ? Math.max(...widestGapMsgs(input.view.path.length).map(measure)) + measure(remindMsg(transport)) : 0;
-  const fixed = scaled(blocksTok + loreOwnTok + insertsTok + prefillTok + cueTok + placeholderTok + toolsTok + gapTok, factor);
+  const otherTok = loreOwnTok + prefillTok + cueTok + placeholderTok + toolsTok + gapTok;
+  const fixed = scaled(blocksTok + insertsTok + otherTok, factor);
   // D-93: the tool room the history leaves free (budget tokens; 0 without tools).
   const room = offered ? toolRoom(input.window, input.reserve) : 0;
   // Measured on demand: trimHistory stops at the first overflow, so older messages are never
@@ -776,16 +846,80 @@ export function assemble(input: AssembleInput): AssembleResult {
       message: `the required part of the prompt needs about ${need} tokens, but only ${Math.max(0, available)} are available (window ${input.window} - reply reserve ${input.reserve}): ${parts.join(', ')}${greeting}`,
     };
   }
-  const cut = fitted.cut;
+  // The books as the trace hashes them (the lead's ruling I); the slot compares them with the previous request's.
+  const hashes = loreHashes(input.booksAsLoaded ? loreSources(input.cast, input.booksAsLoaded) : sources);
+  const keepHead = greetingDropped ? 0 : head;
+
+  // M5b (D-178): the {{recap}} slot (the file comment). Without it the cut, the layout and the block
+  // are the M5a request's.
+  let cut = fitted.cut;
+  let sentLayout = layout;
+  let sentBlock = block;
+  let slot: RecapSlot | null = null;
+  const rq = input.recap;
+  if (rq !== undefined) {
+    const room0 = fitted.room;
+    const keptTok = (c: { keepFrom: number }): number => tokOf(0, keepHead) + tokOf(c.keepFrom, sized.length);
+    const pathIds = input.view.path.map((m) => m.id);
+    const previous = rq.previous !== null && (rq.books === undefined || sameBooks(rq.books, hashes)) ? rq.previous : null;
+    const overhead = scaled(MESSAGE_OVERHEAD_TOKENS, factor);
+    const share = Math.floor(RECAP_SHARE * input.window);
+    // The slot for a cut within `capTok` budget tokens, its message's overhead included. Both choices get
+    // the slot's whole share (ruling K): the arcs' half is the same in the first choice, the second and a
+    // pin, and the trace records the share a pin holds under.
+    const slotAt = (c: ReturnType<typeof trimHistory>, capTok: number): RecapSlot | null =>
+      chooseRecap({
+        view: input.view.compendium,
+        path: pathIds,
+        trimmed: c.trimmed,
+        // The first history message sent after the cut; the first one sent when nothing is cut.
+        boundary: (c.trimmed === null ? chat.ids[0] : chat.ids[c.keepFrom]) ?? null,
+        previous,
+        budgetTok: capTok - overhead,
+        shareTok: share - overhead,
+        share,
+        profile: rq.profile,
+        count: blockCount,
+        ...(rq.revisionText ? { revisionText: rq.revisionText } : {}),
+      });
+    // The fixed part with the slot in it: in the preset's {{recap}}, else as its own message.
+    const withSlot = (s: RecapSlot, b: PlaceResult | null): { fixed: number; layout: Layout } => {
+      if (!presetRecap) return { layout, fixed: scaled(blocksTok + insertsTokOf(layout, b) + otherTok + measure(recapMsg(s.text)), factor) };
+      const l = layoutBlocks(expanded, valueWith({ text: s.text, asked: 0 }));
+      return { layout: l, fixed: scaled(blocksTokOf(l) + insertsTokOf(l, b) + otherTok, factor) };
+    };
+    const first = slotAt(cut, share);
+    if (first !== null) {
+      // Its cost comes out of the history's budget: one more trim, the protections and the room unchanged.
+      const recut = trimHistory(sized, available - withSlot(first, block).fixed - room0, { protectedHead: keepHead, ...trimOpts });
+      const s = recut.fits ? slotAt(recut, Math.min(share, available - fixed - room0 - keptTok(recut))) : null;
+      if (s !== null) {
+        // D-155: the block skips what the slot holds (inPrompt → repeated), within what it took before.
+        const b =
+          input.compendium && block && input.compendium.candidates.some((c) => s.keys.includes(c.key))
+            ? placeBlock({ ...input.compendium, inPrompt: new Set(s.keys) }, Math.min(blockBudget, block.tok), blockCount, blockTail)
+            : block;
+        const w = withSlot(s, b);
+        if (w.fixed + keptTok(recut) + room0 <= available) {
+          cut = recut;
+          slot = s;
+          sentLayout = w.layout;
+          sentBlock = b;
+        }
+      }
+    }
+  }
+  const inserts = insertsOf(sentLayout.depth, sentBlock?.text ?? null);
+
   // Indexes into chat.msgs of what the history sends, oldest first.
   const keptAt: number[] = [];
-  if (!greetingDropped) for (let i = 0; i < head; i++) keptAt.push(i);
+  for (let i = 0; i < keepHead; i++) keptAt.push(i);
   for (let i = cut.keepFrom; i < chat.msgs.length; i++) keptAt.push(i);
   const kept = keptAt.map((i) => chat.msgs[i]!);
 
   // The leading system run of the preset is the head the adapters send as the system prompt; the
   // core block closes it (M3).
-  const lead = withCore([...loreTop, ...layout.top, ...layout.before], core);
+  const lead = withCore([...loreTop, ...sentLayout.top, ...sentLayout.before], core);
   for (const m of lead) {
     if (m.role !== 'system') break;
     m.placement = 'head';
@@ -795,9 +929,14 @@ export function assemble(input: AssembleInput): AssembleResult {
   // continued message before its in-chat injections). A is put back after the chat for shape to take.
   // In cue mode A is a real message and counts like any other.
   const displaced = input.kind === 'continue' && input.caps.prefill !== 'none' ? kept.pop() : undefined;
-  const chatPart = withGapNotes(injectAtDepth(kept, inserts), gapping ? leftOut(input.view, chat, greetingDropped ? 0 : head, cut.keepFrom) : null, transport);
+  const chatPart = injectAtDepth(kept, inserts);
+  // M5b: the slot at the cut, right after the greeting (first in the chat area without one), ahead of
+  // any depth insert in that gap, so an insert stays next to the message it counts from; the gap note
+  // then goes between the slot and the first message sent after the cut.
+  if (slot !== null && !presetRecap) chatPart.splice(keepHead > 0 ? chatPart.indexOf(chat.msgs[keepHead - 1]!) + 1 : 0, 0, recapMsg(slot.text));
+  withGapNotes(chatPart, gapping ? leftOut(input.view, chat, keepHead, cut.keepFrom) : null, transport);
   if (displaced) chatPart.push(displaced);
-  const messages: PromptMsg[] = [...lead, ...newChat, ...loreRecap, ...chatPart, ...layout.after, ...layout.bottom, ...loreBottom];
+  const messages: PromptMsg[] = [...lead, ...newChat, ...loreRecap, ...chatPart, ...sentLayout.after, ...sentLayout.bottom, ...loreBottom];
 
   const unsent = unsentLore(lore.run.fired, used);
   const trace: Trace = {
@@ -813,19 +952,19 @@ export function assemble(input: AssembleInput): AssembleResult {
       budget: budgetForLore,
       ...(unsent ? { unsent } : {}),
     },
-    recap: { ids: [], arcs: [], boundary: null },
-    ...(input.compendium && block
+    recap: recapTraceOf(slot),
+    ...(input.compendium && sentBlock
       ? {
           compendium: {
             rev: input.compendium.rev,
             source: 'lexical' as const,
             profile: input.compendium.profile,
             picks: input.compendium.candidates.map((c) => ({ ref: c.ref, key: c.key, via: c.via })),
-            injected: block.injected,
-            cut: block.cut,
-            repeated: block.repeated,
+            injected: sentBlock.injected,
+            cut: sentBlock.cut,
+            repeated: sentBlock.repeated,
             hidden: input.compendium.hidden,
-            budget: { share: loreShare, lore: lore.run.used, block: block.tok },
+            budget: { share: loreShare, lore: lore.run.used, block: sentBlock.tok },
           },
         }
       : {}),
@@ -835,7 +974,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     calls: [],
     agents: {},
     presetHash: presetHash(preset),
-    loreHashes: loreHashes(input.booksAsLoaded ? loreSources(input.cast, input.booksAsLoaded) : sources),
+    loreHashes: hashes,
     ...(sources.length > 0 ? { loreNames: loreNames(sources) } : {}),
   };
 

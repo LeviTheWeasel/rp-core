@@ -14,7 +14,8 @@
 //   into the existing one; new key → appended; no key → appended unless deepEq to an item already
 //   there. Other arrays: append what is not deepEq to an item already there (one lookup in a set of
 //   canonical texts kept per list). When a string was added or reworded, near-duplicate string facts
-//   then collapse over the whole list.
+//   then collapse over the whole list (M5b, review breaker#2: when the old list collapses to itself and
+//   kept its strings in place, only the added strings are compared against it — the same result).
 // - Past MERGE_MAX_DEPTH (32) nesting levels a value is a scalar: it replaces, never recursed.
 // - `keep` (identity fields, top level): an existing non-blank value is never replaced.
 // - Per TOP-level array field the result says where each element came from (prov.appended, D-149).
@@ -160,61 +161,162 @@ function isNearDuplicate(ta: ReadonlySet<string>, tb: ReadonlySet<string>): bool
   return union > 0 && shared / union >= NEAR_DUP_JACCARD;
 }
 
-/** The collapse, or null when nothing collapsed (or the list is over the scan limit). */
-function collapse(items: readonly unknown[]): { items: unknown[]; from: number[] } | null {
-  if (items.length > NEAR_DUP_SCAN_LIMIT) return null;
-  const out: unknown[] = [];
-  const from: number[] = [];
-  /** Per kept slot: the tokens of its current text (undefined: not a candidate). */
-  const tokensAt: (ReadonlySet<string> | undefined)[] = [];
-  // token → kept slots holding it (two facts can be near-duplicates only if they share a token).
-  const postings = new Map<string, number[]>();
-  const index = (slot: number, tokens: ReadonlySet<string>): void => {
-    for (const t of tokens) {
-      const list = postings.get(t);
-      if (list === undefined) postings.set(t, [slot]);
-      else if (!list.includes(slot)) list.push(slot);
-    }
-  };
+/** A collapse's kept slots. */
+interface Slots {
+  /** Per slot: the tokens of its current text (undefined: not a candidate). */
+  tokens: (ReadonlySet<string> | undefined)[];
+  /** token → slots holding it now or before (two facts can be near-duplicates only if they share a token). */
+  postings: Map<string, number[]>;
+}
+
+const candidateTokens = (item: unknown): ReadonlySet<string> | undefined => {
+  if (typeof item !== 'string') return undefined;
+  const tokens = significantTokens(item);
+  return tokens.size < NEAR_DUP_MIN_TOKENS ? undefined : tokens;
+};
+
+function post(slots: Slots, slot: number, tokens: ReadonlySet<string>, except?: ReadonlySet<string>): void {
+  for (const t of tokens) {
+    if (except?.has(t)) continue;
+    const list = slots.postings.get(t);
+    if (list === undefined) slots.postings.set(t, [slot]);
+    else list.push(slot);
+  }
+}
+
+interface Scan {
+  /** null: nothing collapsed (the items are the result). */
+  out: { items: unknown[]; from: number[] } | null;
+  /** Slots whose text a longer wording replaced. */
+  replaced: number[];
+}
+
+/**
+ * The collapse of `items` (RoleCall's rule, below) when `slots` already holds items[0, start) as kept
+ * slots, none collapsing into an earlier one; it then describes the result. A collapse from the start
+ * passes start 0 and empty slots.
+ */
+function scan(items: readonly unknown[], start: number, slots: Slots): Scan {
+  const out = items.slice(0, start);
+  const from = Array.from({ length: start }, (_, i) => i);
+  const replaced: number[] = [];
   /** The item index a slot was last checked for (each slot is checked once per item). */
   const seen = new Int32Array(items.length).fill(-1);
   let collapsed = false;
-  for (let i = 0; i < items.length; i++) {
+  for (let i = start; i < items.length; i++) {
     const item = items[i];
-    const tokens = typeof item === 'string' ? significantTokens(item) : undefined;
-    if (tokens === undefined || tokens.size < NEAR_DUP_MIN_TOKENS) {
+    const tokens = candidateTokens(item);
+    if (tokens === undefined) {
       out.push(item);
       from.push(i);
-      tokensAt.push(undefined);
+      slots.tokens.push(undefined);
       continue;
     }
     // The FIRST kept slot it nearly duplicates.
     let best = -1;
     for (const t of tokens) {
-      const list = postings.get(t);
+      const list = slots.postings.get(t);
       if (list === undefined) continue;
       for (const slot of list) {
         if (seen[slot] === i || (best !== -1 && slot > best)) continue;
         seen[slot] = i;
-        if (isNearDuplicate(tokensAt[slot]!, tokens)) best = slot;
+        if (isNearDuplicate(slots.tokens[slot]!, tokens)) best = slot;
       }
     }
     if (best === -1) {
-      index(out.length, tokens);
+      post(slots, out.length, tokens);
       out.push(item);
       from.push(i);
-      tokensAt.push(tokens);
+      slots.tokens.push(tokens);
       continue;
     }
     collapsed = true;
     if ((item as string).length > (out[best] as string).length) {
       out[best] = item;
       from[best] = i;
-      tokensAt[best] = tokens;
-      index(best, tokens);
+      post(slots, best, tokens, slots.tokens[best]);
+      slots.tokens[best] = tokens;
+      replaced.push(best);
     }
   }
-  return collapsed ? { items: out, from } : null;
+  return { out: collapsed ? { items: out, from } : null, replaced };
+}
+
+/**
+ * Whether the slots collapse no further: a pair of slots neither of which took a longer wording was
+ * compared when the later one was kept, so only the slots that did are compared again.
+ */
+function settled(slots: Slots, replaced: readonly number[]): boolean {
+  const seen = new Int32Array(slots.tokens.length).fill(-1);
+  for (const r of replaced) {
+    if (seen[r] === -2) continue;
+    seen[r] = -2;
+    const tokens = slots.tokens[r]!;
+    for (const t of tokens) {
+      for (const s of slots.postings.get(t) ?? []) {
+        if (s === r || seen[s] === r || seen[s] === -2) continue;
+        seen[s] = r;
+        if (isNearDuplicate(slots.tokens[s]!, tokens)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Lists the merge made that collapse to themselves (collapse(list) is null), each with its slots until
+ * the next merge into it takes them over (rebuilt when a list is merged into again, e.g. after a refold
+ * resumed from a checkpoint). A merge into such a list compares only the strings it adds (review
+ * breaker#2: re-collapsing the whole list on every merge made a refold O(L²) per merge).
+ */
+const SETTLED = new WeakSet<readonly unknown[]>();
+const SLOTS = new WeakMap<readonly unknown[], Slots>();
+
+function slotsOf(list: readonly unknown[]): Slots {
+  const hit = SLOTS.get(list);
+  if (hit !== undefined) return hit;
+  const slots: Slots = { tokens: [], postings: new Map() };
+  for (let i = 0; i < list.length; i++) {
+    const tokens = candidateTokens(list[i]);
+    slots.tokens.push(tokens);
+    if (tokens !== undefined) post(slots, i, tokens);
+  }
+  return slots;
+}
+
+/** A collapse, the result's slots and whether it is settled; null when the list is over the scan limit. */
+interface Collapse extends Scan {
+  slots: Slots;
+  settled: boolean;
+}
+
+/**
+ * The collapse of `items`, a merge's result from `old` (old elements in place, the ones in `changedAt`
+ * merged in place, new ones after them). When `old` is settled and no string of it changed in place,
+ * its elements are kept slots already: only the new ones are compared (the same result, by the rule's
+ * order).
+ */
+function collapseMerged(old: readonly unknown[], items: readonly unknown[], changedAt: ReadonlySet<number>): Collapse | null {
+  if (items.length > NEAR_DUP_SCAN_LIMIT) return null;
+  let start = 0;
+  if (SETTLED.has(old) && ![...changedAt].some((j) => typeof old[j] === 'string' || typeof items[j] === 'string')) start = old.length;
+  const slots = start === 0 ? { tokens: [], postings: new Map() } : slotsOf(old);
+  if (start > 0) SLOTS.delete(old);
+  const s = scan(items, start, slots);
+  return { ...s, slots, settled: s.out === null || settled(slots, s.replaced) };
+}
+
+/** `list` (a merge's result) is settled: the next merge into it starts from these slots. */
+function keepSettled(list: readonly unknown[], c: Collapse): void {
+  if (!c.settled) return;
+  SETTLED.add(list);
+  SLOTS.set(list, c.slots);
+}
+
+/** The collapse, or null when nothing collapsed (or the list is over the scan limit). */
+function collapse(items: readonly unknown[]): { items: unknown[]; from: number[] } | null {
+  if (items.length > NEAR_DUP_SCAN_LIMIT) return null;
+  return scan(items, 0, { tokens: [], postings: new Map() }).out;
 }
 
 /**
@@ -428,12 +530,20 @@ function mergeArray(old: readonly unknown[], incoming: readonly unknown[], field
   if (items === undefined) return { items: old as unknown[], changedAt: NONE, changed: false };
   const at = (j: number): number => (j < old.length && !changedAt.has(j) ? j : -1);
   // Only a new or reworded string can make (or, through a longer wording, join) near-duplicates.
-  const c = strings ? collapse(items) : null;
+  const near = strings ? collapseMerged(old, items, changedAt) : null;
+  const c = near?.out ?? null;
   if (c !== null) {
-    // A rephrasing that collapsed back into what was there is no change.
-    if (c.items.length === old.length && c.items.every((v, i) => v === old[i])) return { items: old as unknown[], changedAt: NONE, changed: false };
+    // A rephrasing that collapsed back into what was there is no change (no slot was added or reworded).
+    if (c.items.length === old.length && c.items.every((v, i) => v === old[i])) {
+      keepSettled(old, near!);
+      return { items: old as unknown[], changedAt: NONE, changed: false };
+    }
+    keepSettled(c.items, near!);
     return { items: c.items, from: c.from.map(at), changedAt, changed: true };
   }
+  if (near !== null) keepSettled(items, near);
+  // No string was added or reworded: the strings are the old ones in their places.
+  else if (!strings && SETTLED.has(old)) SETTLED.add(items);
   if (keyFn !== undefined) {
     // Positions did not move: the next merge into this list starts from this index.
     let index = added;

@@ -27,10 +27,12 @@ describe('entryRefs', () => {
       'C1 lib:lantern:e1',
       'C2 lib:lantern:e2',
       'C3 lib:lantern:e3',
-      'C4 note:брат',
-      'C5 character:мира',
-      'C6 note:мост',
-      'C7 arc:украденный свет',
+      // M5b (D-177): the book's [Arc] overview is seeded in its book place.
+      'C4 lib:lantern:k2',
+      'C5 note:брат',
+      'C6 character:мира',
+      'C7 note:мост',
+      'C8 arc:украденный свет',
     ]);
     expect(entryRefs(EMPTY_COMPENDIUM)).toEqual([]);
   });
@@ -41,13 +43,13 @@ describe('entryRefs', () => {
     // A typed session entry takes its own number in creation order.
     expect(noteRefs(noBook()).map((r) => `${r.ref} ${r.entry.key}`)).toEqual(['C1 note:брат', 'C3 note:мост']);
     // Attaching a book shifts session handles by its entry count.
-    expect(noteRefs(withBook()).map((r) => r.ref)).toEqual(['C4', 'C6']);
+    expect(noteRefs(withBook()).map((r) => r.ref)).toEqual(['C5', 'C7']);
   });
 
   test('a session entry never shifts a library handle; a rewind can shift later session handles', () => {
     const bound = [row(1, [note('Брат')]), filing(2, 'a0000001', [file('character', { name: 'Кай' })]), row(3, [note('Мост')])];
-    expect(refOf(withBook(bound, ['a0000001']), 'note:мост')).toBe('C6');
-    expect(refOf(withBook(bound, []), 'note:мост')).toBe('C5');
+    expect(refOf(withBook(bound, ['a0000001']), 'note:мост')).toBe('C7');
+    expect(refOf(withBook(bound, []), 'note:мост')).toBe('C6');
     expect(refOf(withBook(bound, []), 'lib:lantern:e3')).toBe('C3');
     expect(refOf(withBook(bound, []), 'character:кай')).toBeNull();
   });
@@ -59,11 +61,12 @@ describe('resolveEntryRef', () => {
 
   test('handles: C, c and the Cyrillic С, с; out of range → null', () => {
     expect(key('C1')).toBe('lib:lantern:e1');
-    expect(key(' c5 ')).toBe('character:мира');
-    expect(key('С6')).toBe('note:мост');
-    expect(key('с07')).toBe('arc:украденный свет');
+    expect(key('c4')).toBe('lib:lantern:k2');
+    expect(key(' c6 ')).toBe('character:мира');
+    expect(key('С7')).toBe('note:мост');
+    expect(key('с08')).toBe('arc:украденный свет');
     expect(key('C0')).toBeNull();
-    expect(key('C8')).toBeNull();
+    expect(key('C9')).toBeNull();
   });
 
   test('an exact key; a name, alias or former name answered by exactly one entry', () => {
@@ -78,7 +81,7 @@ describe('resolveEntryRef', () => {
   });
 
   test('ambiguous names → null; the preferred state decides between live and retired', () => {
-    // Украденный свет: the library plot and its session arc share the name.
+    // Украденный свет: the library plot, the book's arc and the session arc share the name.
     expect(resolveEntryRef(v, 'Украденный свет')).toBeNull();
     const again = withBook([...ROWS, row(6, [note('Мост')])]);
     expect(resolveEntryRef(again, 'мост')?.key).toBe('note:мост#2');
@@ -97,15 +100,16 @@ describe('noteRefs and resolveNoteRef with typed entries around', () => {
   test("notes only; a typed entry's handle is not a note", () => {
     const v = withBook();
     expect(noteRefs(v).map((r) => [r.ref, r.entry.key])).toEqual([
-      ['C4', 'note:брат'],
-      ['C6', 'note:мост'],
+      ['C5', 'note:брат'],
+      ['C7', 'note:мост'],
     ]);
-    expect(resolveNoteRef(v, 'C4')?.key).toBe('note:брат');
-    expect(resolveNoteRef(v, 'C5')).toBeUndefined();
+    expect(resolveNoteRef(v, 'C5')?.key).toBe('note:брат');
+    expect(resolveNoteRef(v, 'C6')).toBeUndefined();
     expect(resolveNoteRef(v, 'C1')).toBeUndefined();
     expect(resolveNoteRef(v, 'character:мира')).toBeUndefined();
     expect(resolveNoteRef(v, 'Мира')).toBeUndefined();
-    expect(resolveNoteRef(v, 'C7')).toBeUndefined(); // an arc is not a note
+    expect(resolveNoteRef(v, 'C8')).toBeUndefined(); // an arc is not a note
+    expect(resolveNoteRef(v, 'C4')).toBeUndefined(); // nor a book's arc
     expect(resolveNoteRef(v, 'брат')?.key).toBe('note:брат');
   });
 });

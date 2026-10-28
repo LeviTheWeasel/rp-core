@@ -102,6 +102,9 @@ export interface TaskState {
   /** seq of the effective action: the applied row, the revert row, or the newest stale/superseded row. */
   seq: number;
   status: 'applied' | 'reverted' | 'stale' | 'superseded';
+  /** M5b (D-179): a reverted key whose reverted row is stale (staleness re-writes even after undo, D-74). */
+  stale?: true;
+  /** The range of the row the status is about (for a reverted key: the reverted row's). */
   range?: [string, string];
 }
 

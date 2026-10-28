@@ -5,8 +5,10 @@
 // lorebook of SessionConfig.lorebooks, keyed by its library id (LoreSource.key); its access is
 // `compendium.books.<id>`: 'read' (default) or 'off'. The card's, the persona's and the notes' books
 // ('@'-keyed) are never seeded or routed. Pure.
-// - librarySeed: the typed entries of readable books become CEntries the fold starts from.
-// - routeBooks: those entries leave the lore engine's sources (the Compendium block shows them).
+// - librarySeed: the typed entries of readable books become CEntries the fold starts from; so do
+//   their [Arc] overviews (M5b, .notes/m5b-decisions.md D-177: arc entries the {{recap}} slot reads).
+// - routeBooks: those entries leave the lore engine's sources (the Compendium block and the slot
+//   show them).
 // The reading rule (a type only when it is one of the eleven, else plain lore) is Bunraku's
 // src/core/compendium/read.ts:40-54, re-derived for LoreEntry.meta; a typed entry also needs data.
 // A seeded entry keeps its non-regex lore keys and its secondary keys with their logic (selector
@@ -55,6 +57,19 @@ export function isCompendiumEntry(e: LoreEntry): boolean {
   const meta = e.meta;
   return isEntryType(meta?.type) && meta?.arc === undefined && isRec(meta?.data) && filled(meta.data);
 }
+
+/**
+ * D-177: an [Arc] overview of a book — `meta.arc` names its plot (letters or digits in it) and the entry
+ * has a text, the overview (a session arc needs both too, D-145). Typed or not: `meta.arc` wins. A blank
+ * plot or a blank text stays plain lore (and is not a classic name either, as in M5a).
+ */
+export function isLibraryArc(e: LoreEntry): boolean {
+  const arc = e.meta?.arc;
+  return typeof arc === 'string' && normalizeName(arc) !== '' && typeof e.content === 'string' && e.content.trim() !== '';
+}
+
+/** What the Compendium holds of a readable book: its typed entries and its [Arc] overviews. */
+const held = (e: LoreEntry): boolean => isCompendiumEntry(e) || isLibraryArc(e);
 
 /** A book's access by its library id: 'off' only when the config says so. */
 export function bookAccess(cfg: CompendiumConfig, libraryId: string): 'read' | 'off' {
@@ -105,10 +120,36 @@ function seedEntry(libraryId: string, e: LoreEntry): CEntry {
 }
 
 /**
+ * One [Arc] overview as the fold's seed (D-177): an arc CEntry like a session arc's (D-145) with a
+ * library origin — no type, name and arc = the plot (meta.arc, trimmed), content = the entry's text,
+ * no data, no keys (an arc is never a selector candidate), the lore order kept.
+ */
+function seedArc(libraryId: string, e: LoreEntry): CEntry {
+  const plot = (e.meta!.arc as string).trim();
+  const entry: CEntry = {
+    key: `lib:${libraryId}:${e.id}`,
+    type: null,
+    name: plot,
+    aliases: [],
+    tagline: '',
+    data: {},
+    keys: [],
+    content: e.content,
+    arc: plot,
+    origin: { kind: 'library', book: libraryId, id: e.id, overlay: false },
+    order: typeof e.order === 'number' && Number.isFinite(e.order) ? e.order : DEFAULT_LORE_ORDER,
+    prov: { created: null, lastSeq: 0, appended: {}, createdSeq: 0 },
+  };
+  if (e.meta?.featured === true) entry.featured = true;
+  return entry;
+}
+
+/**
  * The fold's library seed (D-141) from the session's books AFTER the "read once by name" shadowing,
- * in config order. Seeded: enabled Compendium entries of readable books, in (config, book) order,
- * keyed 'lib:<libraryId>:<entryId>' (a repeated key keeps the first). `classic`: normalizeName(title)
- * → key of each enabled untyped, non-arc entry with a title (the first one wins). `books`: id → name
+ * in config order. Seeded: enabled Compendium entries and [Arc] overviews (D-177) of readable books,
+ * in (config, book) order, keyed 'lib:<libraryId>:<entryId>' (a repeated key keeps the first).
+ * `classic`: normalizeName(title) → key of each enabled untyped entry without meta.arc that has a
+ * title (the first one wins). `books`: id → name
  * of every readable book. `hash`: sha256 over (id, entries JSON) of the readable books, 16 hex; ''
  * when there is none. Compendium disabled → EMPTY_SEED.
  */
@@ -126,10 +167,10 @@ export function librarySeed(sources: readonly LoreSource[], cfg: CompendiumConfi
     for (const e of src.book.entries) {
       if (e.enabled === false) continue;
       const key = `lib:${src.key}:${e.id}`;
-      if (isCompendiumEntry(e)) {
+      if (held(e)) {
         if (keys.has(key)) continue;
         keys.add(key);
-        entries.push(seedEntry(src.key, e));
+        entries.push(isLibraryArc(e) ? seedArc(src.key, e) : seedEntry(src.key, e));
       } else if (e.meta?.arc === undefined && typeof e.title === 'string') {
         const n = normalizeName(e.title);
         if (n !== '' && !classic.has(n)) classic.set(n, key);
@@ -142,16 +183,17 @@ export function librarySeed(sources: readonly LoreSource[], cfg: CompendiumConfi
 
 /**
  * The lore sources with the Compendium entries of readable books removed (D-142): they reach the
- * prompt through the Compendium block instead. Disabled typed entries go too. '@'-keyed sources, 'off'
- * books and a disabled Compendium keep everything; routing removes entries, never books. The same
- * array (and the same source objects) when nothing is removed.
+ * prompt through the Compendium block instead, and their [Arc] overviews through the {{recap}} slot
+ * (D-177). Disabled ones go too. '@'-keyed sources, 'off' books and a disabled Compendium keep
+ * everything; routing removes entries, never books. The same array (and the same source objects)
+ * when nothing is removed.
  */
 export function routeBooks(sources: readonly LoreSource[], cfg: CompendiumConfig): LoreSource[] {
   let out: LoreSource[] | undefined;
   sources.forEach((src, i) => {
-    if (!readable(src, cfg) || !src.book.entries.some(isCompendiumEntry)) return;
+    if (!readable(src, cfg) || !src.book.entries.some(held)) return;
     out ??= sources.slice();
-    out[i] = { ...src, book: { ...src.book, entries: src.book.entries.filter((e) => !isCompendiumEntry(e)) } };
+    out[i] = { ...src, book: { ...src.book, entries: src.book.entries.filter((e) => !held(e)) } };
   });
   return out ?? (sources as LoreSource[]);
 }

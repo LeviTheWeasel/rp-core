@@ -73,7 +73,7 @@ const BRIEF_JOIN = ' | ';
 interface LoreDoc {
   target: HandleTarget;
   title: string;
-  /** The book's name; 'note', 'arc', the entry type, or '<type>, <book name>' for a Compendium entry. */
+  /** The book's name; 'note', 'arc', the entry type, or '<type>, <book name>' / 'arc, <book name>' for a Compendium entry. */
   label: string;
   /** The text read_lore returns. */
   content: string;
@@ -142,13 +142,15 @@ function compendiumDoc(e: CEntry, ctx: ToolCtx): LoreDoc {
   const target: HandleTarget = { kind: 'compendium', key: e.key };
   const title = oneLine(e.name) || '(untitled)';
   const content = fullText(e);
+  const library = e.origin.kind === 'library' ? e.origin : undefined;
   if (e.type === null) {
-    // A note or an arc: its own text is what is searched (the render only frames it).
+    // A note or an arc: its own text is what is searched (the render only frames it). A library arc
+    // names its book, as a typed library entry does (M5b, section G: 'arc, <book>').
     const text = e.content ?? '';
     const keys = e.arc === undefined ? e.keys : [];
-    return { target, title, label: e.arc === undefined ? NOTE_LABEL : ARC_LABEL, content, entry: e, lex: { title: e.name, keys, text, rank: e.prov.lastSeq } };
+    const label = e.arc === undefined ? NOTE_LABEL : library === undefined ? ARC_LABEL : `${ARC_LABEL}, ${libraryLabel(library.book, ctx)}`;
+    return { target, title, label, content, entry: e, lex: { title: e.name, keys, text, rank: e.prov.lastSeq } };
   }
-  const library = e.origin.kind === 'library' ? e.origin : undefined;
   const label = library === undefined ? e.type : `${e.type}, ${libraryLabel(library.book, ctx)}`;
   // Every field is searched (the full render); aliases and a library entry's lore keys count as keys.
   const rank = library === undefined ? e.prov.lastSeq : (e.order ?? DEFAULT_LORE_ORDER);
@@ -236,7 +238,7 @@ const SEARCH_DESCRIPTION = [
  * so is any book entry the Compendium holds (routed by the engine; checked again here). Retired
  * Compendium entries and disabled book entries never appear. Top LORE_HITS_MAX, each
  * `<handle> <title> (<label>): <snippet>`: L<n> and the book name for book entries; C<n> (D-150) and
- * 'note', 'arc', the type, or '<type>, <book name>' (a library entry) for Compendium entries, whose
+ * 'note', 'arc', the type, or '<type>, <book name>' / 'arc, <book name>' (a library entry) for Compendium entries, whose
  * typed snippets are their brief (snippetOf).
  */
 export const searchLoreTool: Tool = {

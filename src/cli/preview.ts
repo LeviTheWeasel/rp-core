@@ -55,7 +55,8 @@ function turnId(home: string, session: SessionHandle, prefix: string): { ok: tru
 }
 
 export async function cmdPreview(a: PreviewArgs): Promise<number> {
-  const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt), home: a.home });
+  // M5b (ruling H): a one-shot opens the lane 'manual': it never starts a task it cannot finish.
+  const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt), home: a.home, lane: 'manual' });
   let session: SessionHandle | null = null;
   try {
     try {

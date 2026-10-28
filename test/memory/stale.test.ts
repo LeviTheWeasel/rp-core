@@ -133,10 +133,10 @@ describe('the library seed through foldView', () => {
     const seed = librarySeed([lantern()], { enabled: true });
     const entries = seqd(chat([userRow([{ op: 'edit', ref: 'lib:lantern:e1', set: { tier: 'A' } }])]));
     const view = foldView(makeHeader(), entries, undefined, { library: seed });
-    expect([...view.compendium.entries.keys()]).toEqual(['lib:lantern:e1', 'lib:lantern:e2', 'lib:lantern:e3', 'character:мира', 'character:кай']);
+    expect([...view.compendium.entries.keys()]).toEqual(['lib:lantern:e1', 'lib:lantern:e2', 'lib:lantern:e3', 'lib:lantern:k2', 'character:мира', 'character:кай']);
     expect(view.compendium.entries.get('lib:lantern:e1')?.origin).toMatchObject({ overlay: true });
     const at = foldViewAt(makeHeader(), buildTree(entries), 'a0000001', { library: seed });
-    expect([...at.compendium.entries.keys()]).toEqual(['lib:lantern:e1', 'lib:lantern:e2', 'lib:lantern:e3', 'character:мира']);
+    expect([...at.compendium.entries.keys()]).toEqual(['lib:lantern:e1', 'lib:lantern:e2', 'lib:lantern:e3', 'lib:lantern:k2', 'character:мира']);
     const plain = foldView(makeHeader(), entries);
     expect([...plain.compendium.entries.keys()]).toEqual(['character:мира', 'character:кай']);
     expect(plain.compendium.issues).toEqual([{ seq: 8, op: 0, why: 'library_entry_missing', key: 'lib:lantern:e1' }]);

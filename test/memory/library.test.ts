@@ -62,10 +62,11 @@ describe('isCompendiumEntry and bookAccess', () => {
 });
 
 describe('librarySeed', () => {
-  test('typed entries are seeded; untyped titled ones are classic; arcs, unknown types and disabled entries as below', () => {
+  test('typed entries and [Arc] overviews are seeded; untyped titled ones are classic; unknown types and disabled entries as below', () => {
     const seed = librarySeed([mixed()], ON);
-    expect(seed.entries.map((e) => e.key)).toEqual(['lib:mixed:t1']);
-    // An unknown type is plain lore, hence a classic name; an [Arc] is neither; disabled entries are neither.
+    // M5b (D-177): an [Arc] overview (meta.arc, typed or not) is seeded as an arc entry in its book place.
+    expect(seed.entries.map((e) => e.key)).toEqual(['lib:mixed:t1', 'lib:mixed:a1', 'lib:mixed:a2']);
+    // An unknown type is plain lore, hence a classic name; an [Arc] is not one; disabled entries are neither.
     expect([...seed.classic]).toEqual([
       ['песня', 'lib:mixed:c1'],
       ['туманник', 'lib:mixed:u1'],
@@ -162,6 +163,7 @@ describe('librarySeed', () => {
       ['lib:lantern:e1', 'Ульяна'],
       ['lib:lantern:e2', 'Серый маяк'],
       ['lib:lantern:e3', 'Украденный свет'],
+      ['lib:lantern:k2', 'Украденный свет'],
     ]);
     expect([...seed.books.keys()]).toEqual(['lantern']);
     expect(seed.classic.has('выкл лор')).toBe(false);
@@ -182,9 +184,9 @@ describe('librarySeed', () => {
 });
 
 describe('routeBooks (D-142)', () => {
-  test('typed entries (disabled ones too) leave readable books; arcs, classic and unknown types stay', () => {
+  test('typed entries (disabled ones too) and [Arc] overviews leave readable books; classic and unknown types stay', () => {
     const routed = routeBooks([mixed()], ON);
-    expect(routed[0]!.book.entries.map((e) => e.id)).toEqual(['c1', 'a1', 'a2', 'u1', 'd2', 'n1', 'n2']);
+    expect(routed[0]!.book.entries.map((e) => e.id)).toEqual(['c1', 'u1', 'd2', 'n1', 'n2']);
     expect(routed[0]!.book.name).toBe('Смесь');
     expect(routed[0]!.key).toBe('mixed');
   });
@@ -201,7 +203,7 @@ describe('routeBooks (D-142)', () => {
     expect(routed).not.toBe(sources);
     expect(routed[0]).toBe(card);
     expect(routed[1]).toBe(plain);
-    expect(routed[2]!.book.entries.map((e) => e.id)).toEqual(['k1', 'k2']);
+    expect(routed[2]!.book.entries.map((e) => e.id)).toEqual(['k1']);
     // The input is not changed.
     expect(lan.book.entries).toHaveLength(5);
   });

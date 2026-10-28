@@ -7,6 +7,8 @@
 //
 // Everything lives on the instance: the session registry, the per-origin scheduler, the event bus.
 // Two Engines in one process share nothing but the files (and the session locks guard those).
+// M5b: each open session runs its background lane (lane.ts) on this scheduler; closing the engine
+// closes every session, which aborts its lane first.
 
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -41,6 +43,9 @@ export interface EngineSeams {
   toolSets?: ToolSets;
 }
 
+/** M5b (the lead's ruling G): EngineOptions.lane's default, read once per engine: RP_CORE_LANE=manual, else auto. */
+const laneFromEnv = (): 'auto' | 'manual' => (process.env.RP_CORE_LANE === 'manual' ? 'manual' : 'auto');
+
 export class Engine {
   static async open(opts: EngineOptions & EngineSeams): Promise<EngineHandle> {
     if (!opts || typeof opts.home !== 'string' || opts.home === '') throw new Error('Engine.open needs a home directory');
@@ -52,7 +57,8 @@ export class Engine {
       random: opts.random ?? systemRandom,
       timeZone: opts.timeZone ?? systemTimeZone(),
       fetch: opts.fetch ?? globalThis.fetch,
-      sched: createScheduler(),
+      // M5b (the lead's ruling G): the idle gate waits on the engine's timers (tests' fake ones too).
+      sched: createScheduler({ timers: opts.timers ?? realTimers }),
       checkpoint: checkpointCadence(opts.checkpoint),
       timers: opts.timers ?? realTimers,
       bus: new EventBus<Event>(),
@@ -64,6 +70,7 @@ export class Engine {
       ...(opts.prices ? { prices: { ...opts.prices } } : {}),
       ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
       ...(opts.keepRequests === true ? { keepRequests: true } : {}),
+      lane: opts.lane ?? laneFromEnv(),
       ...(opts.toolSets ? { toolSets: opts.toolSets } : {}),
     };
     return new EngineImpl(ctx);

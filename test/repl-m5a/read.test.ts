@@ -11,7 +11,7 @@ describe('/memory list', () => {
     await r.until('Bestiary (1)');
     const out = after(r.out(), '/memory');
     const lines = out.trimEnd().split('\n');
-    expect(lines[0]).toBe('The Compendium of this path: 15 live · /memory show <ref> prints one');
+    expect(lines[0]).toBe('The Compendium of this path: 16 live · /memory show <ref> prints one');
     expect(lines.filter((l) => !l.startsWith('  ')).slice(1)).toEqual([
       'Cast (3)',
       'Places (3)',
@@ -24,14 +24,17 @@ describe('/memory list', () => {
       'Worldbuilding (1)',
       'Narrative (1)',
       'Bestiary (1)',
+      // M5b (D-177): the book's [Arc] overview is an entry of its own now (no longer plain lore).
+      'Arcs (1)',
     ]);
+    expect(lines).toContain('  C16 [Arc] Украденный свет — Маяк погас, фонарь пропал вместе со смотрительницей. Гильди… [lib: lantern] [148]');
     expect(lines).toContain('  C6  Серый маяк (aka маяк) — Каменная башня на краю мыса; на её крюке висел Латунный фонарь. [lib: lantern] [featured] [217]');
     expect(lines).toContain('  C2  Селина Бранд — Хочет, чтобы свет принадлежал городу. [lib: lantern] [406]');
     expect(lines).toContain('  C1  Арсений Кеттер (aka Старшина, Арсений) — Старшина Гильдии фонарщиков, сорок лет зажигает огни Вельмара. [lib: lantern] [featured] [1.6k]');
     // Every handle is the engine's: memoryList's, and entryRefs over the session's own fold.
     const rows = r.session.memoryList();
-    expect(rows).toHaveLength(15);
-    for (const row of rows) expect(lines.some((l) => l.startsWith(`  ${row.ref.padEnd(3)} ${row.name}`))).toBe(true);
+    expect(rows).toHaveLength(16);
+    for (const row of rows) expect(lines.some((l) => l.startsWith(`  ${row.ref.padEnd(3)} ${row.type === 'arc' ? '[Arc] ' : ''}${row.name}`))).toBe(true);
     expect(entryRefs(r.session.compendium()).map((x) => [x.ref, x.entry.key])).toEqual(rows.map((x) => [x.ref, x.key]));
     await r.close();
   });
@@ -62,22 +65,22 @@ describe('/memory list', () => {
     ]);
     expect(after(out, '/memory list notes')).toBe('no notes on this path\n');
     expect(after(out, '/memory list npc')).toContain('/memory list: "npc" is not an entry type (character, location, item, power, organization, event, plot, threat, worldbuilding, summary, creature, note, arc)');
-    // Мира is filed after the 15 library entries: C16 (D-150).
+    // Мира is filed after the 16 library entries (15 typed, the [Arc] overview, D-177): C17 (D-150).
     expect(after(out, '/memory list character').trimEnd().split('\n')).toEqual([
       'Character entries on this path: 3 live, 1 retired (/memory list character --retired shows them) · /memory show <ref> prints one',
       'Cast (3)',
       '  C1  Арсений Кеттер (aka Старшина, Арсений) — Старшина Гильдии фонарщиков, сорок лет зажигает огни Вельмара. [lib: lantern] [featured] [1.6k]',
       '  C2  Селина Бранд — Хочет, чтобы свет принадлежал городу. [lib: lantern] [406]',
-      '  C16 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]',
+      '  C17 Мира (aka Фонарщица) — Младшая фонарщица Вельмара и ученица Арсения Кеттера. [698]',
     ]);
     const all = after(out, '/memory list character --retired');
     expect(all).toContain('Character entries on this path: 3 live, 1 retired · /memory show <ref> prints one');
     expect(all).toContain('  C3  Ульяна (aka Смотрительница) — Смотрительница Серого маяка, тридцать зим не пропустившая ни одной ночи. [lib: lantern, edited] [retired: ушла в туман] [338]');
-    expect(after(out, '/memory --retired')).toContain('The Compendium of this path: 15 live, 1 retired · /memory show <ref> prints one');
+    expect(after(out, '/memory --retired')).toContain('The Compendium of this path: 16 live, 1 retired · /memory show <ref> prints one');
     expect(after(out, '/memory list note').trimEnd().split('\n')).toEqual([
       'Notes on this path: 1 live · /memory show <ref> prints one',
       'Notes (1)',
-      '  C17 Ключи — Ключи гильдии у Арсения. · keys: ключи [24]',
+      '  C18 Ключи — Ключи гильдии у Арсения. · keys: ключи [24]',
     ]);
   });
 });
@@ -110,14 +113,14 @@ describe('/memory show and /memory tree', () => {
 
   test('a session entry shows the row that wrote it; a note keeps its M3 card', async () => {
     const r = await lanternRig(calls(), { editor: editorOf(MIRA_TEXT) });
-    r.type('/memory new character Мира', '/memory show C16', '/memory add Ключи | | Ключи у Арсения.', '/memory show C17');
+    r.type('/memory new character Мира', '/memory show C17', '/memory add Ключи | | Ключи у Арсения.', '/memory show C18');
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    const mira = after(out, '/memory show C16');
-    expect(mira).toMatch(/^C16 Мира · character · character:мира\n {2}aka: Фонарщица\n {2}origin: this session, written by you at journal row \d+\n\n {2}# Мира\n/);
+    const mira = after(out, '/memory show C17');
+    expect(mira).toMatch(/^C17 Мира · character · character:мира\n {2}aka: Фонарщица\n {2}origin: this session, written by you at journal row \d+\n\n {2}# Мира\n/);
     expect(mira).toContain('\n  ## Relationships\n');
-    expect(after(out, '/memory show C17')).toMatch(/^C17 Ключи · note:ключи\n {2}keys: Ключи\n/);
+    expect(after(out, '/memory show C18')).toMatch(/^C18 Ключи · note:ключи\n {2}keys: Ключи\n/);
   });
 
   test('tree: the session first, then each book, with counts and handles; one book; an unknown one', async () => {
@@ -129,7 +132,7 @@ describe('/memory show and /memory tree', () => {
     const tree = after(out, '/memory tree').trimEnd().split('\n');
     expect(tree.slice(0, 6)).toEqual([
       'World Knowledge (this session) · 0',
-      'Lantern (lib: lantern) · 15',
+      'Lantern (lib: lantern) · 16',
       '  Cast · 3',
       '    Гильдия фонарщиков · 1: C1 Арсений Кеттер',
       '    Соляной суд · 1: C2 Селина Бранд',
@@ -140,7 +143,7 @@ describe('/memory show and /memory tree', () => {
     expect(tree).toContain('      C5 Фонарный ряд');
     expect(tree).toContain('  Items · 1: C7 Латунный фонарь');
     const book = after(out, '/memory tree lantern').trimEnd().split('\n');
-    expect(book[0]).toBe('Lantern (lib: lantern) · 15');
+    expect(book[0]).toBe('Lantern (lib: lantern) · 16');
     expect(book.join('\n')).not.toContain('this session');
     expect(after(out, '/memory tree nope')).toBe('/memory tree: the Compendium reads no book "nope"\n');
   });
@@ -166,13 +169,13 @@ describe('/trace', () => {
     const trace = after(r.out(), '/trace');
     const line = trace.split('\n').find((l) => l.startsWith('  compendium: '))!;
     expect(line).toMatch(
-      /^ {2}compendium: (lite|full) · picked 3: C16 "Мира" \(mention\), C6 "Серый маяк" \(mention\), C14 "Фонарь погас" \(mention\) · injected 3: C16 "Мира" brief \d+ tok, C6 "Серый маяк" brief \d+ tok, C14 "Фонарь погас" brief \d+ tok · block \d+ tok$/,
+      /^ {2}compendium: (lite|full) · picked 3: C17 "Мира" \(mention\), C6 "Серый маяк" \(mention\), C14 "Фонарь погас" \(mention\) · injected 3: C17 "Мира" brief \d+ tok, C6 "Серый маяк" brief \d+ tok, C14 "Фонарь погас" brief \d+ tok · block \d+ tok$/,
     );
     // The refs of the trace are the handles /memory prints.
     const stored = r.session.view().path.at(-1)!;
     expect(stored.role).toBe('assistant');
     const rows = new Map(r.session.memoryList().map((x) => [x.key, x.ref]));
-    expect(rows.get('character:мира')).toBe('C16');
+    expect(rows.get('character:мира')).toBe('C17');
     await r.close();
   });
 

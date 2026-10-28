@@ -34,13 +34,23 @@
 // correction add and is skipped below AGENT_OUTPUT_FLOOR (when the caller gives a counter);
 // transport_unsupported is only a structured 400 bad_request before any output; an empty plan
 // block or an argument-less plan call is not the plan (the search goes on) and no extra block.
+// M5b (D-172): a call runs at the caller's priority; a background call an interactive request preempts
+// ends the agent's call with code 'preempted' (no retry, no corrective pass), and filing and historian
+// have their own budget reasons. A tag:null agent's answer may be a JSON list (firstJson; the lead's
+// ruling G): its reader decides what the list holds. After the M5b review (ruling I): a background
+// call's budget runs only while it holds a slot; a tag:null answer cut off before its JSON closed keeps
+// the items that closed and drops the unfinished last one, and fails when none closed.
+// After the final check (the lead's ruling K): a cut-off root object that is itself one item (a bare flat
+// item: it has a type, an identity or an entry key and no envelope) is unreadable, its own lists are its
+// fields; and a tag:null result says `cutOff` (finish 'length', or a JSON closed by closedItems) so the
+// lane can fail a cut-off answer that gave it nothing to apply.
 
 import { abortableDelay, abortWith, childController, reasonOf, type AbortReason, type DelayTimers } from '../engine/abort.ts';
 import type { Connection, EngineOptions } from '../engine/api.ts';
 import { priceFor, usageCost } from '../engine/cost.ts';
 import { streamCall, type CallResult, type CallTimeouts } from '../engine/narrate.ts';
 import { isRetryable, modelLabel, retryDelayMs } from '../engine/route.ts';
-import type { Scheduler } from '../engine/sched.ts';
+import type { Priority, Scheduler } from '../engine/sched.ts';
 import type { Samplers } from '../formats/native.ts';
 import type { EventBody } from '../protocol/events.ts';
 import { MESSAGE_OVERHEAD_TOKENS } from '../prompt/tokens.ts';
@@ -64,7 +74,9 @@ export type StructuredFailCode =
   | 'invalid'
   | 'missing_directive'
   | 'timeout'
-  | 'aborted';
+  | 'aborted'
+  /** M5b (D-172): a background call whose place an interactive request took; not an attempt for the lane. */
+  | 'preempted';
 
 export type AttemptOutcome =
   | 'ok'
@@ -77,7 +89,8 @@ export type AttemptOutcome =
   | 'provider_error'
   | 'transport_unsupported'
   | 'timeout'
-  | 'aborted';
+  | 'aborted'
+  | 'preempted';
 
 /** One model call of the agent, as the record and the trace keep it. */
 export interface Attempt {
@@ -129,7 +142,7 @@ export interface StructuredInput<T> {
   agent: StructuredAgent;
   /** Sent as responseSchema on the structured transport. */
   schema: { name: string; schema: JSONSchema };
-  /** raw = the decoded JSON value; its root is already an object. */
+  /** raw = the decoded JSON value; its root is already an object (tag null: an object or a list, M5b). */
   read(raw: unknown): ReadResult<T>;
   /** Tagged: the caller already put the schema and "How to answer" in it. */
   system: string;
@@ -151,16 +164,41 @@ export interface StructuredInput<T> {
   repair: boolean;
   /** e.g. `${turnId}:director` → `${prefix}:0`, `:1`, … one per call. */
   callKeyPrefix: string;
-  /** The agent's whole time budget, from its first semaphore slot on (D-101). */
+  /** The agent's whole time budget, from its first semaphore slot on (D-101); background: only while a call holds a slot. */
   budgetMs: number;
   /** The agent's child signal of the turn (Stop reaches the calls through it). */
   turnSignal: AbortSignal;
   env: AgentCallEnv;
+  /**
+   * M5b (D-172): the semaphore priority of every call; absent = 'interactive' (narrator, Director,
+   * recall-sync). 'background' (filing, historian) may end with code 'preempted'.
+   */
+  priority?: Priority;
+  /** M5b (D-172): background only, the session's compendium.idleDelaySec (the local idle gate). */
+  idleDelaySec?: number;
 }
 
-export type StructuredResult<T> =
-  | { ok: true; value: T; transport: Transport; skipped: Skip[]; attempts: Attempt[]; calls: TraceCall[]; fromReasoning?: true }
-  | { ok: false; code: StructuredFailCode; message?: string; attempts: Attempt[]; calls: TraceCall[] };
+/** `C`: the failure codes the call can end with (an interactive call is never preempted). */
+export type StructuredResult<T, C extends StructuredFailCode = StructuredFailCode> =
+  | {
+      ok: true;
+      value: T;
+      transport: Transport;
+      skipped: Skip[];
+      attempts: Attempt[];
+      calls: TraceCall[];
+      fromReasoning?: true;
+      /**
+       * tag:null (the lead's ruling K): the answer read was cut off — its call finished with 'length', or its
+       * JSON never closed and closedItems kept what had closed. The lane fails such an answer when it gave
+       * nothing to apply (the historian: no summary). Absent otherwise.
+       */
+      cutOff?: true;
+    }
+  | { ok: false; code: C; message?: string; attempts: Attempt[]; calls: TraceCall[] };
+
+/** What an interactive structuredCall can return: every code but 'preempted'. */
+export type InteractiveResult<T> = StructuredResult<T, Exclude<StructuredFailCode, 'preempted'>>;
 
 /** 'structured' only where json_schema output is confirmed (host, probe or user, §7.2); else 'tagged'. */
 export function chooseTransport(caps: ModelCaps): Transport {
@@ -185,12 +223,12 @@ export const AGENT_OUTPUT_FLOOR = 600;
 /** D-98: the codes after which the corrective pass runs (reading failures only). */
 const CORRECTABLE: ReadonlySet<StructuredFailCode> = new Set(['no_output', 'undecodable', 'invalid', 'missing_directive']);
 
-/** The abort reason of an agent's budget. abort.ts has no filing/historian reason yet (M5b note). */
+/** The abort reason of an agent's budget (D-172, C-12). */
 const BUDGET_REASON: Readonly<Record<StructuredAgent, AbortReason>> = {
   director: 'budget:director',
   recall: 'budget:recall',
-  filing: 'budget:director',
-  historian: 'budget:director',
+  filing: 'budget:filing',
+  historian: 'budget:historian',
 };
 
 /** setTimeout's ceiling (2^31 − 1 ms); a longer budget is that long. */
@@ -343,9 +381,142 @@ function emptyPlanArgs(args: string): boolean {
   return keys.length === 1 && typeof root['name'] === 'string' && PLAN_NAMES.has(root['name'].toLowerCase());
 }
 
-/** tag:null: a fence, else the first object. */
+/** M5b (the lead's ruling G): the text after a '[' reads as a JSON list of objects, or an empty list. */
+const LISTISH = /^\[\s*[{\]]/;
+
+/**
+ * tag:null (M5b, the lead's ruling G: filing and the historian accept an array root, their readers
+ * decide): a fence whose body opens with a list is that list; else a JSON-looking list of objects that
+ * starts before every JSON-looking object and decodes to a list (a list that never closes is a cut-off
+ * answer: whole false); else firstObject.
+ */
+export function firstJson(text: string): FoundObject | null {
+  const body = FENCE.exec(text)?.[2]?.trim() ?? '';
+  if (LISTISH.test(body)) {
+    const end = balancedEnd(body, 0);
+    return end > 0 ? { json: body.slice(0, end), whole: true } : { json: body, whole: false };
+  }
+  if (body.startsWith('{')) return firstObject(text);
+  let list = -1;
+  for (let at = text.indexOf('['); at >= 0; at = text.indexOf('[', at + 1)) {
+    if (LISTISH.test(text.slice(at, at + 200))) {
+      list = at;
+      break;
+    }
+  }
+  if (list < 0) return firstObject(text);
+  for (let at = text.indexOf('{'); at >= 0 && at < list; at = text.indexOf('{', at + 1)) {
+    if (JSONISH.test(text.slice(at, at + 200))) return firstObject(text);
+  }
+  const end = balancedEnd(text, list);
+  if (end < 0) return { json: text.slice(list), whole: false };
+  const json = text.slice(list, end);
+  const v = looseJson(json);
+  return v.ok && Array.isArray(v.value) ? { json, whole: true } : firstObject(text);
+}
+
+/** What is left of a cut-off tag:null answer (closedItems). */
+export interface ClosedItems {
+  /** The text cut back to its last closed item, the open brackets closed again. */
+  json: string;
+  /** Items that closed. */
+  items: number;
+  /** Something unfinished (an item, a member) came after the cut and was left out. */
+  dropped: boolean;
+}
+
+/** Root keys of a list envelope (filing's and the historian's readers): with one, the root holds items. */
+const ENVELOPE_KEYS: ReadonlySet<string> = new Set(['filing', 'filings', 'entries', 'items', 'summaries', 'recaps', 'plots', 'storylines', 'arc', 'arcs', 'overviews', 'plotoverviews']);
+/** Root keys of one item (its type, its identity, its entry): without an envelope key the root is the item. */
+const ITEM_KEYS: ReadonlySet<string> = new Set(['type', 'entrytype', 'entry', 'data', 'name', 'title', 'topic', 'summary', 'parentplot']);
+/** A key as both sets hold it: lower case, no '_', '-' or blanks (`entry_type`, `entryType`, `Parent plot`). */
+const bareKey = (k: string): string => k.toLowerCase().replace(/[\s_-]+/g, '');
+
+/** The member keys of a root object (every one in the text, cut or not); [] for a list root. */
+function rootKeys(json: string): string[] {
+  const keys: string[] = [];
+  let depth = 0;
+  let root = '';
+  let inString = false;
+  let start = -1;
+  let last: string | null = null;
+  for (let k = 0; k < json.length; k++) {
+    const c = json[k];
+    if (inString) {
+      if (c === '\\') k++;
+      else if (c === '"') {
+        inString = false;
+        if (depth === 1 && root === '{') last = json.slice(start + 1, k);
+      }
+    } else if (c === '"') {
+      inString = true;
+      start = k;
+    } else if (c === '{' || c === '[') {
+      if (depth === 0) root = c;
+      depth++;
+    } else if (c === '}' || c === ']') depth--;
+    else if (c === ':' && depth === 1 && root === '{' && last !== null) keys.push(last);
+    else if (c === ',') last = null;
+  }
+  return keys;
+}
+
+/**
+ * Ruling K: a root object is one item — its lists are its fields (`relationships`), not item lists —
+ * when it has a type, identity or entry key and no envelope key (a type-keyed `{"character": [...]}` has
+ * neither: it holds items).
+ */
+function rootIsItem(json: string): boolean {
+  const keys = rootKeys(json).map(bareKey);
+  return keys.some((k) => ITEM_KEYS.has(k)) && !keys.some((k) => ENVELOPE_KEYS.has(k));
+}
+
+/**
+ * M5b (the lead's ruling I): a tag:null answer whose JSON never closed (filing, historian). Its items are
+ * the elements of the root list, or of the lists the root object holds as member values (`filings`,
+ * `arcs`); the text is cut back to the end of the last item or member that closed, or to the opening
+ * of a list that holds nothing yet, and its open brackets are closed again: complete items are kept,
+ * the unfinished last one is left out. Null when no item closed (a root object with no list is one
+ * item, and it did not close; so is a root object that is itself an item, ruling K): the attempt fails,
+ * never an empty cover. Braces inside strings do not count (balancedEnd's rule).
+ */
+export function closedItems(json: string): ClosedItems | null {
+  const stack: string[] = [];
+  let inString = false;
+  let items = 0;
+  let cut = -1;
+  let closers = '';
+  const lists = !rootIsItem(json);
+  const holder = (): boolean => (stack.length === 1 && stack[0] === '[') || (lists && stack.length === 2 && stack[0] === '{' && stack[1] === '[');
+  const mark = (at: number): void => {
+    cut = at;
+    closers = stack.map((c) => (c === '{' ? '}' : ']')).reverse().join('');
+  };
+  for (let k = 0; k < json.length; k++) {
+    const c = json[k];
+    if (inString) {
+      if (c === '\\') k++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === '{' || c === '[') {
+      stack.push(c);
+      if (c === '[' && holder()) mark(k + 1);
+    } else if (c === '}' || c === ']') {
+      stack.pop();
+      if (stack.length === 0) break;
+      if (holder()) {
+        items++;
+        mark(k + 1);
+      } else if (stack.length === 1 && stack[0] === '{') mark(k + 1);
+    }
+  }
+  if (items === 0 || cut < 0) return null;
+  return { json: json.slice(0, cut) + closers, items, dropped: json.slice(cut).replace(/[\s,\]}]/g, '') !== '' };
+}
+
+/** tag:null: a fence, else the first object or list of objects (firstJson). */
 function findObject(text: string): Found {
-  const obj = firstObject(text);
+  const obj = firstJson(text);
   return obj === null ? { kind: 'none' } : { kind: 'json', json: obj.json, whole: obj.whole, block: false, extra: 0 };
 }
 
@@ -363,7 +534,7 @@ function unwrapEnvelope(v: unknown): unknown {
 // ---- reading one call's answer (D-98 reading order) ------------------------------------------------
 
 type Read<T> =
-  | { ok: true; value: T; skipped: Skip[]; fromReasoning: boolean }
+  | { ok: true; value: T; skipped: Skip[]; fromReasoning: boolean; cutOff?: true }
   | { ok: false; code: 'no_output' | 'undecodable' | 'invalid' | 'missing_directive'; message: string };
 
 /** The visible text without inline think tags; what they held joins the reasoning. */
@@ -389,8 +560,11 @@ function answerOf(res: Pick<CallResult, 'text' | 'reasoning'>, caps: ModelCaps):
 
 /**
  * One answer read (D-98): find the JSON in the visible text (tag 'plan': D-99; null: a fence or the
- * first object), else in the reasoning; decode it with looseJson (root must be an object; an
- * object cut off by finish 'length' is undecodable); then read().
+ * first object), else in the reasoning; decode it with looseJson (root must be an object; tag
+ * 'plan': an object cut off by finish 'length' is undecodable; tag null: an answer cut off at any
+ * finish keeps the items that closed — closedItems, a `cut_off` skip when one was left out — and is
+ * undecodable when none did); then read(). Tag null: `cutOff` when the JSON was closed here or the finish
+ * was 'length' (ruling K).
  */
 export function readAnswer<T>(
   answer: { text: string; reasoning: string },
@@ -411,16 +585,27 @@ export function readAnswer<T>(
   }
   if (found.kind === 'none') return { ok: false, code: 'no_output', message: noOutputReason(opts.tag, opts.transport) };
   if (found.kind === 'broken') return { ok: false, code: 'undecodable', message: found.why };
-  if (!found.whole && opts.finish === 'length') return { ok: false, code: 'undecodable', message: 'the answer was cut off before the JSON closed' };
-  const decoded = looseJson(found.json);
+  let json = found.json;
+  const cutOff: Skip[] = [];
+  const closedHere = !found.whole && opts.tag === null;
+  if (closedHere) {
+    // The lead's ruling I: whatever the finish, the items that closed are read; none closed fails.
+    const kept = closedItems(found.json);
+    if (kept === null) return { ok: false, code: 'undecodable', message: 'the answer was cut off before its first item closed' };
+    json = kept.json;
+    if (kept.dropped) cutOff.push({ path: 'answer', why: 'cut_off: the answer was cut off; its unfinished last item was left out' });
+  } else if (!found.whole && opts.finish === 'length') return { ok: false, code: 'undecodable', message: 'the answer was cut off before the JSON closed' };
+  const decoded = looseJson(json);
   if (!decoded.ok) return { ok: false, code: 'undecodable', message: 'the JSON could not be read' };
   // D-117: a plan envelope is unwrapped on both transports, from a block or a bare object alike.
   const value = opts.tag === 'plan' ? unwrapEnvelope(decoded.value) : decoded.value;
-  if (!isRecord(value)) return { ok: false, code: 'undecodable', message: 'the answer is not a JSON object' };
+  // The lead's ruling G (M5b): a tag:null agent's reader takes a list root too.
+  if (!isRecord(value) && !(opts.tag === null && Array.isArray(value))) return { ok: false, code: 'undecodable', message: 'the answer is not a JSON object' };
   const got = opts.read(value);
   if (!got.ok) return { ok: false, code: got.code, message: got.message };
   const extra: Skip[] = Array.from({ length: found.extra }, () => ({ path: 'plan', why: 'extra block' }));
-  return { ok: true, value: got.value, skipped: [...extra, ...got.skipped], fromReasoning };
+  const cut = closedHere || (opts.tag === null && opts.finish === 'length');
+  return { ok: true, value: got.value, skipped: [...extra, ...cutOff, ...got.skipped], fromReasoning, ...(cut ? { cutOff: true as const } : {}) };
 }
 
 // ---- the corrective pass (D-99) -------------------------------------------------------------------
@@ -502,8 +687,12 @@ type Called<T> =
 
 /**
  * structuredCall (D-98): one JSON object from the agent's model. Never throws for provider trouble;
- * the result says what happened, with every call's attempt and trace row.
+ * the result says what happened, with every call's attempt and trace row. M5b (D-172): a call left at
+ * the interactive priority is never preempted, so its result type has no 'preempted'; a background
+ * call's result may have it (the lane re-queues the task without counting an attempt).
  */
+export function structuredCall<T>(input: StructuredInput<T> & { priority?: 'interactive' }): Promise<InteractiveResult<T>>;
+export function structuredCall<T>(input: StructuredInput<T>): Promise<StructuredResult<T>>;
 export async function structuredCall<T>(input: StructuredInput<T>): Promise<StructuredResult<T>> {
   const { env, route, transport } = input;
   const label = modelLabel(route.conn.id, route.model);
@@ -513,13 +702,26 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
   let n = 0;
 
   // D-101: the budget starts once the first call holds its slot; the retry and the corrective pass share it.
+  // M5b (the lead's ruling I): a background call's budget runs only while one of its calls holds a slot,
+  // so a §6.6 retry or a corrective pass queued behind a turn (or the backoff before it) is not timed.
+  const pausable = input.priority === 'background';
   let budget: unknown = null;
   let armed = false;
+  let left = Math.min(MAX_TIMER_MS, Math.max(0, input.budgetMs));
+  let since = 0;
   const onSlot = (): void => {
-    if (armed) return;
+    if (budget !== null || (armed && !pausable)) return;
     armed = true;
     if (!Number.isFinite(input.budgetMs)) return;
-    budget = env.timers.setTimeout(() => abortWith(ctrl, BUDGET_REASON[input.agent]), Math.min(MAX_TIMER_MS, Math.max(0, input.budgetMs)));
+    since = env.clock().getTime();
+    budget = env.timers.setTimeout(() => abortWith(ctrl, BUDGET_REASON[input.agent]), left);
+  };
+  /** A background call gave its slot back: the budget stops with what is left of it. */
+  const pause = (): void => {
+    if (!pausable || budget === null) return;
+    env.timers.clearTimeout(budget);
+    budget = null;
+    left = Math.max(0, left - Math.max(0, env.clock().getTime() - since));
   };
   /** An abort of the agent's signal: its budget ran out, or the turn was stopped. */
   const stopCode = (): 'timeout' | 'aborted' => (reasonOf(ctrl.signal)?.startsWith('budget:') ? 'timeout' : 'aborted');
@@ -544,10 +746,13 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
       agent: input.agent,
       ...(transport === 'structured' ? { responseSchema: input.schema } : {}),
       ...(env.keepRequest ? { keepRequest: env.keepRequest } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.idleDelaySec !== undefined ? { idleDelaySec: input.idleDelaySec } : {}),
       onSlot,
       onText: () => undefined,
       onReasoning: () => undefined,
     });
+    pause();
     record(callKey, res);
     const got = outcomeOf(res, retryable);
     attempts.push({
@@ -580,6 +785,8 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
   };
 
   const outcomeOf = (res: CallResult, retryable: boolean): Called<T> => {
+    // D-172: a preemption is the call's own end; a Stop or the budget of the whole agent outranks it.
+    if (res.preempted === true && !ctrl.signal.aborted) return { ok: false, code: 'preempted' };
     if (res.stopped || (res.error && ctrl.signal.aborted)) return { ok: false, code: stopCode() };
     const e = res.error;
     if (e) {
@@ -628,6 +835,7 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
     attempts,
     calls,
     ...(got.fromReasoning ? { fromReasoning: true as const } : {}),
+    ...(got.cutOff ? { cutOff: true as const } : {}),
   });
   /** A failure of a pass (never 'retried': a retried call is always followed by its retry). */
   const failed = (got: Exclude<Called<T>, { ok: true }>): StructuredResult<T> => fail(got.code === 'retried' ? 'provider_error' : got.code, got.message);

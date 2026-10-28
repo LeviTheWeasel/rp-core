@@ -77,8 +77,9 @@ export interface EngineOptions {
    * M1b: every provider failure of a model call (retried and tail failures too), with the server's
    * raw words in `error.detail`. Live only, for a host's debug output (the CLI's --debug, §13): the
    * engine never stores that text or puts it in an event, whose message is the fixed one of the code.
+   * M5b: a call of the background lane (filing, the historian) has no `turnId`; it names its `job`.
    */
-  onProviderError?(info: { sessionId: string; turnId: string; callKey: string; model: string; error: ProviderError }): void;
+  onProviderError?(info: { sessionId: string; turnId?: string; job?: string; callKey: string; model: string; error: ProviderError }): void;
   /**
    * M5a (D-164, CLI --keep-requests): every provider request of a turn (narrator rounds, the
    * Director, any agent; never a preview) is written as pretty JSON to
@@ -93,6 +94,13 @@ export interface EngineOptions {
    * <callKey>-3.json, and so on. Off by default.
    */
   keepRequests?: boolean;
+  /**
+   * M5b (.notes/m5b-decisions.md D-171, the lead's ruling G): the background lane's mode. 'auto' runs
+   * the Compendium's filing and historian tasks by itself; 'manual' never starts one (tests, demos):
+   * SessionHandle.memoryWait runs them. Default: 'manual' when the process environment has
+   * RP_CORE_LANE=manual (read once when the engine opens), else 'auto'.
+   */
+  lane?: 'auto' | 'manual';
 }
 
 export type RefusalCode =
@@ -158,6 +166,59 @@ export interface MemoryWrite {
    * every path. Absent when there are none, and while the Compendium is disabled.
    */
   notices?: Notice[];
+}
+
+/** M5b (D-180): one task of the session's background lane. */
+export interface LaneTaskInfo {
+  /** 'file:<the group's last answer id>' or 'hist:<first new message id>-<last message id>'. */
+  key: string;
+  task: 'file' | 'hist';
+  /** The message its row is bound to: the group's last answer, the window's last message. */
+  on: string;
+  /** The first and last path message it covers. */
+  range: [string, string];
+  /** The attempt its next (or current) run is: the failures since the key's last row or retry, plus one. */
+  attempt: number;
+}
+
+/** M5b (D-180): what memoryStatus says about the lane. */
+export interface MemoryStatus {
+  /** Tasks waiting, in the order the lane runs them. */
+  queued: LaneTaskInfo[];
+  /**
+   * The task running now and its job id. `waiting`: begun (its job{begin} is written) but none of its
+   * calls has a place on the server yet (the local idle gate, a turn's calls): nothing was sent.
+   */
+  running?: LaneTaskInfo & { job: string; waiting?: true };
+  /**
+   * Keys on the active path parked after maxAttempts failed attempts, until memoryRetry; `code`: the
+   * last failure's ('no_room': a task the recorder's window can never hold, parked at its first
+   * failure). A historian window that is no longer due (its key moved) or that another pass covered is
+   * not listed (the lead's ruling I), nor a filing key whose answers are all hidden, filed by another
+   * key's row or owed under another key (ruling K).
+   */
+  parked: { key: string; on: string; failures: number; code?: string }[];
+  /** Tasks asked for by name (a refile, a retry) whose agent is off: they wait for it (ruling I). Absent when none. */
+  held?: LaneTaskInfo[];
+  /** Accepted answers no filing row covers yet (D-171), queued or waiting for their group. */
+  backlog: number;
+  /**
+   * The lead's ruling K (cli#1, cli#9): why the lane cannot start a task, for the agents that are on
+   * ('both': filing and the historian). 'no_route': the recorder's connection or model cannot be
+   * resolved, nothing runs until it can (notice recorder_unavailable, once, while work is owed);
+   * 'paused': two tasks of the agent parked in a row (the circuit breaker, notice memory_paused once per
+   * agent): no new task of it starts until memoryRetry or the next open. Its tasks stay in `queued`.
+   * `message`: the same in words (a sentence). Absent when nothing stops the lane.
+   */
+  blocked?: { agent: 'filing' | 'historian' | 'both'; reason: 'no_route' | 'paused'; message: string };
+}
+
+/** M5b (D-180): what memoryUndo, memoryRefile and memoryRetry did. */
+export interface MemoryLaneWrite {
+  /** The task keys reverted, queued or retried. */
+  keys: string[];
+  /** false: nothing written or queued (already reverted, queued or running; nothing parked). */
+  changed: boolean;
 }
 
 export interface CreateSessionInput {
@@ -390,8 +451,58 @@ export interface SessionHandle {
   memoryExport(input: { name: string; format: 'core' | 'compendium'; force?: boolean }): { path: string; id: string; entries: number; warnings?: ImportWarning[] };
   /** M5a: the head view's Compendium (the fold with the library seed). */
   compendium(): CompendiumView;
+  /**
+   * M5b (D-180, the lead's ruling I): undo the Compendium agents' pass bound to a message: one `revert`
+   * row (by 'user', `on` = the reverted row's) for the filing key whose row is bound to it (the
+   * effective row first: its `on`, else a range holding the message; a stale key only when no effective
+   * row holds it), then the same for the historian; `task` picks one of the two. Only an applied pass is
+   * reverted: an undone or stale one gives changed:false and writes nothing. A running job of the key is
+   * superseded. Event memory{change:'reverted', by:'user'} per entry the pass had changed. Refusals:
+   * session_busy during a turn; not_found for an unknown message or one no pass is bound to;
+   * invalid_params.
+   */
+  memoryUndo(input: { messageId: string; task?: 'file' | 'hist' }): MemoryLaneWrite;
+  /**
+   * M5b (D-180, the lead's ruling I): queue the pass bound to a message again under its key (its new row
+   * replaces the old one and supersedes an undo; the effective pass is bound first, as memoryUndo); an
+   * accepted answer no filing row covers queues its own filing task as well, also when a historian pass
+   * holds it (the lead's ruling K; `keys` lists filing first). A refile is not written: it lasts while the
+   * session is open (a run of it cut short by close() is not re-run at the next open unless the key is
+   * still owed). With its agent off (filing.enabled false, historian.interval 0) the task is held
+   * (memoryStatus.held) until the agent is on. changed:false when the key is already queued, held or
+   * running. Refusals: session_busy; not_found; invalid_params, in words, for the Compendium off, a
+   * hidden message (or a pass whose answers are all hidden), an answer not accepted yet
+   * (compendium.filing.wait), a parked key (memoryRetry un-parks it) or a message no task can be
+   * bound to. A refusal about a pass names it by its task key (`file:<id>`, `hist:<from>-<to>`).
+   */
+  memoryRefile(input: { messageId: string; task?: 'file' | 'hist' }): MemoryLaneWrite;
+  /**
+   * M5b (D-171, D-180): one `job{state:'retry'}` row per parked key (every parked key on the active
+   * path, or those bound to `messageId`): it resets the key's failure count (a reopen keeps that), and
+   * the key is queued (by name when the derivation does not hold it, e.g. a parked refile; as a refile,
+   * that lasts while the session is open). Parked keys whose answers were filed under another key or
+   * hidden since are not listed, so not retried (the lead's ruling K). It also resumes an agent the
+   * circuit breaker paused (memoryStatus.blocked): changed:true with no key when nothing is parked.
+   * changed:false when nothing there is parked and nothing was paused. session_busy during a turn;
+   * invalid_params while the Compendium is off.
+   */
+  memoryRetry(input?: { messageId?: string }): MemoryLaneWrite;
+  /**
+   * M5b (D-171, the lead's ruling I): until nothing is left to run, or until `timeoutMs` passed
+   * (idle:false; a running task goes on). Manual mode runs the lane; auto mode only waits for it (the
+   * lane starts its tasks itself, after a turn, a fresh message's hold or a failure's wait). Allowed
+   * while a turn runs: nothing starts before the turn has settled. A timeout over 2^31 − 1 ms waits
+   * that long.
+   */
+  memoryWait(input?: { timeoutMs?: number }): Promise<MemoryStatus & { idle: boolean }>;
+  /** M5b (D-180): the lane's queue, running task, parked keys, backlog and what blocks it (ruling K). Read-only. */
+  memoryStatus(): MemoryStatus;
 
-  /** Stop any running turn (keeping partial text), wait for it to settle, release the lock. */
+  /**
+   * Stop any running turn (keeping partial text), wait for it to settle, release the lock. M5b: a
+   * running lane task is aborted first ('shutdown'; it writes nothing and runs again at the next open
+   * while its key is still owed).
+   */
   close(): Promise<void>;
 }
 

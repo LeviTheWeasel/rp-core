@@ -6,40 +6,49 @@ RoleCall's Compendium code. The ported files keep their authors' copyright in th
 `PROVENANCE.md` lists them.
 
 This file lists every place where rp-core's Compendium differs from those sources on purpose. It
-is the D-88 list. D-88 put it in `PROVENANCE.md`; D-166 moved it here. **Chi is asked to review it
-before M5b.** M5b builds filing and the historian on top of these rules, so a line she disagrees
-with is cheap to change now.
+is the D-88 list. D-88 put it in `PROVENANCE.md`; D-166 moved it here. **Chi is asked to review it.**
+It was written before M5b so that a line she disagrees with would be cheap to change. M5b has now
+built filing and the historian on top of these rules; section E lists what it decided on the way,
+and those lines are as open to her review as the older ones.
 
 How to read it:
 
 - `BR:` is Bunraku's `src/`, `RC:` is RoleCall's `apps/rc/src/`. "§" points to
   `docs/ARCHITECTURE.md`. `D-140`…`D-169` and the section letters (A.7, G, H, I) are the M5a
-  decisions in `.notes/m5a-decisions.md`; ARCHITECTURE.md rev 16 takes them over.
-- **Status** says where a line stands: **M5a** is built and tested now; **M5b** (filing, the
-  historian, `/memory undo|refile|retry`) and **M5c** (recall) are decided but not built yet; **M3**
-  was built earlier.
+  decisions in `.notes/m5a-decisions.md`; ARCHITECTURE.md rev 16 takes them over. In section E,
+  `D-170`…`D-184` and the letters G–K are the M5b decisions in `.notes/m5b-decisions.md` (G and H
+  after the two build waves, I after the review and the first live run, J after the second live
+  run, K after the final check); ARCHITECTURE.md rev 17 takes them over.
+- **Status** says where a line stands: **M5a** and **M5b** (filing, the historian, the `{{recap}}`
+  slot, the background lane, `/memory undo|refile|retry|wait|status`) are built and tested now;
+  **M5c** (recall) is decided but not built yet; **M3** was built earlier.
 - Sections A and B were drafted while M5a was designed (D-74…D-89, §5.8, §7.4, D-95). Section C
   lists what the fixtures turned up, now decided. Section D lists what M5a decided while it was
-  built. The last section lists what was not ported at all.
+  built, section E what M5b decided while it was built. The last section lists what was not ported
+  at all.
 
 ## A. Prompt text (full profile)
 
-D-88: the full-profile prompts are ported word for word, except these lines. None of these prompts
-exists yet. The lite prompts (recall, filing, historian) are new texts, not edits of Bunraku's.
+D-88: the full-profile prompts are ported word for word, except these lines. M5b built the filing
+and historian prompts: A1–A4 are in the full filing prompt, and a golden test compares it with
+Bunraku's rendered text line by line (`test/filing-m5b/prompt.test.ts`). Besides A1–A4 only two
+lines that follow from A1 (D-173) and the language line (D-183) differ; section E has them. The recall prompts (A5, A6) come with M5c. The lite prompts (recall,
+filing, historian) are new texts, not edits of Bunraku's (section E).
 
 | # | Area | Bunraku | rp-core | Why | Ref | Status |
 |---|---|---|---|---|---|---|
-| A1 | Filing: books | Lists the writable books; `book` in each answer item | One line: "You write into this story's Compendium. Entries marked (library) can be added to; your additions apply to this story only." `book` is read and ignored | Library books are read-only; every write lands in the session | §7.4.3 edit 1; D-3, D-75 | M5b |
-| A2 | Filing: field list | Top-level fields only | Adds RoleCall's nested forms of `character.relationships`, `.memories` and `.current_state` | Weak models invent shapes; the merge keys need `with`, `nature`, `what_happened` | §7.4.3 edit 2 | M5b (the nested table is in M5a's `entry-types.ts`) |
-| A3 | Filing: memory example | Uses `event` | `{"what_happened":"…","changed_belief":"…"}`; reading still accepts `event` | `event` is not in RoleCall's schema | §7.4.3 edit 2; D-82 | M5b |
-| A4 | Filing: snapshot | Writable books only | Also the typed entries of readable library books, marked `(library)` | Otherwise filing duplicates them | §7.4.3 edit 3; D-75 | M5b |
+| A1 | Filing: books | Lists the writable books; `book` in each answer item | One line: "You write into this story's Compendium. Entries marked (library) can be added to; your additions apply to this story only." `book` is read and ignored | Library books are read-only; every write lands in the session | §7.4.3 edit 1; D-3, D-75 | M5b: built (D-173) |
+| A2 | Filing: field list | Top-level fields only | Adds RoleCall's nested forms of `character.relationships`, `.memories` and `.current_state` | Weak models invent shapes; the merge keys need `with`, `nature`, `what_happened` | §7.4.3 edit 2 | M5b: built (the nested table is M5a's `entry-types.ts`) |
+| A3 | Filing: memory example | Uses `event` | `{"what_happened":"…","changed_belief":"…"}`; reading still accepts `event` | `event` is not in RoleCall's schema | §7.4.3 edit 2; D-82 | M5b: built |
+| A4 | Filing: snapshot | Writable books only | Also the typed entries of readable library books, marked `(library)` | Otherwise filing duplicates them | §7.4.3 edit 3; D-75 | M5b: built; full: under `### <book> (library)` after `### This story`; the lite roster ends such lines with ` (library)` (D-174) |
 | A5 | Recall: prefetch | No prefetch | Adds "The player has not answered yet; pick what the narrator will most likely need for the next reply." | Prefetch runs before the player's message exists | §7.4.2; D-78 | M5c |
 | A6 | Recall: conversation | 20 messages | 20 messages and at most min(8 000 tokens, 20 % of the window); a long message is cut to head and tail | Bunraku has no token cap here | §7.4.2 | M5c |
-| A7 | Tagline in index and snapshot lines | `data.tagline` only, which 3 types have; the other 8 show bare names | An explicit `data.tagline` wins; else the first sentence of `description`, ≤ 80 chars | The recall index needs something to choose by | §5.8, §7.4.2; D-151 | M5a builds the tagline (`/memory list`, the brief, `search_lore`); the index and snapshot lines come with M5b/M5c |
+| A7 | Tagline in index and snapshot lines | `data.tagline` only, which 3 types have; the other 8 show bare names | An explicit `data.tagline` wins; else the first sentence of `description`, ≤ 80 chars | The recall index needs something to choose by | §5.8, §7.4.2; D-151 | M5a builds the tagline (`/memory list`, the brief, `search_lore`); M5b the full filing snapshot's lines (the lite roster has no taglines); the recall index comes with M5c |
 
 ## B. Behaviour decided before M5a
 
-Where M5a refined a line, the rp-core column says so and section D has the detail.
+Where M5a refined a line, the rp-core column says so and section D has the detail. Where M5b
+refined one, section E has the detail, and its Ref column names the row.
 
 | # | Area | Bunraku / RoleCall | rp-core | Why | Ref | Status |
 |---|---|---|---|---|---|---|
@@ -68,7 +77,7 @@ Where M5a refined a line, the rp-core column says so and section D has the detai
 | B23 | Historian trigger | Every `interval` player turns | Checked after every accepted answer, after filing: ≥ `interval` (20) player turns past the watermark or ≥ 24 trimmed, uncovered messages. Replaces the `recap` task | Trimming must not lose story | D-83 | M5b |
 | B24 | Watermark | Max `turn_range.to` of live summaries (`BR:core/compendium/historian.ts:25-31`) | From non-stale historian rows, reverted ones included; a retired or reverted summary is not rewritten; ranges are path message ids | Stable on swipe and fork | D-83 | M5b |
 | B25 | Overlap | 10 | 10 full / 6 lite | Lite window | D-83, D-68.1 | M5b |
-| B26 | Arc overviews | Constant lore entries, up to 6 000 chars, every turn | First in the `{{recap}}` slot, ≤ half of it (lite: 2 × ≤ 1 200 chars); re-rendered only when the trim boundary moves. Until then `[Arc]` entries stay plain lore (C5) | Lore share on 16k; prefix-cache stability | D-83 | M5b |
+| B26 | Arc overviews | Constant lore entries, up to 6 000 chars, every turn | First in the `{{recap}}` slot, ≤ half of it (lite: 2 × ≤ 1 200 chars); re-rendered only when the trim boundary moves. In M5a `[Arc]` entries stayed plain lore (C5); M5b puts a library book's `[Arc]` entries in the slot too (section E) | Lore share on 16k; prefix-cache stability | D-83 | M5b |
 | B27 | Scheduling | No per-origin semaphore found | A semaphore per origin; local background work waits for no interactive request and ≥ `idleDelaySec` (8 s); after 3 preemptions the task goes first, with `memory_starved` | KV cache and shared pools | D-84 | M5b |
 | B28 | `filing.everyN` | Files only the last reply, with the last N user messages (`BR:studio/compendium-hooks.ts:25-27, 46`) | One task per N accepted answers covers all N exchanges; split if over budget | The in-between replies were lost | D-86 | M5b |
 | B29 | Filing deadline | None, and no abort signal | 300 s local / 120 s remote from the grant, with a signal | Stuck background work | §7.4.3, D-88 | M5b |
@@ -90,7 +99,7 @@ listed.
 | C2 | RoleCall's service fields on memories (`writer_source`, `source_turn`, `source_job_id`) would render as "Source turn: 14" | Kept in the data at import, never rendered (D-151 render fix 1) | D-151, D-162 |
 | C3 | An explicit `tagline` on a type that has no such field | The explicit tagline wins on any type, as in Bunraku; derived otherwise (A7). No deviation from Bunraku | D-151 |
 | C4 | Tree labels capitalise ASCII only («закон» stays lower case); places nest by `toLowerCase` | Bunraku's ASCII per-word capitals stay, plus a Unicode capital on the first letter; places nest by `normalizeName` | D-165, G |
-| C5 | `[Arc]` overviews before the `{{recap}}` slot exists | Import tags them `meta.arc`. In M5a they stay plain lore (a constant one fires every turn as lore); they are not seeded and not in the block. M5b moves them into the slot | D-141, D-162 |
+| C5 | `[Arc]` overviews before the `{{recap}}` slot exists | Import tags them `meta.arc`. In M5a they stay plain lore (a constant one fires every turn as lore); they are not seeded and not in the block. M5b moved them into the slot: seeded as arcs, routed out of the lore engine (section E) | D-141, D-162, D-177 |
 | C6 | Entries for the card's character or the persona hit tier 2 almost every turn | Not skipped; they go last inside their tier. The snapshot still counts them as in the scene | D-153 |
 | C7 | Stem collisions and blind spots: «Мира» → `мир` (world); «Уголёк» / «Уголька»; «паром» → `пар` | Accepted and documented. No extra rule for short names | D-153 |
 | C8 | RoleCall triggers on typed rows: Bunraku fires «Право огня» on any «закон», a plain rp-core port never would | Reversed: a library entry's non-regex lore keys are selector matchers, like its name and aliases. They pick the entry for the block; they never fire its text as lore | D-153, G |
@@ -202,6 +211,71 @@ The RoleCall side is `mergeStructuredData` and `dedupArray`
 | Categories | By `sortOrder` | By first appearance, names only; a category named "General" joins the General node | The import keeps names only | D-165 |
 | Notes, arcs, books | — | Notes go to Unsorted; arcs to Narrative, first in their plot. `/memory tree` shows the session's tree, then one tree per readable book (overlays applied) | The session holds entries a book never has | D-165 |
 | Nodes | Carry `kind` and `entryCount` | They do not (`entryCountOf` counts); node `entryIds` are entry keys | Plain data; M5c's recall index reads the keys | D-165 |
+
+## E. Decided while building M5b
+
+All of this section is built in M5b: filing, the historian, the `{{recap}}` slot, the background
+lane and its scheduler. One line each, as in section D. The letters G–K are the sections of
+`.notes/m5b-decisions.md` (see "How to read it"); "docs/M5B-DEMO.md §4" is the live run on Ollama.
+Where a line refines a row of sections A–C, the Ref column names that row.
+
+### Prompts
+
+| Area | Bunraku / RoleCall | rp-core | Why | Ref |
+|---|---|---|---|---|
+| The full filing prompt | `filingMessages` (`BR:core/compendium/filing-prompt.ts`): a `WRITABLE LOREBOOKS` list, `"book":"<book id, optional>"` in the example, a guidance header saying the guidance cannot "change the books you may use", memories with `event` | Word for word except five lines: (1) the books list becomes "You write into this story's Compendium. Entries marked (library) can be added to; your additions apply to this story only."; (2) the character line names RoleCall's nested forms of `current_state`, `relationships` and `memories`, and the example memory has `what_happened`; (3) the snapshot also lists the readable books' typed entries, under `### <book> (library)` after `### This story`; (4) the example has no `"book"`; (5) the guidance header no longer speaks of books. A golden test renders both prompts with the same type list and compares them line by line | Library books are read-only (A1–A4); (4) and (5) only follow from (1) | D-173; A1–A4 |
+| The lite filing prompt | — (Bunraku has one profile) | A new text: the rule paragraphs word for word (UPSERT, NO-WRITE DEFAULT, DEDUP with the roster's line shape `Name (aka: …) [type]`, WRITE ONLY WHAT MATTERS, RELATIONSHIPS, guidance, language); `LITE_FIELDS` with the nested forms, enum values and "Other fields of the type are kept if you send them."; "At most 6 items." Instead of the snapshot: a roster of ≤ 60 lines (entries named in the exchange first, the book's marked ` (library)`) and up to 4 named entries as brief JSON. When the roster does not fit, it says "the roster of the N existing entries was left out for room" instead of Bunraku's "these books hold no typed entries yet" | 16k windows (B14); a weak model must not be told that the Compendium is empty | D-173, D-174, I; B14 |
+| The lite historian prompt | `historianMessages` says "At most 12 filings." and sets no limit on an overview; its digest lists every live plot | Bunraku's text with "At most 6 filings." and "Keep each overview under 1200 characters."; the digest holds the 6 most recently active plots. In both profiles the digest leaves out resolved, failed and abandoned plots, as the filing snapshot does | Lite window; one plot filter for both agents (Bunraku's snapshot has it, `RESOLVED_PLOT`) | D-176, G; B14 |
+| Message numbers in the historian | 0-based live indices, the greeting is 0 (`BR:core/compendium/historian.ts:85`) | D-58's 1-based path positions: the greeting is `[1]`, as `/show` numbers it. Hidden messages are left out, so a number may be skipped | The person and the model see the same numbers; export's `turn_range` stays 0-based (D-163) | D-176 (C-4) |
+| The repair | `repairMessages`: the first user message, then "Your previous answer could not be used (<error>):", the answer cut to 2 000 chars and "Answer again with only the JSON object." | `structuredCall`'s corrective pass, the one every agent uses: the bad answer (≤ 1 000 chars) as an assistant message and a fixed correction as a user message; only after a reading failure, never after a provider error, a timeout or a preemption | One mechanism for the Director, filing and the historian | D-173 (C-3); B20 |
+| The story's language | A blank `language` adds nothing; a set one ends the rules with "Write every field value in <language>." | A set `compendium.language` as in Bunraku. A blank one: the lane names the story's language by the dominant script of the texts it sends (`agents/compendium/language.ts`: Cyrillic is Russian, or Ukrainian, Belarusian, Serbian or Macedonian by their own letters; Greek, Japanese, Chinese, Korean, Arabic, Hebrew, Thai). A named language ends the rules ("Write every field value in Russian.") and is also the last line of the user message. Latin or mixed texts name nothing: the rules end with "Write every field value in the language the story is written in." and the user message is Bunraku's | Live, a 12B historian wrote English summaries of a Russian story with no language line, and again with the generic one; with the language named it wrote Russian (docs/M5B-DEMO.md §4) | D-183, J |
+
+### Filing
+
+| Area | Bunraku / RoleCall | rp-core | Why | Ref |
+|---|---|---|---|---|
+| The greeting | The greeting counts as a reply and is filed like one (`BR:studio/compendium-hooks.ts`; its test files it with `wait = 2`) | Never filed: an assistant message before the first user message is card material | The card already holds it | D-171 |
+| Several answers in one pass (`everyN` > 1) | Bunraku files only the last reply, with the last N player messages (B28); RoleCall sends the N exchanges as history with a line of counts | One pass covers the whole group: "The narrator just wrote these replies, oldest first:" with `[k] <reply>` blocks, then "They answer:" with `[k] <what the player said before reply k>`, then Bunraku's last line. With N = 1 the user message is Bunraku's exactly | Nothing between the passes is lost | D-174; B28 |
+| Cutting the exchange's texts | Bunraku sends the reply whole and cuts each player message to its first 4 000 chars (a UTF-16 slice, which may split a pair) | Head and tail around "[... N characters cut from the middle ...]", never inside a surrogate pair: a reply ≤ 8 000 / 6 000 (lite) chars, a player message ≤ 4 000. With N > 1 the texts share what the budget leaves, newest first, and a reply keeps ≥ 1 000. A message too large for the historian's window is cut the same way to fit, instead of parking the historian | Lite budgets; a head-only cut loses how the reply ends | D-174, I |
+| A group that does not fit | Bunraku files one reply; RoleCall drops the oldest covered messages until the request fits | The full prompt when the request leaves 4 096 tokens of the recorder's window for the answer, else lite (≤ 45 % of the window); a group that fits neither splits by halves, each part a task at once, keyed by its last answer. The first part's row records `groupEnd` (the whole group's last answer), so the rest is owed at once after a reopen too | Every exchange is filed; a split survives a restart | D-174, I, K; B28 |
+| Nothing to file | Bunraku: `{}` has no `filings` list, so it is unreadable and costs a repair call | `{}`, `{"filings": null}`, `"none"` and `[]` read as nothing to file; the row is still written (`ops: []`) and the key is done | D-82's spirit: an empty answer is an answer | G, I |
+| Service fields | RoleCall stamps `writer_source`, `source_turn` and `source_job_id` with `??`, so a model's own values win; a model-chosen `turn_range` moves its historian's watermark | Fields a model sends under those names, `turn_range` or `messages_covered` are dropped when its answer is read; the code sets a summary's range and `messages_covered` | Provenance comes from the rows, never from the model | D-175; C2 |
+| The memory rule | RoleCall rejects the whole call ("Memory N was not saved. …") | Only that memory is dropped, with a `skipped` line (`memory_rule: …`); likewise a relationship without `with` (`no_with: …`). The rest of the item is filed | One weak memory must not cost the pass | D-175; B21 |
+| A cut-off answer | An answer whose JSON did not close is unreadable, and the repair call follows | The items that closed are kept and the unfinished last one is dropped, with a `cut_off` line in `skipped` (in the row and the `done` event); with no closed item the attempt fails (never an empty cover). A cut-off root that is itself one bare item is unreadable. A historian answer cut off before any summary applied, or whose summaries were all refused, fails the attempt | A 12B at 1 500 tokens stops mid-list; what it finished is usable | I, K |
+
+### Historian
+
+| Area | Bunraku / RoleCall | rp-core | Why | Ref |
+|---|---|---|---|---|
+| The watermark | The largest `turn_range.to` of the live summaries (RoleCall: of its rows; a retired newest summary is rewritten, an older one is not) | The end of the covered prefix of the path: the positions that non-stale historian rows' ranges cover (reverted rows included), counted from the start. The next window starts at the first uncovered visible message and stops before the next covered one, so a hole that staleness left is summarised again. Positions before the enable moment count as covered | Stable on swipe and fork; an undo never brings a window back; turning the Compendium on in a long chat does not summarise the past | D-176, G; B24 |
+| The overlap | 10 messages, counted in the 12 000-token cap with no floor for new ones: an overlap that fills the cap gives a window that ends before its new part, so the watermark never moves | 10 / 6 (lite) messages, at most a third of the cap (trimmed from the oldest end); at least one new message is always read. The cap is min(12 000, 35 % of the recorder's window) tokens | Bunraku's window could get stuck re-reading its overlap | D-176; B15, B25 |
+| `historian.interval = 0` | Bunraku: `interval <= 0` runs nothing (`BR:core/compendium/historian.ts:48`); RoleCall: 0 disables | The historian is off: neither trigger fires, `recap_after` included. §7.4.4 had attached 0 to the turn trigger only. Not a deviation from the sources; listed because the spec read otherwise | `recap_after` cannot be 0, so the spec's reading left no way to turn the historian off | D-176 (C-2); B23 |
+| `create_plot` | Bunraku drops a summary's `create_plot`; RoleCall writes that plot first and files the summary under it | Honoured: when `parent_plot` is blank, `create_plot.name` names the plot and its fields make the plot (created if missing) | RoleCall's prompts teach models to send it | G |
+| Lengths | Bunraku cuts an overview at 6 000 chars mid-word and sets no limit on a summary | A summary's text is cut to 1 500 chars and an overview to 6 000 / 1 200 (lite) chars, each with "…". In the slot a full-profile overview is cut head-first to fit the arc half | The slot is ≤ 10 % of the window | D-176, I; B30 |
+| Library `[Arc]` entries | Constant lore, every turn | An enabled library `[Arc]` entry of a `'read'` book is seeded as an arc (`lib:<book>:<id>`) and routed out of the lore engine; in the slot it is always eligible, after the session's arcs. A session arc of the same plot replaces it there. `search_lore` labels it `arc, <book>`. A book set `'off'`, or the Compendium off: plain lore as before | Lore share on 16k; one place for overviews | D-177, G; B26, C5 |
+
+### The `{{recap}}` slot
+
+| Area | Bunraku / RoleCall | rp-core | Why | Ref |
+|---|---|---|---|---|
+| What the slot holds | Bunraku's smart context (`BR:core/assembly/summary-cut.ts`, RoleCall's `tv_smart_context`) leaves out the oldest messages its recaps cover and puts `[Summary: <title>]` texts in their place; arcs are constant lore. RoleCall's Compendium mode has no arc overview | The history is trimmed by the window, as before. Once something is trimmed, one system message (`src: 'recap'`) right after the greeting takes ≤ 10 % of the window: first `[Arc] <plot>` overviews (the session arcs of the plots its summaries belong to, newest activity first, then library arcs; ≤ half the slot; lite: 2 × ≤ 1 200 chars), then `[Summary: <title>]` texts of the summaries whose range touches or precedes the cut, oldest first; over the budget the oldest drop first. No macro expansion; a preset that holds `{{recap}}` in an enabled block gets the text there. With nothing trimmed nothing is reserved and the request is byte-identical to one without the slot. The block treats keys in the slot as already in the prompt (`inPrompt`) | Smart context is not ported (§7.4.10); the slot only stands in for what the window lost | D-178; B26 |
+| Stability | — | While the cut's boundary (the first visible message) holds, the slot renders the same ids and the same arc revisions as the previous request, minus entries no longer live, and adds nothing; an older revision's text is read back from the row that wrote it. A pin holds only under the same profile and slot share, and only while the row with that revision still holds that arc's text op (not undone, not stale, not renumbered by a fork). An empty slot pins nothing | Prefix cache: a rewritten overview must not break the cached prompt until the cut moves | D-178, H, I, K |
+
+### Fold
+
+| Area | Bunraku / RoleCall | rp-core | Why | Ref |
+|---|---|---|---|---|
+| Story order | Writes land in the book in the order the passes run | Rows apply by (anchor, kind, seq). An agent row is anchored at the path position of its `on`, a person's row at the position of the newest path message older than the row; at one anchor agent rows come first. A pass stages against exactly what the fold applies before its row, without the key's own rows | A re-write of an old answer (staleness, refile, recovery) lands where its answer is in the story, not after later answers; a person's edit made while answer n was the head wins over any pass of n | D-184, K |
+| A person's ops wait for their entry | Bunraku's undo skips an entry the person edited since the pass and lists it | A person's `edit`, `retire` or `restore` whose key does not exist yet is held, and applied right after the entry with that key is created (in seq order); one that never meets its entry stays a `not_found` issue | A refile or a re-write after staleness creates an agent entry again at a later seq; the person's edits must survive it | D-179 |
+
+### The lane and the scheduler
+
+| Area | Bunraku / RoleCall | rp-core | Why | Ref |
+|---|---|---|---|---|
+| When a pass starts | Bunraku starts filing A(n−1) when the turn starts, beside the narrator; §7.4.7's cloud row has it start at `send` too | The lane starts nothing while its own session's turn runs, nor while the head is a user message younger than max(`idleDelaySec`, 2 s) (a `send` whose turn is about to follow). On cloud too the pass waits for the turn's end | A pass begun between a message and its turn is only preempted; on a one-place origin it refilled the server's cache with the filing prompt on every message (docs/M5B-DEMO.md §5, fix 1) | I |
+| The idle gate | None: Bunraku's per-scene queue runs a pass as soon as it is queued; RoleCall's post-turn wave runs in the generation job | Per origin, in the scheduler, shared by the sessions on that server, and on local origins only: background waits `idleDelaySec` (8 s) after the last touch (a turn's end, a head move, an edit, a hide, a continue, a swipe, a session open, the end of any interactive request on the origin). A remote origin runs background alongside while places are free | A quick swipe after an answer still finds the narrator's cache warm; a remote origin has no such cache to keep | D-172, G; B27 |
+| Retrying a failed pass | Bunraku: a failed receipt stays failed until "File again"; RoleCall: a failed pass is lost | The key is still debt. In auto mode its next attempt waits 15 s × 2^(attempt − 1), at most 5 min (the manual mode of tests does not wait). After `maxAttempts` (3) failures it is parked until `/memory retry`. A task that can never fit (`no_room`) writes one begin and one `failed` row and parks at once | A failing server is not hammered, and nothing is lost | D-171, H, I |
+| The circuit breaker | — | When two tasks of one agent park in a row, that agent pauses: no new task of it starts until `/memory retry` or the next open; `notice{memory_paused}` once. `/memory status` shows it, as it shows a recorder with no route | Parking is per key and a historian key moves with its window: a dead recorder was called `maxAttempts` times for every new window | K |
 
 ## Not ported
 

@@ -386,6 +386,11 @@ describe('REPL: Ctrl+C, held lines, EOF', () => {
       memoryTree: (i) => s.memoryTree(i),
       memoryExport: (i) => s.memoryExport(i),
       compendium: () => s.compendium(),
+      memoryUndo: (i) => s.memoryUndo(i),
+      memoryRefile: (i) => s.memoryRefile(i),
+      memoryRetry: (i) => s.memoryRetry(i),
+      memoryWait: (i) => s.memoryWait(i),
+      memoryStatus: () => s.memoryStatus(),
       close: () => s.close(),
     });
     const r = await rig(calls(), { wrap });

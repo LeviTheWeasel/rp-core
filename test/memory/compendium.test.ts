@@ -531,8 +531,8 @@ describe('edit (D-146)', () => {
   });
 
   test('a hand-written ref: C<n> or a name resolves; a key-shaped ref is looked up only', () => {
-    // The seed holds C1..C3; Мира is C4.
-    const v = fold([mira, row(2, [edit('C4', { set: { tier: 'A' } }), edit('фонарщица', { set: { age: '19' } }), edit('с1', { set: { tier: 'S' } }), edit('character:нет', { set: {} }), edit('Нет такой', { set: {} })])]);
+    // The seed holds C1..C4 (C4: the book's [Arc] overview, D-177); Мира is C5.
+    const v = fold([mira, row(2, [edit('C5', { set: { tier: 'A' } }), edit('фонарщица', { set: { age: '19' } }), edit('с1', { set: { tier: 'S' } }), edit('character:нет', { set: {} }), edit('Нет такой', { set: {} })])]);
     expect(get(v, 'character:мира').data).toMatchObject({ tier: 'A', age: '19' });
     expect(get(v, 'lib:lantern:e1').data.tier).toBe('S');
     expect(why(v)).toEqual([

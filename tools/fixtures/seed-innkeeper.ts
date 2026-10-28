@@ -6,7 +6,7 @@
 // answers are the fixture's own, written by an in-process provider (load.ts). Prints the session id
 // and the question to ask.
 // Usage: bun tools/fixtures/seed-innkeeper.ts [--home <dir>] [--model <connection>:<model>]
-//                                              [--max-tokens <n>] [--max-rounds <n>]
+//                                              [--max-tokens <n>] [--max-rounds <n>] [--compendium off|on]
 //   --home        the rp-core home (else $RP_CORE_HOME, else ~/.rp-core), as the CLI's --home
 //   --model       the narrator binding left on the session; its connection must be in that home's
 //                 config.toml. Without it the session keeps the seeding stand-in (innkeeper:fixture),
@@ -14,6 +14,9 @@
 //   --max-tokens  the narrator's reply limit (with --model; default as `rp-core new`: 2048 at a
 //                 16k window). A thinking model's thinking counts against it
 //   --max-rounds  tool rounds per answer, 1-8 (default 4)
+//   --compendium  the session's Compendium (M5b, D-182): off (default), so the seeded chat does not
+//                 open with 98 answers to file in the background (/memory on in the chat turns it
+//                 on from then: nothing seeded is back-filled); on, to have them filed when it opens
 // Exit 0, 64 on a usage or config.toml error, 1 when the home cannot be written.
 
 import { parseArgs } from 'node:util';
@@ -24,7 +27,8 @@ import { Engine } from '../../src/engine/engine.ts';
 import type { Binding } from '../../src/session/entries.ts';
 import { INNKEEPER_QUESTION, innkeeperConnection, seedInnkeeperSession } from '../../test/fixtures/ru/innkeeper-200/load.ts';
 
-const USAGE = 'usage: bun tools/fixtures/seed-innkeeper.ts [--home <dir>] [--model <connection>:<model>] [--max-tokens <n>] [--max-rounds <n>]';
+const USAGE =
+  'usage: bun tools/fixtures/seed-innkeeper.ts [--home <dir>] [--model <connection>:<model>] [--max-tokens <n>] [--max-rounds <n>] [--compendium off|on]';
 
 /** "conn:model" split at the first colon (connection ids never hold one; model ids may). */
 export function parseBinding(s: string): Binding | null {
@@ -60,11 +64,18 @@ async function main(argv: string[]): Promise<number> {
 }
 
 async function seed(argv: string[]): Promise<number> {
-  let values: { home?: string; model?: string; 'max-tokens'?: string; 'max-rounds'?: string; help?: boolean };
+  let values: { home?: string; model?: string; 'max-tokens'?: string; 'max-rounds'?: string; compendium?: string; help?: boolean };
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { home: { type: 'string' }, model: { type: 'string' }, 'max-tokens': { type: 'string' }, 'max-rounds': { type: 'string' }, help: { type: 'boolean', short: 'h' } },
+      options: {
+        home: { type: 'string' },
+        model: { type: 'string' },
+        'max-tokens': { type: 'string' },
+        'max-rounds': { type: 'string' },
+        compendium: { type: 'string' },
+        help: { type: 'boolean', short: 'h' },
+      },
       strict: true,
       allowPositionals: false,
     }));
@@ -93,6 +104,8 @@ async function seed(argv: string[]): Promise<number> {
     if (n === null) throw new Usage('--max-rounds must be a whole number, 1-8');
     maxRounds = n;
   }
+  const compendium = values.compendium ?? 'off';
+  if (compendium !== 'off' && compendium !== 'on') throw new Usage('--compendium must be off or on');
   const home = resolveHome({ ...(values.home !== undefined ? { home: values.home } : {}), sandbox: false, env: process.env });
   if (narrator !== undefined) {
     // As `rp-core new --model` does: a binding to a connection the home does not have would only fail
@@ -110,12 +123,14 @@ async function seed(argv: string[]): Promise<number> {
     clock: () => new Date(),
     random: (n) => crypto.getRandomValues(new Uint8Array(n)),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    // Seeding starts no Compendium task: with --compendium on, the chat files the answers when it opens.
+    lane: 'manual',
   });
   let id: string;
   try {
     id = await seedInnkeeperSession(engine, {
       ...(narrator !== undefined ? { narrator } : {}),
-      ...(maxRounds !== undefined ? { config: { narrator: { maxRounds } } } : {}),
+      config: { compendium: { enabled: compendium === 'on' }, ...(maxRounds !== undefined ? { narrator: { maxRounds } } : {}) },
     });
   } finally {
     await engine.close();
@@ -126,6 +141,11 @@ async function seed(argv: string[]): Promise<number> {
     narrator
       ? `narrator: ${narrator.conn}:${narrator.model} · reply limit ${narrator.maxTokens ?? 'default'} · tool rounds ${maxRounds ?? 'default (4)'}`
       : 'narrator: innkeeper:fixture, the seeding stand-in: pick a real one in the chat with /model narrator <connection>:<model>',
+  );
+  console.log(
+    compendium === 'on'
+      ? 'compendium: on · the chat files the seeded answers in the background when it opens (/memory status shows the queue)'
+      : 'compendium: off · /memory on in the chat turns it on from then (the seeded answers are not filed)',
   );
   console.log(`open it:  rp-core${homeFlag} chat ${id}`);
   console.log(`ask:      ${INNKEEPER_QUESTION}`);

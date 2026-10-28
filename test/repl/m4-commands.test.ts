@@ -44,6 +44,6 @@ describe('/director', () => {
     expect(help).toContain("/director          the Story Director's plan: chapter, arcs, seeds, hidden arcs, the last directive");
     expect(help).toContain('/director on|off   let the Director plan every reply, or stop it (its plan is kept)');
     expect(help).not.toContain('/director (M4)');
-    expect(help).toContain('Later: /memory undo|refile|retry (M5b, the Compendium agents), /memory recall|profile|mode (M5c, recall).');
+    expect(help).toContain('Later: /memory recall|profile|mode (M5c, recall).');
   });
 });

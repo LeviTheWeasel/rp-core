@@ -84,10 +84,10 @@ describe('/memory', () => {
     expect(error('/memory retire')).toContain('needs an entry');
   });
 
-  test('the subcommands of M5b and M5c are "later"; an unknown one is an error', () => {
-    for (const sub of ['undo', 'refile', 'retry']) expect(cmd(`/memory ${sub} x`)).toEqual({ name: 'later', command: `memory ${sub}`, when: 'M5b (Compendium agents)' });
+  test('the subcommands of M5c are "later" (M5b\'s arrived); an unknown one is an error', () => {
+    for (const sub of ['undo', 'refile', 'retry']) expect(cmd(`/memory ${sub} 3`).name).toBe('memory');
     for (const sub of ['recall', 'profile', 'mode']) expect(cmd(`/memory ${sub} x`)).toEqual({ name: 'later', command: `memory ${sub}`, when: 'M5c (recall)' });
-    expect(error('/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off');
+    expect(error('/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status');
   });
 
   test('takeRef: a quoted ref, else the first word', () => {
@@ -153,8 +153,8 @@ describe('classes and help (M3)', () => {
     ]) {
       expect(help).toContain(s);
     }
-    // M4: /director arrived (D-113); M5a: tree, new and export did too, so the Later line keeps the agents' and recall's.
-    expect(help).toContain('Later: /memory undo|refile|retry (M5b, the Compendium agents), /memory recall|profile|mode (M5c, recall).');
+    // M4: /director arrived (D-113); M5a: tree, new and export did too; M5b: the agents' (D-181), so the Later line keeps recall's.
+    expect(help).toContain('Later: /memory recall|profile|mode (M5c, recall).');
     expect(help).not.toContain('(M3)');
   });
 });

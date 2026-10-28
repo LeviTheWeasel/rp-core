@@ -90,7 +90,7 @@ describe('classes and help', () => {
     const help = helpText();
     for (const s of ['/preset', '/lore add <id|file>', '/lore rm <id>', '/lore test <text>', '/preview [n] [--wire] [--verdicts]']) expect(help).toContain(s);
     // M4: /director is no longer later (D-113); the Later line keeps the M5 subcommands.
-    expect(help).toContain('Later: /memory undo|');
+    expect(help).toContain('Later: /memory recall|');
     expect(help).not.toContain('(M2)');
   });
 });
