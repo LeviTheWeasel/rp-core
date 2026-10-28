@@ -957,7 +957,8 @@ export function assemble(input: AssembleInput): AssembleResult {
       ? {
           compendium: {
             rev: input.compendium.rev,
-            source: 'lexical' as const,
+            // M5c (D-203): the turn's recall source; M5a's selector alone is 'lexical'.
+            source: input.compendium.source ?? ('lexical' as const),
             profile: input.compendium.profile,
             picks: input.compendium.candidates.map((c) => ({ ref: c.ref, key: c.key, via: c.via })),
             injected: sentBlock.injected,

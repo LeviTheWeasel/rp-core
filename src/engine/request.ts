@@ -52,6 +52,19 @@
 // fit only means 'exact' decides. Lore can still tip a request over by what the share does not bound
 // (ignoreBudget entries, message overheads, a variable lore sets): then the turn is refused after the
 // plan, as before D-195.
+//
+// M5c (D-205, D-89): after assembly, the request a turn sends (pass A or pass B, whichever it is)
+// carries the history_crowded notice when its history holds fewer than 4 messages before U although
+// the path holds more (historyCrowded, read off the assembled result; assemble itself is unchanged).
+// It names the fixed part's size, the window and the reserve, and advises a narrator with a larger
+// window or a lighter preset. Keyed 'history_crowded', so a turn tells it once per session (the turn
+// asks the session, as for every request notice) and a preview shows it every time; a fit check
+// (D-195) never carries it. The request itself is byte-identical either way.
+//
+// M5c (D-203): RequestInput.recall carries what recall gave the turn — its picks, which the selector
+// takes as tier 1 in recall's order (select.ts), and the source trace.compendium names (the record's,
+// or 'lexical'/'off' without one). Absent (a preview, the Compendium's M5a path): the selector alone,
+// source 'lexical'. The fit check (D-195 'bound') reads no block, so recall never changes it.
 
 import { contractText } from '../agents/director/render.ts';
 import type { Route } from './admit.ts';
@@ -72,14 +85,14 @@ import type { Preset, Samplers } from '../formats/native.ts';
 import { validateLoreBook } from '../formats/native.ts';
 import { loadFromLibrary } from '../formats/library.ts';
 import { entryKey, entryLabel, type LoreRunResult, type LoreSource } from '../lore/engine.ts';
-import { assemble, type AssembleInput, type AssembleResult } from '../prompt/assemble.ts';
+import { assemble, HISTORY_SRC, type AssembleInput, type AssembleResult } from '../prompt/assemble.ts';
 import { loreSources, regexNotice } from '../prompt/assemble/lore.ts';
 import { readRecapTrace, type RecapRequest } from '../prompt/assemble/recap.ts';
-import { contextWindow, loreBudget, replyReserve } from '../prompt/budget.ts';
+import { contextWindow, loreBudget, replyReserve, trimHistory } from '../prompt/budget.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import { subRng } from '../prompt/rng.ts';
 import { shape } from '../prompt/shape.ts';
-import { estimateTokens, type TokenCounter } from '../prompt/tokens.ts';
+import { counterById, estimateTokens, estimateToolSpecs, MESSAGE_OVERHEAD_TOKENS, type TokenCounter } from '../prompt/tokens.ts';
 import type { Notice } from '../protocol/events.ts';
 import type { PromptMsg } from '../providers/types.ts';
 import type { Binding, CompendiumConfig, SessionConfig, SessionHeader, TurnKind } from '../session/entries.ts';
@@ -151,6 +164,17 @@ export interface RequestInput {
    * toolSets). Hosts never set it; the rules that decide WHEN a set is offered stay the same.
    */
   toolSets?: ToolSets;
+  /**
+   * M5c (D-203): what recall gave this request — its picks (entry keys, recall's order: the selector's
+   * tier 1) and trace.compendium.source. Absent: no recall (M5a's selector, source 'lexical').
+   */
+  recall?: RecallInput;
+}
+
+/** M5c (D-203): recall's part of a request (RequestInput.recall, compendiumBlockInput). */
+export interface RecallInput {
+  picks: readonly string[];
+  source: NonNullable<CompendiumBlockInput['source']>;
 }
 
 /** The tool sets the two-pass selection offers (C1): each is offered whole or not at all. */
@@ -325,6 +349,7 @@ export function compendiumBlockInput(
   cfg: ResolvedCompendiumConfig,
   window: number,
   guidance: string | undefined,
+  recall?: RecallInput,
 ): CompendiumBlockInput | undefined {
   if (!cfg.enabled) return undefined;
   const live = liveTyped(view.compendium);
@@ -353,6 +378,8 @@ export function compendiumBlockInput(
     ...(guidance !== undefined && guidance !== '' ? { guidance } : {}),
     windowTexts,
     castNames: view.castNames,
+    // M5c (D-203): tier 1 in recall's order; a pick that is no fresh live typed entry drops out.
+    ...(recall !== undefined && recall.picks.length > 0 ? { recallPicks: recall.picks } : {}),
   });
   const profile = compendiumProfile(cfg.profile, window);
   const limits = COMPENDIUM_LIMITS[profile];
@@ -362,7 +389,7 @@ export function compendiumBlockInput(
     const brief = renderBriefParts(e, limits.briefChars, `(more: read_lore ${p.ref})`);
     return { ...p, name: e.name, full: whole !== null && whole.length <= limits.fullChars ? whole : null, brief: brief.text, briefTail: brief.tail };
   });
-  return { rev: view.compendium.rev, profile, candidates, limits, minShare: cfg.minShare, inPrompt: new Set(), hidden };
+  return { rev: view.compendium.rev, profile, candidates, limits, minShare: cfg.minShare, inPrompt: new Set(), hidden, ...(recall !== undefined ? { source: recall.source } : {}) };
 }
 
 /**
@@ -461,6 +488,104 @@ export function compendiumNotices(c: CompendiumView): KeyedNotice[] {
     }
   }
   return out;
+}
+
+// ---- D-205: history_crowded -------------------------------------------------------------------
+
+/** D-205: the once-per-session key (and code) of the crowded-history notice. */
+export const HISTORY_CROWDED = 'history_crowded';
+
+/**
+ * D-205: below this many chat messages before the one the turn is about, a history the budget cut is
+ * crowded out by the rest of the prompt.
+ */
+export const HISTORY_CROWDED_MIN = 4;
+
+/** D-205: what the check found. Counts are chat messages: hidden and blank ones are none. */
+export interface HistoryCrowded {
+  /** Chat messages before U (on continue, before the U the answer replies to), the greeting included. */
+  before: number;
+  /** How many of them the request sends. */
+  sent: number;
+}
+
+/**
+ * D-205: whether an assembled request's history is crowded: it holds fewer than HISTORY_CROWDED_MIN
+ * messages before U although the path holds more and preset.context.maxMessages alone would send
+ * more (a preset that keeps few messages on purpose is not crowded). Read off what assemble reports
+ * (trace.trimmed, kept) over the chat area as assemble lays it out (prompt/assemble/chat.ts: the path
+ * to upTo without hidden or blank messages, upTo always in; budget.ts's protections: the greeting at
+ * the head, U at the tail, on continue U and the answer). Nothing left out (the common case), or
+ * enough kept that the tail cannot account for it, is settled without a look at the path.
+ */
+export function historyCrowded(
+  view: PathView,
+  plan: Pick<RequestPlan, 'kind' | 'upTo' | 'preset'>,
+  asm: Pick<AssembledOk, 'kept' | 'trace'>,
+): HistoryCrowded | null {
+  // The protected tail is two messages at most (U and the answer it continues: neighbours on the path).
+  if (asm.trace.trimmed === null || asm.kept.length - 2 >= HISTORY_CROWDED_MIN) return null;
+  const end = view.path.findIndex((m) => m.id === plan.upTo);
+  if (end < 0) return null;
+  const area = view.path.slice(0, end + 1).filter((m, i) => i === end || (!m.hidden && messageText(m) !== ''));
+  const ids = area.map((m) => m.id);
+  const first = area[0]!;
+  const head = first.role === 'assistant' && first.gen?.kind === 'greeting' ? 1 : 0;
+  const parent = plan.kind === 'continue' ? view.path[end]!.parent : null;
+  const at = parent === null ? -1 : ids.lastIndexOf(parent);
+  const tail = Math.min(at >= 0 ? ids.length - at : 1, Math.max(0, ids.length - head));
+  const before = ids.length - tail;
+  const earlier = new Set(ids.slice(0, before));
+  const sent = asm.kept.reduce((n, id) => (earlier.has(id) ? n + 1 : n), 0);
+  if (sent >= HISTORY_CROWDED_MIN || sent >= before) return null;
+  const maxKept = plan.preset.context?.maxMessages;
+  if (maxKept !== undefined) {
+    // What the limit alone sends: the same cut on the same grid with every message free.
+    const free = ids.map((id) => ({ id, tok: 0 }));
+    const capped = head + before - trimHistory(free, 0, { protectedHead: head, protectedTail: tail, maxKept }).keepFrom;
+    if (sent >= capped) return null;
+  }
+  return { before, sent };
+}
+
+/**
+ * D-205: the part of an assembled request the budget never trims, in budget tokens (the model's EMA
+ * correction applied, as the budget counts): every message but the chat history's (the trace rows, so
+ * the request's own counter), the prefill and the native tool declarations.
+ */
+export function fixedTokens(asm: Pick<AssembledOk, 'trace' | 'prefill' | 'tools'>, tokenFactor: number, nativeTools: boolean): number {
+  const counter = counterById(asm.trace.tokens.counter);
+  let tok = 0;
+  for (const b of asm.trace.blocks) if (b.src !== HISTORY_SRC) tok += b.tok;
+  if (asm.prefill !== null && asm.prefill !== '') tok += estimateTokens(asm.prefill, counter) + MESSAGE_OVERHEAD_TOKENS;
+  if (nativeTools && asm.tools.length > 0) tok += estimateToolSpecs(asm.tools, counter);
+  return Number.isFinite(tokenFactor) && tokenFactor > 0 && tokenFactor !== 1 ? Math.ceil(tok * tokenFactor) : tok;
+}
+
+/**
+ * D-205 (D-89): the history_crowded notice: how few of the earlier messages fit, the fixed part's size
+ * against what the window leaves a request (and the tool room when tools are offered), and the advice:
+ * a narrator with a larger window or a lighter preset.
+ */
+export function crowdedNotice(found: HistoryCrowded, fixed: number, at: { window: number; reserve: number; toolRoom: number }): KeyedNotice {
+  const fit =
+    found.sent > 0
+      ? `Only ${found.sent} of the ${found.before} earlier messages ${found.sent === 1 ? 'fits' : 'fit'}`
+      : found.before === 1
+        ? 'The earlier message does not fit'
+        : `None of the ${found.before} earlier messages fit`;
+  const room = at.toolRoom > 0 ? `, and ${at.toolRoom} more are kept free for tool rounds` : '';
+  return {
+    key: HISTORY_CROWDED,
+    notice: {
+      level: 'warn',
+      code: HISTORY_CROWDED,
+      message:
+        `${fit} in the request: the fixed part of the prompt (everything but the chat history) takes about ${fixed} of the ` +
+        `${Math.max(0, at.window - at.reserve)} tokens a request may use (window ${at.window} - reply reserve ${at.reserve})${room}. ` +
+        'A narrator with a larger window (/model) or a lighter preset (/preset builtin) leaves the history more room; /preview shows the parts.',
+    },
+  };
 }
 
 // ---- the request ------------------------------------------------------------------------------
@@ -566,7 +691,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   const routed = routeBooks(lib.sources, compendiumConfigOf(plan.config));
   const withNotes = (books: LoreSource[]): LoreSource[] => (notes ? [{ key: NOTES_BOOK_KEY, book: notes }, ...books] : books);
   const lorebooks = bound ? [] : withNotes(routed);
-  const block = bound ? undefined : compendiumBlockInput(view, input.tree, compendium, window, plan.guidance);
+  const block = bound ? undefined : compendiumBlockInput(view, input.tree, compendium, window, plan.guidance, input.recall);
   const recap = bound ? undefined : recapRequest(view, input.tree, plan.upTo, compendium, window);
 
   const base: AssembleInput = {
@@ -600,10 +725,18 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   };
   const common = { window, reserve, limits, tokenFactor, view };
 
+  // The notices of the request sent: the builder's, that pass's, then D-205's (never on a fit check).
+  const told = (asm: AssembledOk, own: readonly KeyedNotice[]): KeyedNotice[] => {
+    const found = input.fitCheck === undefined ? historyCrowded(view, plan, asm) : null;
+    if (found === null) return [...notices, ...own];
+    const fixed = fixedTokens(asm, tokenFactor, primary.caps.tools === 'native');
+    return [...notices, ...own, crowdedNotice(found, fixed, { window, reserve, toolRoom: asm.toolRoom })];
+  };
+
   // Pass A: no tools, exactly the M2 request.
   const a = assembleAndShape(base, primary, plan, input.header.cast);
   if (!a.ok) return { ok: false, code: a.code, message: a.message, notices: [...notices, ...a.notices] };
-  const passA = (): BuiltRequest => ({ ok: true, ...common, asm: a.asm, shaped: a.shaped, notices: [...notices, ...a.notices], tools: null });
+  const passA = (): BuiltRequest => ({ ok: true, ...common, asm: a.asm, shaped: a.shaped, notices: told(a.asm, a.notices), tools: null });
 
   // C1: what is worth offering, read off pass A.
   const transport = primary.caps.tools;
@@ -627,7 +760,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   // Tools are optional: a request that cannot carry them (the core block does not fit) goes without.
   if (!b.ok) return passA();
   // D-28 turned them off inside assemble: pass B is the request (its trace and notice say why).
-  if (b.asm.tools.length === 0) return { ok: true, ...common, asm: b.asm, shaped: b.shaped, notices: [...notices, ...b.notices], tools: null };
+  if (b.asm.tools.length === 0) return { ok: true, ...common, asm: b.asm, shaped: b.shaped, notices: told(b.asm, b.notices), tools: null };
   // Too little room for even one round of results: tools would only cost the core block.
   if (b.asm.toolRoom < MIN_ROOM_TOKENS) return passA();
   // C1 reads "the history did not fit" off the request actually sent: pass B reserves the room and the
@@ -678,7 +811,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     ...common,
     asm: b.asm,
     shaped: b.shaped,
-    notices: [...notices, ...b.notices],
+    notices: told(b.asm, b.notices),
     tools,
     ...(echoOf ? { echo: true as const } : {}),
   };

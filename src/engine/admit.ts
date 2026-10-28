@@ -153,6 +153,51 @@ export function resolveDirector(ctx: EngineCtx, config: SessionConfig, narrator:
   }
 }
 
+/**
+ * D-85 (M5b): the recorder's binding and route. `roles.recorder` absent or 'narrator' → the narrator's
+ * connection and model only (not its reply settings); an explicit binding keeps all its fields. A
+ * connection that is missing or whose caps cannot be resolved gives route null (the lane waits).
+ * providerOverride applies. (Moved here from lane.ts in M5c, which re-exports it: recall follows it.)
+ */
+export function resolveRecorder(ctx: EngineCtx, config: SessionConfig): { binding: Binding; route: Route | null } {
+  const role = config.roles.recorder;
+  const narrator = config.roles.narrator;
+  const own = role !== undefined && role !== 'narrator';
+  const binding: Binding = own ? role : { conn: narrator.conn, model: narrator.model };
+  try {
+    if (!own) return { binding, route: resolvePrimary(ctx, config) };
+    const conn = resolveConnection(ctx, role.conn);
+    return { binding, route: conn ? routeTo(conn, role.model) : null };
+  } catch (e) {
+    if (e instanceof Refusal) return { binding, route: null };
+    throw e;
+  }
+}
+
+/**
+ * M5c (D-85, .notes/m5c-decisions.md D-201): recall's binding and route, recall → recorder → narrator.
+ * `roles.recall` an explicit binding → that binding with all its fields; 'narrator' → the narrator's
+ * connection and model only (as the Director's 'narrator'); 'recorder' or absent → the recorder's
+ * (resolveRecorder, which itself follows the narrator while the recorder is unset). A missing
+ * connection or caps that cannot be resolved give route null (the record says no_connection); never a
+ * Refusal. providerOverride applies.
+ */
+export function resolveRecall(ctx: EngineCtx, config: SessionConfig): { binding: Binding; route: Route | null } {
+  const role = config.roles.recall;
+  if (role === undefined || role === 'recorder') return resolveRecorder(ctx, config);
+  const narrator = config.roles.narrator;
+  const own = role !== 'narrator';
+  const binding: Binding = own ? role : { conn: narrator.conn, model: narrator.model };
+  try {
+    if (!own) return { binding, route: resolvePrimary(ctx, config) };
+    const conn = resolveConnection(ctx, role.conn);
+    return { binding, route: conn ? routeTo(conn, role.model) : null };
+  } catch (e) {
+    if (e instanceof Refusal) return { binding, route: null };
+    throw e;
+  }
+}
+
 /** The head message and what the kind needs of it. */
 function placeKind(kind: TurnKind, view: PathView): { parent: string; target?: string; upTo: string; head: MessageView } {
   const head = view.head === null ? undefined : view.path[view.path.length - 1];

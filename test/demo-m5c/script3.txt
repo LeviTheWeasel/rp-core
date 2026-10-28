@@ -1,0 +1,13 @@
+/memory mode
+/memory wait 1
+— Я пойду к пристани сейчас, пока не рассвело.
+/memory wait
+/trace
+/memory recall
+— Фрол! Просыпайся, это Ян. Нужна твоя помощь.
+/memory wait
+/trace
+/memory recall
+/memory status
+/usage
+/quit

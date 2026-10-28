@@ -15,7 +15,7 @@
 // runChat is three exported pieces a full-screen host (the TUI) reuses with its own ports: chatDeps
 // (the REPL's deps), onChatTerm (SIGTERM, its line and its exit injected) and endChat (the close).
 
-import { Engine } from '../engine/engine.ts';
+import { Engine, scriptRecallDefault } from '../engine/engine.ts';
 import { systemClock } from '../engine/system.ts';
 import { Refusal, type Connection, type EngineHandle, type EngineOptions, type SessionHandle } from '../engine/api.ts';
 import type { Event } from '../protocol/events.ts';
@@ -23,7 +23,7 @@ import type { Io } from './io.ts';
 import { EXIT, reportRefusal } from './oneshot.ts';
 import { runRepl, type ReplDeps } from './repl.ts';
 import { runProbe } from './catalog.ts';
-import { bindingCaps, connectionCaps, connectionProblem, connectionWindow, engineOptions, redactor, windowOf, type Runtime } from './runtime.ts';
+import { bindingCaps, connectionCaps, connectionProblem, connectionWindow, engineOptions, redactor, routeOf, windowOf, type Runtime } from './runtime.ts';
 import { EXIT_SIGINT, EXIT_SIGTERM, type SignalSource } from './signals.ts';
 
 export interface ChatArgs {
@@ -62,13 +62,18 @@ export async function cmdChat(a: ChatArgs & { sessionId: string }): Promise<numb
   return runChat(engine, session, { ...a, events });
 }
 
-/** ReplDeps.override of a --provider script: / replay: connection (its origin says which). */
+/**
+ * ReplDeps.override of a --provider script: / replay: connection (its origin says which), with the recall
+ * default it gives the engine (the lead's ruling K: lexical for a script that tags no line for recall).
+ */
 export function overrideOf(conn: Connection): NonNullable<ReplDeps['override']> {
+  const recallDefault = scriptRecallDefault(conn);
   return {
     conn: conn.id,
     plays: conn.origin.startsWith('replay:') ? 'recording' : 'script',
     windowOf: (model) => connectionWindow(conn, model),
     capsOf: (model) => connectionCaps(conn, model),
+    ...(recallDefault !== undefined ? { recallDefault } : {}),
   };
 }
 
@@ -94,7 +99,7 @@ export async function runChat(engine: EngineHandle, session: SessionHandle, a: C
  * replay: failExit plus the override. `a.io` becomes deps.io (the REPL writes only io.out, through
  * its default view, and flushes it at the end).
  */
-export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<ChatArgs, 'rt' | 'io' | 'fetch' | 'clock' | 'events'>): ReplDeps {
+export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<ChatArgs, 'rt' | 'io' | 'fetch' | 'clock' | 'events'> & Partial<Pick<ChatArgs, 'engine'>>): ReplDeps {
   // --debug: while the REPL runs, raw provider failures go through its screen (engineOptions reads
   // rt.debug at the moment of a failure), so they never glue into a streamed answer.
   const plainDebug = a.rt.debug;
@@ -115,6 +120,8 @@ export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<C
     openSession: (id) => engine.session(id),
     windowOf: (conn, model) => windowOf(a.rt, conn, model),
     capsOf: (conn, model) => bindingCaps(a.rt, conn, model),
+    // M5c: /memory profile's windows and /memory mode's local-or-remote, as the engine sees them.
+    routeOf: (conn, model) => routeOf(a.rt, conn, model),
     redact: redactor(a.rt),
     // /probe --active calls the configured connection; under record: those calls would land in
     // the recording, so it is left to the shell there.
@@ -143,6 +150,8 @@ export function chatDeps(engine: EngineHandle, session: SessionHandle, a: Pick<C
     // Every turn runs on that connection: the banner takes its window from it.
     ...(a.rt.provider ? { failExit: true, override: overrideOf(a.rt.provider) } : {}),
     ...(a.events ? { events: a.events } : {}),
+    // D-201: a lane the caller set (tests) is the engine's; else the REPL reads RP_CORE_LANE as Engine.open does.
+    ...(a.engine?.lane !== undefined ? { lane: a.engine.lane } : {}),
   };
 }
 

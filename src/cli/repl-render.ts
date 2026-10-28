@@ -16,16 +16,17 @@ import { entryLabel } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg } from '../providers/types.ts';
 import { ENTRY_TYPE_INFO } from '../agents/compendium/entry-types.ts';
 import { entryCountOf, type TreeNode } from '../agents/compendium/tree.ts';
-import { ENTRY_TYPES, type CEntry, type EntryType } from '../agents/compendium/types.ts';
+import { ENTRY_TYPES, type CEntry, type CompendiumProfile, type EntryType } from '../agents/compendium/types.ts';
 import { NOTES_SCAN_DEPTH, noteText } from '../agents/compendium/notes.ts';
-import { COMPENDIUM_LIMITS } from '../agents/compendium/profile.ts';
+import { COMPENDIUM_LIMITS, LITE_WINDOW } from '../agents/compendium/profile.ts';
 import { MOMENTUM } from '../agents/director/momentum.ts';
 import { renderDirective } from '../agents/director/render.ts';
 import { ageOf, isFinishedArc, isFinishedHidden } from '../agents/director/state.ts';
 import { SURFACE_TURNS, type DirectorRecord, type DirectorState, type Horizon, type NarratorDirective } from '../agents/director/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import { estimateMessage } from '../prompt/tokens.ts';
-import type { CompendiumTrace, Generation, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
+import type { CompendiumTrace, Generation, RecallRecord, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
+import type { RecallMode } from '../engine/recall.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { markers, messageText, toolLine } from './render.ts';
 import type { BookRow } from './refs.ts';
@@ -505,13 +506,14 @@ export function renderTails(rows: readonly TailRow[], names: { char: string; use
   return lines.join('\n');
 }
 
-const bindingText = (b: Roles[keyof Roles]): string =>
-  b === undefined ? 'narrator (follows)' : typeof b === 'string' ? `${b} (follows)` : `${b.conn}:${b.model}${b.fallback ? ` (fallback ${b.fallback.conn}:${b.fallback.model})` : ''}`;
+/** A role's binding as /model shows it; an unset role follows `unset` (D-85: recall follows the recorder, the others the narrator). */
+const bindingText = (b: Roles[keyof Roles], unset: 'narrator' | 'recorder'): string =>
+  b === undefined ? `${unset} (follows)` : typeof b === 'string' ? `${b} (follows)` : `${b.conn}:${b.model}${b.fallback ? ` (fallback ${b.fallback.conn}:${b.fallback.model})` : ''}`;
 
 /** /model: the role bindings (one role, or all four). */
 export function renderBindings(roles: Roles, only?: keyof Roles): string {
   const keys: (keyof Roles)[] = only ? [only] : ['narrator', 'director', 'recorder', 'recall'];
-  return keys.map((k) => `  ${k.padEnd(8)} ${bindingText(roles[k])}`).join('\n');
+  return keys.map((k) => `  ${k.padEnd(8)} ${bindingText(roles[k], k === 'recall' ? 'recorder' : 'narrator')}`).join('\n');
 }
 
 /** /note with no argument. */
@@ -612,6 +614,7 @@ export function loreTraceLines(tr: Trace, titles?: ReadonlyMap<string, string>):
  * /trace: a summary of the newest trace of the last answer. `after` goes right after the stored
  * lore lines: the recomputed misses and the notice that the inputs changed (repl.ts). M5a: the
  * Compendium line follows when the request had Compendium input; `names` maps entry keys to names.
+ * M5c: `recall` (recallTraceLine) goes right before it.
  */
 export function renderTrace(
   id: string,
@@ -620,6 +623,7 @@ export function renderTrace(
   after: readonly string[] = [],
   names?: ReadonlyMap<string, string>,
   refs?: ReadonlyMap<string, string>,
+  recall?: string | null,
 ): string {
   const tr = t.trace;
   const tok = `prompt ~${tr.tokens.estimated} tok${tr.tokens.reported !== undefined ? ` (server: ${tr.tokens.reported})` : ''}`;
@@ -630,6 +634,8 @@ export function renderTrace(
     `  unknown macros: ${tr.macros.unknown.length > 0 ? tr.macros.unknown.join(', ') : 'none'}`,
   ];
   lines.push(...loreTraceLines(tr, titles), ...after);
+  // M5c (D-206): what recall gave the block, before what the block did.
+  if (recall !== undefined && recall !== null) lines.push(recall);
   if (tr.compendium) lines.push(compendiumTraceLine(tr.compendium, names));
   const recap = recapTraceLine(tr.recap, names, refs);
   if (recap !== null) lines.push(recap);
@@ -1554,20 +1560,26 @@ const blockedLine = (b: NonNullable<MemoryStatus['blocked']>): string => `  ${b.
 /**
  * /memory status (D-180): what runs (and whether it still waits for a place on the server), what waits in
  * order, what waits for its agent (held), what is parked and how to retry it, the backlog; and (ruling K)
- * what stops the lane: a recorder with no route, an agent paused after two parked tasks in a row.
+ * what stops the lane: a recorder with no route, an agent paused after two parked tasks in a row. M5c
+ * (ruling H): the recall prefetch for the next reply, queued, running or ready (with its picks).
  */
-export function renderLaneStatus(s: MemoryStatus, words: Pick<LaneWords, 'at'>): string {
+export function renderLaneStatus(s: MemoryStatus, words: Pick<LaneWords, 'at'> & Partial<Pick<RecallWords, 'entry'>>): string {
   const held = s.held ?? [];
+  // M5c (ruling H): the recall prefetch is a slot of the lane, counted with what runs or waits.
+  const pre = s.prefetch;
+  const running = (s.running ? 1 : 0) + (pre?.state === 'running' ? 1 : 0);
+  const queued = s.queued.length + (pre?.state === 'queued' ? 1 : 0);
   const counts = [
-    s.running ? '1 running' : '',
-    s.queued.length > 0 ? `${s.queued.length} queued` : '',
+    running > 0 ? `${running} running` : '',
+    queued > 0 ? `${queued} queued` : '',
     held.length > 0 ? `${held.length} held` : '',
     s.parked.length > 0 ? `${s.parked.length} parked` : '',
   ].filter(Boolean);
   const backlog = s.backlog > 0 ? ` · ${plural(s.backlog, 'answer')} not filed yet` : '';
   const blocked = s.blocked ? [blockedLine(s.blocked)] : [];
-  if (counts.length === 0) return [`the Compendium's background lane is idle: nothing queued, nothing parked${backlog}`, ...blocked].join('\n');
-  const lines = [`the Compendium's background lane: ${counts.join(', ')}${backlog}`, ...blocked];
+  const recall = pre !== undefined ? [prefetchStatusLine(pre, words)] : [];
+  if (counts.length === 0) return [`the Compendium's background lane is idle: nothing queued, nothing parked${backlog}`, ...blocked, ...recall].join('\n');
+  const lines = [`the Compendium's background lane: ${counts.join(', ')}${backlog}`, ...blocked, ...recall];
   if (s.running) {
     const waiting = s.running.waiting ? ' · waiting for a place on the server' : '';
     lines.push(`  running: ${passName(s.running.key, words)}${attemptText(s.running.attempt)} · job ${s.running.job}${waiting}`);
@@ -1584,7 +1596,7 @@ export function renderLaneStatus(s: MemoryStatus, words: Pick<LaneWords, 'at'>):
 /**
  * /memory wait's last line: idle (`: nothing to do` when no pass ended while it waited), what is parked
  * and not filed; a lane that cannot run (queued, no recorder model; ruling K: an agent paused); or still
- * working after `sec`.
+ * working after `sec` (M5c: the recall prefetch among what runs or waits).
  */
 export function renderLaneWait(r: MemoryStatus & { idle: boolean }, ran: boolean, sec: number | undefined, words: Pick<LaneWords, 'at'>): string {
   if (r.idle && r.queued.length > 0) {
@@ -1598,6 +1610,331 @@ export function renderLaneWait(r: MemoryStatus & { idle: boolean }, ran: boolean
     const backlog = r.backlog > 0 ? ` · ${plural(r.backlog, 'answer')} not filed yet` : '';
     return `the background lane is idle${ran ? '' : ': nothing to do'}${parked}${held}${backlog}`;
   }
-  const what = [r.running ? `${passName(r.running.key, words)} runs` : '', r.queued.length > 0 ? `${r.queued.length} queued` : ''].filter(Boolean).join(', ');
+  const pre = r.prefetch;
+  const queued = r.queued.length + (pre?.state === 'queued' ? 1 : 0);
+  const what = [
+    r.running ? `${passName(r.running.key, words)} runs` : '',
+    pre?.state === 'running' ? `the recall prefetch after ${words.at(pre.on)} runs` : '',
+    queued > 0 ? `${queued} queued` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
   return `${sec !== undefined ? `still working after ${sec} s` : 'still working'}${what !== '' ? `: ${what}` : ''} (/memory status)`;
+}
+
+// ---- recall (M5c, D-206) ------------------------------------------------------------------------------------
+
+/** What the recall lines need from the session: `#n` of a message, an entry's handle and name now. */
+export interface RecallWords {
+  /** `#n` for a message on the active path (its /show number), else its id. */
+  at(id: string): string;
+  /** An entry's C<n> and name on this path now (retired ones too); undefined when it is not on this path. */
+  entry(key: string): { ref: string; name: string } | undefined;
+}
+
+/** At most this many picks are named on one line; the rest are counted. */
+const RECALL_NAMED = 8;
+
+const secs = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
+
+/** An entry recall picked as the lines name it, `C9 "Переправа к маяку"`; its key when it is not on this path now. */
+function pickName(key: string, words: Partial<Pick<RecallWords, 'entry'>>): string {
+  const e = words.entry?.(key);
+  return e !== undefined ? `${e.ref} ${JSON.stringify(e.name)}` : `${key} (not on this path now)`;
+}
+
+/** Picks on one line, in recall's order: at most RECALL_NAMED named, the rest counted. */
+function picksText(keys: readonly string[], words: Partial<Pick<RecallWords, 'entry'>>): string {
+  const named = keys.slice(0, RECALL_NAMED).map((k) => pickName(k, words));
+  return keys.length > RECALL_NAMED ? `${named.join(', ')}, … ${keys.length - RECALL_NAMED} more` : named.join(', ');
+}
+
+/** Why a record holds no picks, by its code. */
+const RECALL_CODE_WORDS: Readonly<Record<NonNullable<RecallRecord['code']>, string>> = {
+  timeout: 'recall did not answer within its deadline',
+  provider_error: 'the server failed',
+  no_output: 'the answer was empty',
+  undecodable: 'its answer could not be read',
+  transport_unsupported: 'the server refused the structured request',
+  aborted: 'it was stopped',
+  no_connection: "the recall model's connection is not available",
+  prefetch_missed: 'the prefetch was not ready when the reply started',
+  empty_index: 'there was no entry to pick from (every one named recently, hidden or in the recap)',
+  no_room: "the request does not fit the recall model's window",
+};
+
+/**
+ * How a record came to its answer: `sync` (beside the Director), `prefetch after #21` (computed in the
+ * background after that answer, adopted or missed), `reused from #17` (a swipe or continue); '' for a
+ * skip the turn decided before any call.
+ */
+function recallHow(rec: RecallRecord, words: Pick<RecallWords, 'at'>): string {
+  if (rec.source === 'reused') return rec.reusedFrom !== undefined ? `reused from ${words.at(rec.reusedFrom)}` : 'reused';
+  if (rec.basis !== undefined) return `prefetch after ${words.at(rec.basis)}`;
+  if (rec.source === 'prefetch') return 'prefetch';
+  return rec.source === 'sync' || rec.status === 'failed' ? 'sync' : '';
+}
+
+/** A record's outcome in a few words: `recalled 2`, `nothing picked`, `failed [timeout]`, `missed`, `skipped [no_room]`. */
+function recallResult(rec: RecallRecord): string {
+  switch (rec.status) {
+    case 'recalled':
+      return `recalled ${rec.picks.length}`;
+    case 'empty':
+      return 'nothing picked';
+    case 'failed':
+      return `failed [${rec.code ?? 'unknown'}]`;
+    case 'skipped':
+      return rec.code === 'prefetch_missed' ? 'missed [prefetch_missed]' : `skipped [${rec.code ?? 'unknown'}]`;
+  }
+}
+
+/** The reading's counts that are not zero: `1 unknown, 1 repeated, 2 by name`. */
+function readCounts(rec: RecallRecord): string[] {
+  const out: string[] = [];
+  if (rec.unknown > 0) out.push(`${rec.unknown} unknown`);
+  if (rec.repeated > 0) out.push(`${rec.repeated} repeated`);
+  if (rec.trimmed > 0) out.push(`${rec.trimmed} over the limit`);
+  if (rec.byName > 0) out.push(`${rec.byName} by name`);
+  if (rec.salvaged > 0) out.push(`${rec.salvaged} salvaged from prose`);
+  return out;
+}
+
+/**
+ * /memory recall (D-206): an answer's RecallRecord — how it came (sync, a prefetch after #n, reused from
+ * #n), what it did, the profile, model and transport; the picks in recall's order with their C<n>, name
+ * and reason; what the reading counted; its calls, time and tokens. `at`: the answer as /show numbers it.
+ */
+export function renderRecallCard(at: string, rec: RecallRecord, words: RecallWords): string {
+  const head = [recallHow(rec, words), recallResult(rec), rec.profile, rec.model ?? '', rec.transport ?? ''].filter(Boolean);
+  const lines = [`recall for ${at}: ${head.join(' · ')}`];
+  if (rec.status === 'failed' || rec.status === 'skipped') {
+    const why = rec.code !== undefined ? RECALL_CODE_WORDS[rec.code] : 'recall gave nothing';
+    lines.push(`  ${why}: the selector picked alone (lexical)`);
+  } else if (rec.picks.length === 0) {
+    lines.push('  picks: none (recall answered with an empty list)');
+  } else {
+    lines.push(`  picks, in recall's order:`);
+    rec.picks.forEach((p, i) => lines.push(`    ${i + 1}. ${pickName(p.ref, words)}${p.reason !== undefined ? ` — ${p.reason}` : ''}`));
+  }
+  const read = readCounts(rec);
+  if (rec.omitted > 0) read.push(`${plural(rec.omitted, 'entry', 'entries')} left out of the index (its budget)`);
+  if (read.length > 0) lines.push(`  read: ${read.join(', ')}`);
+  if (rec.source === 'reused') {
+    lines.push(`  0 calls: the picks of ${rec.reusedFrom !== undefined ? words.at(rec.reusedFrom) : 'the answer it replaced'}`);
+  } else {
+    // A prefetch reads the story up to the answer it followed, never the player's message: true whether
+    // it ended before that message came or the reply waited for it (graceSec).
+    const where = rec.basis !== undefined && rec.calls > 0 ? " in the background, without the player's message" : '';
+    const time = rec.ms !== undefined ? ` · ${secs(rec.ms)}` : '';
+    const tokens = rec.usage !== undefined ? ` · ${rec.usage.input} in / ${rec.usage.output} out tokens` : '';
+    lines.push(`  ${plural(rec.calls, 'call')}${where}${time}${tokens}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * /trace's recall line (D-206): how the record came, what it picked (named), the calls — the turn's own
+ * recall rows of `trace.calls` (sync, the top-up's included), or for an adopted prefetch none in the
+ * turn and the prefetch's own from its record. Without a record: `lexical` or `off` (trace.compendium's
+ * source). null when the request had no Compendium input and no record.
+ */
+export function recallTraceLine(tr: Trace, rec: RecallRecord | null, words: RecallWords): string | null {
+  if (rec === null) {
+    const source = tr.compendium?.source;
+    if (source === undefined) return null;
+    if (source === 'off') return '  recall: off (no recall call)';
+    if (source === 'lexical') return '  recall: lexical (no recall call; the selector picked alone)';
+    return `  recall: ${source}`;
+  }
+  const parts: string[] = [];
+  const how = recallHow(rec, words);
+  if (how !== '') parts.push(how);
+  if (rec.status === 'recalled') parts.push(`${rec.picks.length} picked: ${picksText(rec.picks.map((p) => p.ref), words)}`);
+  else parts.push(rec.status === 'empty' ? 'nothing picked' : `${recallResult(rec)} → lexical`);
+  const rows = tr.calls.filter((c) => c.agent === 'recall');
+  if (rows.length > 0) parts.push(`${plural(rows.length, 'call')} ${secs(rows.reduce((n, c) => n + c.ms, 0))}`);
+  else if (rec.basis !== undefined && rec.calls > 0) parts.push(`0 calls in this turn (the prefetch: ${plural(rec.calls, 'call')}${rec.ms !== undefined ? ` ${secs(rec.ms)}` : ''})`);
+  else parts.push('0 calls');
+  return `  recall: ${parts.join(' · ')}`;
+}
+
+/**
+ * The lane's line for a recall prefetch that ended (D-206, shown between turns like the memory lines):
+ * `⋯ recall: prefetched after #21 → 2: C9 "Переправа к маяку", C6 "Серый маяк"`, a failure, a run that
+ * gave way to a turn. `pre`: MemoryStatus.prefetch as the event arrived (it names the answer and holds
+ * the record); without it the line counts. null for the statuses that say nothing (queued, started, a
+ * superseded run's skip).
+ * `now` (the lead's ruling K): what the line is shown into — whether the lane still owes a prefetch on
+ * the same basis (`again`), and where the answer it followed stands (`answer`: the last answer on the
+ * path, earlier on it, or off it: a swipe, a regen or a rewind replaced it). A run that gave way to a
+ * turn runs again only while its basis holds; otherwise the line says it was dropped and why. Without
+ * `now` it says what it always did.
+ */
+export function lanePrefetchLine(
+  ev: AgentEvent,
+  pre: MemoryStatus['prefetch'],
+  words: RecallWords,
+  now?: { again: boolean; answer: 'last' | 'earlier' | 'gone' },
+): string | null {
+  const after = pre !== undefined ? ` after ${words.at(pre.on)}` : '';
+  switch (ev.status) {
+    case 'done': {
+      const n = ev.count ?? 0;
+      if (n === 0) return `⋯ recall: prefetched${after} → nothing picked`;
+      const keys = pre?.state === 'ready' ? (pre.record?.picks.map((p) => p.ref) ?? []) : [];
+      return keys.length === n ? `⋯ recall: prefetched${after} → ${n}: ${picksText(keys, words)}` : `⋯ recall: prefetched${after} → ${plural(n, 'pick')}`;
+    }
+    case 'failed':
+      return `⋯ recall: the prefetch${after} failed [${ev.code ?? 'unknown'}]`;
+    case 'preempted': {
+      if (now === undefined || now.again) return `⋯ recall: the prefetch${after} gave way to a turn; it runs again at the next pause`;
+      const why =
+        now.answer === 'gone'
+          ? 'that answer was replaced (a swipe, a regen or a rewind)'
+          : now.answer === 'earlier'
+            ? 'the story went on past that answer'
+            : 'that answer changed (a continue or an edit), so a prefetch after it starts over';
+      return `⋯ recall: the prefetch${after} gave way to a turn and was dropped: ${why}`;
+    }
+    case 'skipped':
+      return ev.code !== undefined ? `⋯ recall: the prefetch${after} was skipped [${ev.code}]` : null;
+    default:
+      return null;
+  }
+}
+
+/** /memory status's line for the recall prefetch (ruling H): queued, running, or ready with its picks. */
+function prefetchStatusLine(p: NonNullable<MemoryStatus['prefetch']>, words: Pick<RecallWords, 'at'> & Partial<Pick<RecallWords, 'entry'>>): string {
+  const after = `after ${words.at(p.on)}`;
+  if (p.state === 'queued') return `  recall: the prefetch ${after} is queued (it runs when nothing else does)`;
+  if (p.state === 'running') return `  recall: the prefetch ${after} runs`;
+  const r = p.record;
+  if (r === undefined) return `  recall: the prefetch ${after} is ready for the next reply`;
+  if (r.status === 'recalled') return `  recall: prefetched ${after}, ready for the next reply: ${r.picks.length} picked: ${picksText(r.picks.map((x) => x.ref), words)}`;
+  if (r.status === 'empty') return `  recall: prefetched ${after}, ready for the next reply: nothing picked`;
+  // A skipped prefetch is adopted as it is (the turn reads no on_miss): the next reply goes lexical.
+  if (r.status === 'skipped') {
+    const why = r.code !== undefined ? `: ${RECALL_CODE_WORDS[r.code]}` : '';
+    return `  recall: the prefetch ${after} ${recallResult(r)}${why}; the next reply goes without recall (lexical)`;
+  }
+  return `  recall: the prefetch ${after} ${recallResult(r)}: the next reply falls back (compendium.recall.on_miss)`;
+}
+
+/** One agent's row of /memory profile (D-206). */
+export interface ProfileRow {
+  agent: 'block' | 'recall' | 'filing' | 'historian';
+  /** The profile it runs; null while its window is unknown under 'auto'. */
+  profile: CompendiumProfile | null;
+  /** 'conn:model' it runs on. */
+  model: string;
+  /** Its window in tokens, null when not known yet. */
+  window: number | null;
+  /** Whose window decides it: "the narrator's", "the recall model's", "the recorder's". */
+  whose: string;
+  /** How its binding was found when it follows another role ("follows the recorder, which follows the narrator"). */
+  follows?: string;
+  /** What the profile means for it (recall: how many picks, how many messages it reads). */
+  detail?: string;
+  /** Why it does not run now (filing off, the historian off, recall lexical or off). */
+  off?: string;
+}
+
+/**
+ * /memory profile (D-206, §7.4.6): each agent's profile and why — `compendium.profile` set to full or
+ * lite decides for every agent; auto goes by each agent's own window (lite below LITE_WINDOW): the block
+ * by the narrator's, recall by its model's, filing and the historian by the recorder's.
+ */
+export function renderProfiles(setting: 'auto' | 'full' | 'lite', rows: readonly ProfileRow[]): string {
+  const head =
+    setting === 'auto'
+      ? `Compendium profiles (compendium.profile auto: lite below a ${LITE_WINDOW}-token window, full from it):`
+      : `Compendium profiles (compendium.profile ${setting}: every agent runs ${setting}, whatever its window):`;
+  const lines = [head];
+  for (const r of rows) {
+    const win = r.window === null ? `${r.whose} window is not known yet` : `${r.whose} window ${r.window}`;
+    const why = setting !== 'auto' ? `set (${win})` : r.window === null ? win : `${win} ${r.window < LITE_WINDOW ? '<' : '≥'} ${LITE_WINDOW}`;
+    const parts = [`${r.profile ?? 'full or lite'}: ${why}`, `${r.model}${r.follows !== undefined ? ` (${r.follows})` : ''}`];
+    if (r.detail !== undefined) parts.push(r.detail);
+    if (r.off !== undefined) parts.push(`not running: ${r.off}`);
+    lines.push(`  ${r.agent.padEnd(9)} ${parts.join(' · ')}`);
+  }
+  return lines.join('\n');
+}
+
+/** What /memory mode says about the session's recall mode (D-201). */
+export interface RecallModeFacts {
+  mode: RecallMode;
+  /**
+   * Where the mode comes from: this session's config (`set`: /memory mode just wrote it), RP_CORE_RECALL,
+   * the --provider script that tags no line for recall (ruling K), or the default (auto).
+   */
+  from: 'session' | 'set' | 'env' | 'script' | 'default';
+  /** The scheduler's locality of the recall model's server; null when it is not known here. */
+  local: boolean | null;
+  onMiss: 'auto' | 'lexical' | 'sync';
+  graceSec: number;
+  /** 'conn:model' recall runs on. */
+  model: string;
+  /** D-201: the engine's lane; a manual one never prefetches (auto on a local server and prefetch act as onMiss). Absent: auto. */
+  lane?: 'auto' | 'manual';
+}
+
+/**
+ * D-201 (the engine's decideRecall): what recall does for the next reply — prefetch, sync, lexical or off;
+ * null while it hangs on a locality not known here. A manual lane never prefetches: a mode that would
+ * acts as onMiss (auto: lexical on a local server, sync on a remote one).
+ */
+export function recallRunsAs(f: Pick<RecallModeFacts, 'mode' | 'local' | 'onMiss' | 'lane'>): 'prefetch' | 'sync' | 'lexical' | 'off' | null {
+  if (f.mode === 'off' || f.mode === 'lexical' || f.mode === 'sync') return f.mode;
+  if (f.mode === 'auto' && f.local !== true) return f.local === false ? 'sync' : null;
+  if (f.lane !== 'manual') return 'prefetch';
+  if (f.onMiss !== 'auto') return f.onMiss;
+  return f.local === null ? null : f.local ? 'lexical' : 'sync';
+}
+
+/** What a missed prefetch falls back to, in words (onMiss; auto: lexical on a local server, sync on a remote one). */
+function onMissWords(f: RecallModeFacts): string {
+  const miss = f.onMiss !== 'auto' ? f.onMiss : f.local === null ? null : f.local ? 'lexical' : 'sync';
+  if (miss === 'lexical') return 'the selector picks alone (lexical)';
+  if (miss === 'sync') return 'recall runs beside the Director instead (sync)';
+  return 'the selector picks alone on a local server, recall runs beside the Director on a remote one';
+}
+
+/** One line on what the mode does for this session. */
+function recallModeEffect(f: RecallModeFacts): string {
+  const sync = `recall (${f.model}) picks the entries the narrator needs beside the Director, before each reply`;
+  const prefetch = `recall (${f.model}) picks in the background after each answer, while you type; a reply waits for it at most ${f.graceSec} s, then ${onMissWords(f)}`;
+  // D-201: a manual lane (RP_CORE_LANE=manual) never prefetches; the mode acts as on_miss.
+  const manual = (local: boolean | null): string => `no prefetch: the lane is manual (RP_CORE_LANE), so compendium.recall.on_miss decides each reply: ${onMissWords({ ...f, local })}`;
+  switch (f.mode) {
+    case 'auto':
+      if (f.local === true) return f.lane === 'manual' ? `here: ${manual(true)}` : `here: prefetch (the recall model's server is local): ${prefetch}`;
+      if (f.local === false) return `here: sync (the recall model's server is not local): ${sync}`;
+      if (f.lane === 'manual') return `sync when the recall model's server is not local (${sync}); on a local one, ${manual(true)}`;
+      return `prefetch when the recall model's server is local, else sync: ${sync}`;
+    case 'sync':
+      return sync;
+    case 'prefetch':
+      return f.lane === 'manual' ? manual(f.local) : prefetch;
+    case 'lexical':
+      return 'no recall call: the selector picks the entries named in the conversation and those the recent messages bring up';
+    case 'off':
+      return 'recall is off: no recall call, the selector alone fills the Compendium block';
+  }
+}
+
+/** /memory mode (D-206): the session's recall mode, where it comes from, and what it does here. */
+export function recallModeText(f: RecallModeFacts): string {
+  const from =
+    f.from === 'session'
+      ? "this session's compendium.recall.mode"
+      : f.from === 'set'
+        ? 'set for this session, from the next reply'
+        : f.from === 'env'
+          ? 'RP_CORE_RECALL'
+          : f.from === 'script'
+            ? 'the --provider script tags no line "agent": "recall"'
+            : 'the default';
+  return [`recall mode: ${f.mode} (${from})`, `  ${recallModeEffect(f)}`].join('\n');
 }

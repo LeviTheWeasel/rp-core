@@ -11,7 +11,7 @@ import type { TreeNode } from '../agents/compendium/tree.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg, Provider, ProviderError, ToolSpec } from '../providers/types.ts';
-import type { DeepPartial, SessionConfig, SessionHeader, Trace, TurnKind } from '../session/entries.ts';
+import type { DeepPartial, RecallRecord, SessionConfig, SessionHeader, Trace, TurnKind } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import type { Event, Notice } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
@@ -211,6 +211,17 @@ export interface MemoryStatus {
    * `message`: the same in words (a sentence). Absent when nothing stops the lane.
    */
   blocked?: { agent: 'filing' | 'historian' | 'both'; reason: 'no_route' | 'paused'; message: string };
+  /**
+   * M5c (.notes/m5c-decisions.md D-202, the lead's ruling H): the recall prefetch for the next reply. It
+   * is a lane slot, not a task: never in `queued` or `running`. Absent when none is wanted (a manual
+   * lane, the Compendium off or without a live typed entry, a recall mode that does not prefetch on this
+   * origin, a head that is neither an answer nor a player's message answering one). `on`: the answer it
+   * is computed after; `basis`: what a turn must match to adopt it (engine/recall.ts prefetchBasis).
+   * `queued`: owed, not begun (it starts after the running task, at background priority past the idle
+   * gate); `running`: begun (its call may still wait for a place on the server); `ready`: its record is
+   * held for the next reply on that basis (a `failed` record too: the turn then falls back per onMiss).
+   */
+  prefetch?: { basis: string; on: string; state: 'queued' | 'running' | 'ready'; record?: RecallRecord };
 }
 
 /** M5b (D-180): what memoryUndo, memoryRefile and memoryRetry did. */
@@ -490,12 +501,17 @@ export interface SessionHandle {
   /**
    * M5b (D-171, the lead's ruling I): until nothing is left to run, or until `timeoutMs` passed
    * (idle:false; a running task goes on). Manual mode runs the lane; auto mode only waits for it (the
-   * lane starts its tasks itself, after a turn, a fresh message's hold or a failure's wait). Allowed
-   * while a turn runs: nothing starts before the turn has settled. A timeout over 2^31 − 1 ms waits
-   * that long.
+   * lane starts its tasks itself, after a turn, a fresh message's hold or a failure's wait). M5c (the
+   * lead's rulings I and K): auto mode waits for the recall prefetch too — one queued or running is
+   * waited for to its end, one owed for the head until the lane begins it; idle is false while either
+   * is so (manual mode never prefetches). Allowed while a turn runs: nothing starts before the turn has
+   * settled. A timeout over 2^31 − 1 ms waits that long.
    */
   memoryWait(input?: { timeoutMs?: number }): Promise<MemoryStatus & { idle: boolean }>;
-  /** M5b (D-180): the lane's queue, running task, parked keys, backlog and what blocks it (ruling K). Read-only. */
+  /**
+   * M5b (D-180): the lane's queue, running task, parked keys, backlog and what blocks it (ruling K); M5c
+   * (ruling H): the recall prefetch for the next reply (`prefetch`). Read-only. memoryWait's result has it too.
+   */
   memoryStatus(): MemoryStatus;
 
   /**

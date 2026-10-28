@@ -226,7 +226,8 @@ key_env = "OPENROUTER_API_KEY"
 # A session keeps its own copy; /model changes it there. A binding is "<connection>:<model>",
 # split at the first ":", so "ollama:qwen3:14b" is model "qwen3:14b" on connection "ollama".
 # director, recorder and recall may say "narrator" instead (they then follow the narrator, even
-# after /model); recall may also say "recorder". A role that is not set is "narrator".
+# after /model); recall may also say "recorder". A director or recorder that is not set is
+# "narrator"; a recall that is not set is "recorder" (which follows the narrator while it is unset).
 [roles]
 narrator = "ollama:qwen3:14b"    # change this to a model you have
 # narrator_fallback = "openrouter:vendor/model"

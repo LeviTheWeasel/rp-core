@@ -13,6 +13,7 @@
 
 import { ENTRY_TYPES, type EntryType } from '../agents/compendium/types.ts';
 import { ConfigError, splitBinding } from '../config/config.ts';
+import type { RecallMode } from '../engine/recall.ts';
 
 export type RoleName = 'narrator' | 'director' | 'recorder' | 'recall';
 export const ROLE_NAMES: readonly RoleName[] = ['narrator', 'director', 'recorder', 'recall'];
@@ -93,8 +94,17 @@ export type Command =
   | { name: 'memory'; action: 'retry'; at?: MessageAt }
   /** /memory wait [sec]: until the background lane has nothing left to run (or `sec` passed; at most 24 h). */
   | { name: 'memory'; action: 'wait'; sec?: number }
-  /** /memory status: the lane's running task, queue, parked tasks and backlog. */
+  /** /memory status: the lane's running task, queue, parked tasks and backlog; M5c: the recall prefetch. */
   | { name: 'memory'; action: 'status' }
+  /**
+   * M5c (D-206): what recall did for an answer (its RecallRecord) — the last answer on the path, or the
+   * one `at` names (5, #5 or its id; `--turn <id>` too): source, status, picks, reasons, counts, calls, time.
+   */
+  | { name: 'memory'; action: 'recall'; at?: MessageAt }
+  /** M5c (D-206): the Compendium profile each agent runs (the block, recall, filing, the historian) and why. */
+  | { name: 'memory'; action: 'profile' }
+  /** M5c (D-206): bare /memory mode shows how recall runs; with a mode it sets compendium.recall.mode of this session. */
+  | { name: 'memory'; action: 'mode'; mode?: RecallMode }
   /** /search <query> [before=<n>] (§7.5): the narrator's search_history over this path. */
   | { name: 'search'; query: string; before?: number }
   /** M4 (D-113): /director (= show), /director show|on|off. */
@@ -157,7 +167,11 @@ export function commandClass(c: Command): CommandClass {
       // Rows are written to the journal: refused mid-turn like any other edit (session_busy); an
       // export writes no row but is refused mid-turn too (D-159: one rule for every memory verb).
       // /memory wait only waits for the background lane (allowed during a turn: it runs after the answer).
-      return c.action === 'list' || c.action === 'show' || c.action === 'tree' || c.action === 'status' || c.action === 'wait' ? 'read' : 'edit';
+      // M5c: recall, profile and a bare mode only print; /memory mode <m> changes the config.
+      if (c.action === 'mode') return c.mode === undefined ? 'read' : 'edit';
+      return c.action === 'list' || c.action === 'show' || c.action === 'tree' || c.action === 'status' || c.action === 'wait' || c.action === 'recall' || c.action === 'profile'
+        ? 'read'
+        : 'edit';
     case 'director':
       return c.action === 'show' ? 'read' : 'edit';
     default:
@@ -171,12 +185,11 @@ const LATER: Readonly<Record<string, string>> = {
   impersonate: 'M9 (draft)',
 };
 
-/** §7.4.9 /memory subcommands of the Compendium's later part: recall (M5c). */
-const MEMORY_LATER: Readonly<Record<string, string>> = {
-  recall: 'M5c (recall)',
-  profile: 'M5c (recall)',
-  mode: 'M5c (recall)',
-};
+/** §7.4.9 /memory subcommands of a later milestone: none since M5c (recall, profile and mode arrived; D-206). */
+const MEMORY_LATER: Readonly<Record<string, string>> = {};
+
+/** M5c (D-201): the recall modes /memory mode takes, in the order its usage names them. */
+export const RECALL_MODES: readonly RecallMode[] = ['auto', 'sync', 'prefetch', 'lexical', 'off'];
 
 /** Default author's note depth (SillyTavern's default). */
 export const DEFAULT_NOTE_DEPTH = 4;
@@ -340,7 +353,7 @@ const ADD_USAGE = '/memory add <title> | <keys> | <text>, e.g. /memory add Broth
 const EDIT_USAGE = '/memory edit <ref> opens an entry in the editor; a note also takes <ref> <title> | <keys> | <text> (an empty part keeps the old value)';
 const REF_HINT = 'its C<n> as /memory lists it, its key, or its name';
 const EXPORT_USAGE = '/memory export <name> [--format core|compendium] [--force]';
-const SUBCOMMANDS = 'list, show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status';
+const SUBCOMMANDS = 'list, show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status, recall, profile, mode';
 const AT_HINT = 'its number as /show prints it (5 or #5) or its id';
 /** /memory wait waits at most this many seconds (24 h): a longer timer would overflow and fire at once. */
 export const MEMORY_WAIT_MAX_SEC = 86_400;
@@ -469,7 +482,10 @@ function parseMemoryPass(sub: 'undo' | 'refile', arg: string): ParsedLine {
   return { kind: 'command', command: { name: 'memory', action: sub, at, task } };
 }
 
-/** /memory [list|show|tree|new|add|edit|retire|restore|export|on|off|undo|refile|retry|wait|status] (D-161, D-181); recall's are 'later'. */
+/**
+ * /memory [list|show|tree|new|add|edit|retire|restore|export|on|off|undo|refile|retry|wait|status] (D-161,
+ * D-181) and M5c's recall, profile and mode (D-206).
+ */
 function parseMemory(rest: string): ParsedLine {
   const m = /^(\S+)\s*([\s\S]*)$/.exec(rest);
   const sub = m ? m[1]!.toLowerCase() : '';
@@ -553,12 +569,46 @@ function parseMemory(rest: string): ParsedLine {
     case 'status':
       if (arg !== '') return err('/memory status takes nothing after it');
       return cmd({ name: 'memory', action: 'status' });
+    case 'recall':
+      return parseMemoryRecall(arg);
+    case 'profile':
+      if (arg !== '') return err('/memory profile takes nothing after it (it shows the profile of every Compendium agent)');
+      return cmd({ name: 'memory', action: 'profile' });
+    case 'mode': {
+      if (arg === '') return cmd({ name: 'memory', action: 'mode' });
+      const mode = RECALL_MODES.find((x) => x === arg.toLowerCase());
+      if (mode === undefined) return err(`/memory mode takes ${RECALL_MODES.slice(0, -1).join(', ')} or off (got "${arg}"); bare /memory mode shows how recall runs now`);
+      return cmd({ name: 'memory', action: 'mode', mode });
+    }
     default: {
       const when = Object.hasOwn(MEMORY_LATER, sub) ? MEMORY_LATER[sub] : undefined;
       if (when !== undefined) return cmd({ name: 'later', command: `memory ${sub}`, when });
       return err(`/memory: "${m![1]}" is not a subcommand; /memory lists the Compendium, then ${SUBCOMMANDS.split(', ').slice(1).join(', ')}`);
     }
   }
+}
+
+/** /memory recall [--turn <#n|id>] (D-206; also a bare 5, #5 or id): at most one answer. */
+function parseMemoryRecall(arg: string): ParsedLine {
+  const err = (message: string): ParsedLine => ({ kind: 'error', message });
+  const usage = '/memory recall [--turn <#n|id>]';
+  const words = arg === '' ? [] : arg.split(/\s+/);
+  let at: MessageAt | undefined;
+  for (let i = 0; i < words.length; i++) {
+    let w = words[i]!;
+    if (w === '--turn') {
+      const next = words[++i];
+      if (next === undefined) return err(`/memory recall --turn needs an answer: ${AT_HINT} (${usage})`);
+      w = next;
+    } else if (w.startsWith('--')) {
+      return err(`/memory recall: unknown flag ${w} (${usage})`);
+    }
+    const one = messageAt(w);
+    if (one === null) return err(`/memory recall: "${w}" is not a message (${AT_HINT})`);
+    if (at !== undefined) return err(`/memory recall takes one answer (${usage}); bare /memory recall shows the last one`);
+    at = one;
+  }
+  return { kind: 'command', command: at === undefined ? { name: 'memory', action: 'recall' } : { name: 'memory', action: 'recall', at } };
 }
 
 /** /search <query> [before=<n>]: the cursor is the last word. */
@@ -670,7 +720,7 @@ export function resolveBindingArg(
   return { ok: true, value: parts };
 }
 
-/** /help text (the M5b set; later commands are listed with their milestone). */
+/** /help text (the M5c set). */
 export function helpText(): string {
   return [
     'Type to speak. Commands:',
@@ -687,7 +737,7 @@ export function helpText(): string {
     '  /note <text> [@depth], /note off   the author\'s note (default depth 4)',
     '  /think show|hide   show the model\'s reasoning or fold it to one line',
     '  /show              the story so far, numbered      /usage   tokens and cost of this path',
-    '  /trace             what the last answer\'s prompt held: the lore that fired, and why the rest did not; its tool rounds',
+    '  /trace             what the last answer\'s prompt held: the lore that fired, and why the rest did not; recall; its tool rounds',
     '  /search <words> [before=n]   find earlier messages on this path, newest first (what the narrator\'s search_history finds)',
     '  /memory [list] [type|note|arc] [--retired]   the Compendium of this path by bucket: C<n>, name, tagline, book, size',
     '  /memory show <ref>, /memory tree [book]   one entry and where it came from (ref: C<n>, its key or its name); the tree',
@@ -702,7 +752,10 @@ export function helpText(): string {
     '  /memory refile <ref|#n> [file|hist] file message n again (its new pass replaces the old one, an undo too)',
     '  /memory retry [#n]  run the parked tasks again (those that failed every attempt), or only message n\'s',
     '  /memory wait [sec]  wait until the Compendium\'s background work is done (at most sec seconds, up to 24 h)',
-    '  /memory status     the background work: what runs, what waits, what is parked, answers not filed yet',
+    '  /memory status     the background work: what runs, what waits, what is parked, answers not filed yet, the recall prefetch',
+    '  /memory recall [--turn #n|id]   what recall picked for the last answer (or answer n): picks, reasons, calls, time',
+    '  /memory profile    the Compendium profile (full or lite) of the block, recall, filing and the historian, and why',
+    '  /memory mode [auto|sync|prefetch|lexical|off]   how recall picks entries before a reply: show it, or change it',
     '  /director          the Story Director\'s plan: chapter, arcs, seeds, hidden arcs, the last directive',
     '  /director on|off   let the Director plan every reply, or stop it (its plan is kept)',
     '  /probe             how to probe a server; /probe --active [--write] tests the narrator\'s model (a few tiny calls)',
@@ -713,7 +766,6 @@ export function helpText(): string {
     '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',
-    'Later: /memory recall|profile|mode (M5c, recall).',
     'Start a line with // to send text that begins with "/".',
   ].join('\n');
 }

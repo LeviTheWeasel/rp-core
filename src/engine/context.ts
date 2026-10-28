@@ -42,6 +42,12 @@ export interface EngineCtx {
   /** EngineOptions.lane (M5b, D-171): whether the sessions' background lanes start tasks by themselves. */
   lane: 'auto' | 'manual';
   /**
+   * M5c (D-207, ruling G): the recall mode a session gets when its config sets none (RP_CORE_RECALL or
+   * EngineSeams.recall, read once by Engine.open); absent, 'auto'. A mode the session's config or
+   * `/memory mode` sets wins (engine/recall.ts recallModeOf).
+   */
+  recallDefault?: 'lexical' | 'off';
+  /**
    * M2: how every prompt of this engine is counted (assemble's budgets, trace.tokens, the EMA's
    * samples, D-50). defaultCounter() unless a test pins another (engine.ts EngineSeams).
    */

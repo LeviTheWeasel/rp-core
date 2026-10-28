@@ -7,10 +7,11 @@
 // (/usage), and the last answer's trace (/trace). Pure functions over (header, entries); repl.ts
 // reads the file with session/log.ts readSessionFile (read-only, no lock).
 
-import type { Entry, Generation, JobEntry, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
+import type { Entry, Generation, JobEntry, RecallRecord, Roles, SessionConfig, SessionHeader, Trace } from '../session/entries.ts';
 import { currentConfig } from '../session/fold.ts';
 import { buildTree, effectiveMessage, swipeSiblings, type TreeIndex } from '../session/tree.ts';
 import type { Usage } from '../providers/types.ts';
+import { checkRecallRecord } from '../agents/compendium/recall.ts';
 
 export interface Journal {
   header: SessionHeader;
@@ -151,6 +152,10 @@ function addUsage(sum: UsageCounts, u: Usage | undefined, model: string | undefi
  * M5b (the lead's ruling I): the background lane's calls too — the `calls` rows of the filing and
  * historian rows (`mem`) and of their failed attempts (`job{failed}`) bound to a message on the path,
  * an undone or re-run pass's included (its calls were made).
+ * M5c (D-204): recall — a sync recall's calls are trace.calls rows (agent 'recall', counted above); an
+ * adopted prefetch's are not (the lane made them, no row holds them), so its RecallRecord counts them:
+ * `calls` model calls with the summed `usage`, priced by its `model`. A reused record has none; a
+ * prefetch never adopted is in no journal row and is not counted (like a superseded lane pass).
  */
 export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceTable): UsageSummary {
   const sum: UsageSummary = zeroCounts();
@@ -170,14 +175,28 @@ export function pathUsage(j: Journal, pathIds: readonly string[], prices: PriceT
     }
   };
   const addCalls = (trace: Trace | undefined): void => addRows(trace?.calls);
+  /** M5c: an adopted prefetch's calls (its record has a basis: they are in no trace.calls row). */
+  const addPrefetch = (stored: unknown): void => {
+    const rec = checkRecallRecord(stored);
+    if (rec === null || rec.basis === undefined || rec.source === 'reused' || rec.calls === 0) return;
+    let into = agents.get('recall');
+    if (!into) agents.set('recall', (into = zeroCounts()));
+    const usage: Usage | undefined = rec.usage ? { inputTotal: rec.usage.input, outputTotal: rec.usage.output } : undefined;
+    addUsage(into, usage, rec.model, prices);
+    // The record sums its calls: the other calls count as calls, with their tokens already in.
+    into.calls += rec.calls - 1;
+    if (!usage) into.noUsage += rec.calls - 1;
+  };
   for (const id of pathIds) {
     const m = j.tree.msgs.get(id);
     add(m?.gen);
     addCalls(m?.trace);
+    addPrefetch(m?.recall);
     for (const e of j.tree.edits.get(id) ?? []) {
       if (e.reason !== 'continue') continue;
       add(e.gen);
       addCalls(e.trace);
+      addPrefetch(e.recall);
     }
   }
   const onPath = new Set(pathIds);
@@ -202,6 +221,23 @@ export function latestTrace(j: Journal, id: string): { trace: Trace; gen?: Gener
   }
   if (!m.trace) return null;
   return m.gen ? { trace: m.trace, gen: m.gen, continued: false } : { trace: m.trace, continued: false };
+}
+
+/**
+ * The RecallRecord of the request latestTrace shows (the lead's ruling K): its latest continue's when that
+ * continue has a trace, else the message's own. null when that request wrote none (a continue in lexical
+ * or off mode, a request with no Compendium input): its trace's compendium source says why. Not
+ * effectiveRecall, which falls back to an older request's record (/memory recall's answer-wide view).
+ */
+export function traceRecall(j: Journal, id: string): RecallRecord | null {
+  const m = j.tree.msgs.get(id);
+  if (!m) return null;
+  const edits = j.tree.edits.get(id) ?? [];
+  for (let i = edits.length - 1; i >= 0; i--) {
+    const e = edits[i]!;
+    if (e.reason === 'continue' && e.trace) return e.recall === undefined ? null : checkRecallRecord(e.recall);
+  }
+  return m.trace && m.recall !== undefined ? checkRecallRecord(m.recall) : null;
 }
 
 /**

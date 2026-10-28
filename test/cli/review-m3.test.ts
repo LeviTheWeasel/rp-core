@@ -121,7 +121,8 @@ describe('a script caps line checks its values', () => {
 });
 
 describe('README examples are what rp-core prints', () => {
-  const README = readFileSync(join(import.meta.dir, '../../README.md'), 'utf8');
+  // The long README became docs/USER-GUIDE.md (e336dba); its examples are pinned there.
+  const README = readFileSync(join(import.meta.dir, '../../docs/USER-GUIDE.md'), 'utf8');
   /** The fenced block right after the line `rp-core probe "<target>" --active` block. */
   const activeExample = (): string[] => {
     const at = README.indexOf('rp-core probe "ollama:magmell-16k:latest" --active\n```\n\n```\n');

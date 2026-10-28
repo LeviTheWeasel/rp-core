@@ -88,6 +88,8 @@ export interface AgentBlock {
   ms?: number;
   /** The last memory change this agent made. */
   memory?: string;
+  /** M5c: the block was set by the background lane (recall's prefetch); filing and the historian always are. */
+  lane?: true;
 }
 
 export interface UsageTotals {
@@ -173,25 +175,35 @@ export function statsOf(id: string, gen: MessageView['gen'], trace?: { rounds?: 
 const cancelRunning = (tools: ToolCall[], turnId: string): ToolCall[] =>
   tools.some((t) => t.turnId === turnId && t.status === 'running') ? tools.map((t) => (t.turnId === turnId && t.status === 'running' ? { ...t, status: 'cancelled' } : t)) : tools;
 
-/** The agent a callKey names: `${turnId}:narrator:0`, `${turnId}:director:1`; the lane's `${job}:filing:0`. */
+/**
+ * The agent a callKey names: `${turnId}:narrator:0`, `${turnId}:director:1`; the lane's `${job}:filing:0`
+ * and (M5c) a recall prefetch's `p_${head}:recall:0`.
+ */
 const agentOfKey = (callKey: string): string => callKey.split(':')[1] ?? 'narrator';
 
 const isLaneAgent = (agent: string): boolean => agent === 'filing' || agent === 'historian';
 
+/** M5c (D-202): a recall prefetch's call (`p_<head>:recall:N`, `…:recall:more:N`): the lane's, never a turn's. */
+const isPrefetchKey = (callKey: string): boolean => callKey.startsWith('p_');
+
+/** A block of the lane: filing's, the historian's, or recall's while the prefetch set it. */
+const isLaneBlock = (b: AgentBlock): boolean => isLaneAgent(b.agent) || b.lane === true;
+
 /**
- * M5b (D-181): an event of the session's background lane (filing, the historian): its agent events (no
- * turn), the memory changes its passes made, its calls' retries and usage (ruling I: the usage block
- * counts them), its idle{background} count. Never part of a turn's stream: the host hands them to the
- * pane from the engine's bus, a turn streaming or not.
+ * M5b (D-181): an event of the session's background lane (filing, the historian; M5c: the recall
+ * prefetch): its agent events (no turn), the memory changes its passes made, its calls' retries and
+ * usage (ruling I: the usage block counts them), its idle{background} count. Never part of a turn's
+ * stream: the host hands them to the pane from the engine's bus, a turn streaming or not. A prefetch's
+ * usage is left out: it counts once a reply adopts it, through the answer's record (as /usage counts it).
  */
 export function isLaneEvent(ev: Event): boolean {
   switch (ev.type) {
     case 'agent':
-      return ev.turnId === undefined && isLaneAgent(ev.agent);
+      return ev.turnId === undefined && (isLaneAgent(ev.agent) || ev.agent === 'recall');
     case 'memory':
       return isLaneAgent(ev.by);
     case 'retry':
-      return isLaneAgent(agentOfKey(ev.callKey));
+      return isLaneAgent(agentOfKey(ev.callKey)) || isPrefetchKey(ev.callKey);
     case 'usage':
       return isLaneAgent(ev.agent);
     case 'idle':
@@ -207,11 +219,22 @@ const LANE_BUSY: ReadonlySet<string> = new Set(['queued', 'started', 'retry']);
 /**
  * The background lane as memoryStatus() says it now, into the blocks (a session the pane starts showing:
  * the lane's events at its open came before the pane): the running pass `started` (`queued` while it
- * waits for a place on the server), else a queued one `queued`, else a parked one `parked [code]`.
- * Those start at `now`.
+ * waits for a place on the server), else a queued one `queued`, else a parked one `parked [code]`; M5c:
+ * the recall prefetch `queued`, `started` or its end (`done (n)`, `failed [code]`). Those start at `now`.
  */
 export function withLane(s: AgentsState, lane: MemoryStatus, now: Date): AgentsState {
   let others = s.others;
+  const pre = lane.prefetch;
+  if (pre !== undefined) {
+    const rec = pre.record;
+    const block: AgentBlock =
+      pre.state !== 'ready'
+        ? { agent: 'recall', status: pre.state === 'running' ? 'started' : 'queued', source: 'prefetch', startedMs: now.getTime(), lane: true }
+        : rec?.status === 'failed' || rec?.status === 'skipped'
+          ? { agent: 'recall', status: rec.status, ...(rec.code !== undefined ? { code: rec.code } : {}), source: 'prefetch', lane: true }
+          : { agent: 'recall', status: 'done', count: rec?.picks.length ?? 0, source: 'prefetch', lane: true };
+    others = upsertAgent(others, 'recall', () => block);
+  }
   for (const [task, agent] of [
     ['file', 'filing'],
     ['hist', 'historian'],
@@ -313,6 +336,8 @@ export function reduceAgents(s: AgentsState, ev: Event, now: Date): AgentsState 
       const at = msOf(ev, now);
       // M5b: the lane queues the next pass while one runs; the running one keeps its block (status, start).
       if (ev.status === 'queued' && s.others.some((b) => b.agent === ev.agent && b.status === 'started')) return s;
+      // M5c: the recall prefetch (no turn) says `prefetch` whatever its status, and is the lane's block.
+      const prefetch = ev.agent === 'recall' && ev.turnId === undefined;
       return {
         ...s,
         others: upsertAgent(s.others, ev.agent, (b) => {
@@ -322,6 +347,8 @@ export function reduceAgents(s: AgentsState, ev: Event, now: Date): AgentsState 
           if (ev.count !== undefined) next.count = ev.count;
           if (ev.code !== undefined) next.code = ev.code;
           if (ev.source !== undefined) next.source = ev.source;
+          else if (prefetch) next.source = 'prefetch';
+          if (prefetch) next.lane = true;
           if (ev.reason !== undefined) next.reason = ev.reason;
           if (ev.status === 'queued' || ev.status === 'started') next.startedMs = b.status === 'queued' && b.startedMs !== undefined ? b.startedMs : at;
           else if (FINAL_AGENT_STATUSES.has(ev.status) && b.startedMs !== undefined) next.ms = Math.max(0, at - b.startedMs);
@@ -335,8 +362,9 @@ export function reduceAgents(s: AgentsState, ev: Event, now: Date): AgentsState 
     case 'idle': {
       // Nothing queued or running in the lane: a block still saying so missed its pass's end (a pass
       // dropped from the queue by /memory off, a run cut short with nothing to tell).
-      if (ev.background !== 0 || !s.others.some((b) => isLaneAgent(b.agent) && b.status !== undefined && LANE_BUSY.has(b.status))) return s;
-      const others = s.others.map((b) => (isLaneAgent(b.agent) && b.status !== undefined && LANE_BUSY.has(b.status) ? { agent: b.agent, status: 'idle', ...(b.memory !== undefined ? { memory: b.memory } : {}) } : b));
+      const busy = (b: AgentBlock): boolean => isLaneBlock(b) && b.status !== undefined && LANE_BUSY.has(b.status);
+      if (ev.background !== 0 || !s.others.some(busy)) return s;
+      const others = s.others.map((b) => (busy(b) ? { agent: b.agent, status: 'idle', ...(b.memory !== undefined ? { memory: b.memory } : {}), ...(b.lane ? { lane: true as const } : {}) } : b));
       return { ...s, others };
     }
     case 'usage': {

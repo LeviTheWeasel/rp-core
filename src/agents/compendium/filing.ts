@@ -31,6 +31,9 @@
 // `book` is ignored; the answer may be an array or carry its items under entries/items; `{}` is
 // "nothing to file" (Bunraku: unreadable); a blank compendium.language ends the prompt's rules with
 // «Write every field value in the language the story is written in.» (D-183; Bunraku adds nothing).
+// M5c (D-208, a listed deviation: Bunraku sends no prefill): the call names its answer's opening,
+// `{"filings": [`, which structuredCall sends as an assistant prefill on the tagged transport when the
+// recorder's caps take one.
 
 import type { ReadResult, Skip } from '../director/types.ts';
 import { MESSAGE_OVERHEAD_TOKENS } from '../../prompt/tokens.ts';
@@ -87,6 +90,8 @@ export const LITE_SHARE = 0.45;
 export const ROSTER_LINES = 60;
 export const ROSTER_BRIEFS = 4;
 export const FILING_TEMPERATURE = 0.3;
+/** D-208: the opening of the answer, sent as an assistant prefill where the caps take one (structuredCall `opening`). */
+export const FILING_OPENING = '{"filings": [';
 /** Below this many tokens left for the answer the call is not made (structured.ts AGENT_OUTPUT_FLOOR). */
 export const FILING_OUTPUT_FLOOR = 600;
 /** Bookkeeping fields a model may copy from what it was shown; the fold and the export own them (D-175). */
@@ -554,6 +559,8 @@ export interface FilingCall {
   maxTokens: number;
   temperature: number;
   schema: { name: string; schema: JSONSchema };
+  /** D-208: FILING_OPENING, structuredCall's `opening`. */
+  opening: string;
   /** After the full → lite fallback. */
   profile: CompendiumProfile;
   /** The request's estimate: system + user + per-message overhead. */
@@ -681,6 +688,7 @@ export function filingRequest(input: FilingRequestInput): FilingRequest {
       maxTokens,
       temperature: FILING_TEMPERATURE,
       schema: FILING_SCHEMA,
+      opening: FILING_OPENING,
       profile,
       tokens,
       ...(fellBack ? { fellBack: true as const } : {}),

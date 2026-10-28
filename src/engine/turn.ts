@@ -65,18 +65,40 @@
 // only when the bound does not fit); when it cannot (most often context_length_exceeded: the
 // never-trimmed part is larger than the narrator's window) the turn ends there, with the refusal it
 // would get after the plan, before any Director call. A turn that fits plans as before.
+//
+// M5c (.notes/m5c-decisions.md D-201…D-204, rulings G): recall. After the D-195 fit check (which now
+// also guards a turn whose recall may call a model) the turn decides recall's part: none while the
+// Compendium is off or holds no live typed entry (the M5a request, no record); the mode (recall.ts
+// recallModeOf: off, lexical, sync, prefetch, auto = prefetch on a local recall origin, else sync); a
+// swipe (onSwipe 'reuse', no guidance) or a continue reuses the answered message's record when it
+// recalled; a guided re-roll or an onSwipe 'rerun' swipe recalls again in the turn (sync), never adopting
+// a prefetch (ruling K); a sync recall runs beside the Director (Promise.allSettled; on one place of one
+// origin the Director's request is queued first, sched.ts ordered); a prefetch the lane holds for this
+// basis (recall.ts basisHead: the newest answer before U) is adopted, one still running (queued or in
+// flight) is promoted and waited for at most graceSec (the Director runs meanwhile, unless it shares a
+// local origin's single place with it: then after the wait), and a wait that ends without a selection
+// falls back per onMiss (lexical: a `prefetch_missed` record, or sync) and is told once; a stored failed
+// prefetch falls back with its own record and nothing told, and a basis nothing was held for falls back
+// with no record (nothing was waited for, so nothing was missed). A Stop ends the wait (the prefetch runs
+// on at background). A manual lane never prefetches: the mode then behaves as onMiss. The picks reach the request as the
+// selector's tier 1 in recall's order with trace.compendium.source; the RecallRecord rides `prep` and
+// the commit (an edit's too); its calls go to trace.calls after the Director's and to CALL_CEILING;
+// trace.agents.recall says done/reused/skipped/failed. Notices: recall_index_truncated,
+// prefetch_missed, recall_slow (D-204), each once per session.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveCompendium } from '../agents/compendium/profile.ts';
+import { missedRecord, recallPicks, reusedRecord, skippedRecord } from '../agents/compendium/recall.ts';
 import { worldSnapshot } from '../agents/compendium/world.ts';
 import { directiveInsert, runDirector, type DirectorAgentRow } from '../agents/director/call.ts';
 import { checkRecord } from '../agents/director/state.ts';
 import type { DirectorRecord } from '../agents/director/types.ts';
-import type { AgentCallEnv, TraceCall } from '../agents/structured.ts';
+import { STRUCTURED_REFUSED_KEY, structuredRefusedMessage, type AgentCallEnv, type TraceCall } from '../agents/structured.ts';
 import { abortableDelay, abortWith, childController, type AbortReason } from './abort.ts';
 import type { TurnOutcome } from './api.ts';
 import { resolveDirector, type AdmittedTurn, type Route } from './admit.ts';
+import type { Connection } from './api.ts';
 import { EventQueue, singleConsumer } from './bus.ts';
 import { Checkpointer } from './checkpoint.ts';
 import { messageViewOf, placeCommit, type Journal, type Placed } from './commit.ts';
@@ -93,20 +115,44 @@ import {
   type AssembledOk,
   type BuiltRequest,
   type KeyedNotice,
+  liveTyped,
+  type RecallInput,
   type ReplyLimits,
   type RequestInput,
   type SessionLibrary,
   type Shaped,
   startView,
 } from './request.ts';
+import {
+  basisHead,
+  capacityOf,
+  effectiveRecall,
+  missedNotice,
+  onMissOf,
+  prefetchBasis,
+  RECALL_INDEX_TRUNCATED,
+  RECALL_SLOW,
+  RECALL_SLOW_AFTER,
+  RECALL_SLOW_MS,
+  recallAgentRow,
+  recallEvent,
+  recallSetup,
+  runRecall,
+  slowNotice,
+  truncatedNotice,
+  PREFETCH_MISSED,
+  type RecallHow,
+  type RecallSetup,
+} from './recall.ts';
 import { isRetryable, modelLabel, retryDelayMs } from './route.ts';
+import { ordered, type Scheduler } from './sched.ts';
 import { traceForSent } from '../prompt/assemble.ts';
 import { continuationResult } from '../prompt/shape.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import type { Event, EventBody, Notice } from '../protocol/events.ts';
 import { stripToolCallLeaks } from '../tools/leaks.ts';
 import type { FinishReason, ModelRequest, ProviderError, Usage } from '../providers/types.ts';
-import type { Block, Generation, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
+import type { Block, Generation, RecallRecord, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
 import { SessionLockedError, sessionsDir } from '../session/log.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 
@@ -130,7 +176,44 @@ export interface TurnHost extends Journal {
   turnSettled?(run: TurnRun): void;
   /** M5a (D-141): the session's books and the Compendium's seed view() was folded with. */
   library(): SessionLibrary;
+  /**
+   * M5c (D-202): what the session's lane holds for a prefetch basis (recall.ts prefetchBasis): its
+   * stored record, or the run still queued or in flight; null when it holds neither. Absent: no lane.
+   */
+  prefetchFor?(basis: string): PrefetchLook | null;
+  /** M5c (D-204): a session-level tally (recall_slow): adds one under `key` and returns the new count. */
+  tally?(key: string): number;
 }
+
+/** M5c (D-202, D-203): a prefetch run the turn may wait for (lane.ts). */
+export interface RunningPrefetch {
+  /** Its record, or null when it ends without one (superseded, preempted, shut down). */
+  done: Promise<RecallRecord | null>;
+  /** Interactive and never preempted while the turn waits (sched.ts boost). */
+  promote(): void;
+  /** Back to background (a Stop: it runs on for the next turn). */
+  demote(): void;
+  /** Aborted as superseded (it came too late). */
+  supersede(): void;
+}
+
+/** M5c: what the lane holds for one prefetch basis. */
+export interface PrefetchLook {
+  record?: RecallRecord;
+  running?: RunningPrefetch;
+}
+
+/**
+ * M5c (D-201…D-203): recall's part of a turn, decided before any call. `none`: the Compendium is off or
+ * has no live typed entry (the M5a request, nothing recorded). `set`: decided without a call (off,
+ * lexical, a reuse, a stored prefetch, a skip, a miss to lexical). `sync`: a recall call beside the
+ * Director. `wait`: a prefetch still running, promoted and waited for.
+ */
+type RecallPlan =
+  | { kind: 'none' }
+  | { kind: 'set'; input: RecallInput; record?: RecallRecord; how?: RecallHow }
+  | { kind: 'sync'; setup: RecallSetup; route: Route }
+  | { kind: 'wait'; setup: RecallSetup; route: Route; look: RunningPrefetch; onMiss: 'lexical' | 'sync'; head: string };
 
 /** D-164: where a session's kept requests go. */
 export function requestsDir(home: string, sessionId: string): string {
@@ -247,6 +330,16 @@ export class TurnRun {
   private dirView: PathView | undefined;
   /** M5a: the session's books for this turn (read once, at the start). */
   private lib: SessionLibrary | undefined;
+  /** M5c: recall's plan for this turn (body decides it after the hook, before the fit check). */
+  private recallPlan: RecallPlan = { kind: 'none' };
+  /** M5c (D-200): the turn's RecallRecord (prep and the commit), when recall ran, was reused or a prefetch missed. */
+  private recallRec: RecallRecord | undefined;
+  /** M5c: the sync recall's model calls (trace.calls after the Director's; they count toward CALL_CEILING). */
+  private recallCalls: TraceCall[] = [];
+  /** M5c: trace.agents.recall; undefined without a record. */
+  private recallAgent: Trace['agents'][string] | undefined;
+  /** M5c (D-203): the request's tier 1 and trace.compendium.source; undefined: the M5a request. */
+  private recallInput: RecallInput | undefined;
   /** D-164: keeps each provider request when EngineOptions.keepRequests is on. */
   private readonly keep: ((req: ModelRequest) => void) | undefined;
 
@@ -325,17 +418,22 @@ export class TurnRun {
     const { plan } = this;
     const hooked = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx);
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
-    // D-195 (ux#2): a request that cannot be built is refused before the Director's model calls.
-    if (this.plans()) {
-      this.dirView = startView(this.host.header(), this.host.tree(), this.host.view(), plan.upTo, this.library().seed);
+    // M5c (D-201…D-203): recall's part, decided before any call (nothing is told or written yet).
+    this.recallPlan = this.decideRecall();
+    const recalls = this.recallPlan.kind === 'sync' || this.recallPlan.kind === 'wait';
+    // D-195 (ux#2): a request that cannot be built is refused before the Director's model calls, and
+    // (M5c) before recall's: no recall call, no prefetch waited for.
+    if (this.plans() || recalls) {
+      this.dirView ??= startView(this.host.header(), this.host.tree(), this.host.view(), plan.upTo, this.library().seed);
       const refused = this.cannotFit(hooked);
       if (refused) {
         this.keyedNotices(refused.notices);
         return this.failEarly('request', refused.code, refused.message);
       }
     }
-    // Step 3 (M4): the Director plans before assemble; a Stop meanwhile ends the turn like one above.
-    const directed = await this.direct();
+    // Step 3 (M4): the Director plans before assemble, and (M5c) recall picks beside it; a Stop
+    // meanwhile ends the turn like one above.
+    const directed = await this.agents();
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
     const placements = directed.length > 0 ? [...hooked, ...directed] : hooked;
 
@@ -354,7 +452,8 @@ export class TurnRun {
       t: 'prep',
       turn: this.entry.turn,
       ...(this.dir ? { dir: this.dir } : {}),
-      trace: this.withDirector(this.sentTrace(asm, shaped, built.tools)),
+      ...(this.recallRec ? { recall: this.recallRec } : {}),
+      trace: this.withAgents(this.sentTrace(asm, shaped, built.tools)),
       // Recovery has nothing else to name the model of an interrupted answer by.
       model: { connection: primary.conn.id, model: primary.model },
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
@@ -434,6 +533,7 @@ export class TurnRun {
       counter: this.ctx.counter,
       placements,
       ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
+      ...(this.recallInput ? { recall: this.recallInput } : {}),
     };
   }
 
@@ -456,12 +556,235 @@ export class TurnRun {
     return this.plan.config.director?.enabled === true && this.plan.kind !== 'continue';
   }
 
+  // ---- M5c: recall (D-201…D-204) --------------------------------------------------------------------
+
+  /** The view the request (and the Director, and recall) reads: folded at U on a swipe (request.ts startView). */
+  private turnView(): PathView {
+    return (this.dirView ??= startView(this.host.header(), this.host.tree(), this.host.view(), this.plan.upTo, this.library().seed));
+  }
+
+  /**
+   * D-201…D-203: recall's part of this turn, decided before any call and without telling anything
+   * (the fit check may still refuse the turn). Order: the Compendium and its live typed entries; the
+   * mode (off, lexical); a swipe's or continue's reuse; the route; a re-roll's recall; sync, or the
+   * prefetch the lane holds for this turn's basis (the newest answer before U; a continue's target).
+   */
+  private decideRecall(): RecallPlan {
+    const { plan } = this;
+    const setup = recallSetup(this.ctx, plan.config);
+    if (setup === null) return { kind: 'none' };
+    const view = this.turnView();
+    if (liveTyped(view.compendium).length === 0) return { kind: 'none' };
+    if (setup.mode === 'off' || setup.mode === 'lexical') return { kind: 'set', input: { picks: [], source: setup.mode } };
+    const tree = this.host.tree();
+    // D-203: a swipe (onSwipe 'reuse', not a guided re-roll) or a continue reuses the answered message's
+    // record when it recalled; a failed, skipped or absent one runs per mode.
+    const swipeReuses = plan.kind === 'swipe' && setup.cfg.recall.onSwipe === 'reuse' && (plan.guidance === undefined || plan.guidance.trim() === '');
+    if ((swipeReuses || plan.kind === 'continue') && plan.target !== undefined) {
+      const reused = reusedRecord(effectiveRecall(tree, plan.target), plan.target);
+      if (reused !== null) return { kind: 'set', input: { picks: recallPicks(reused), source: 'reused' }, record: reused, how: 'reused' };
+    }
+    const route = setup.route;
+    if (route === null) {
+      const rec = skippedRecord({ profile: setup.profile, code: 'no_connection', model: setup.label });
+      return { kind: 'set', input: { picks: [], source: rec.source }, record: rec, how: 'sync' };
+    }
+    // D-203 and ruling K: a guided re-roll or an onSwipe 'rerun' swipe recalls again, in the turn, whatever
+    // the mode: the prefetch of its basis is the one the version it replaces read (it never saw U).
+    if (plan.kind === 'swipe' && !swipeReuses) return { kind: 'sync', setup, route };
+    const prefetching = setup.mode === 'prefetch' || (setup.mode === 'auto' && setup.local);
+    if (!prefetching) return { kind: 'sync', setup, route };
+    const onMiss = onMissOf(setup);
+    /** onMiss with nothing recorded and nothing told (no prefetch was waited for, so none was missed). */
+    const fallBack = (): RecallPlan => (onMiss === 'sync' ? { kind: 'sync', setup, route } : { kind: 'set', input: { picks: [], source: 'lexical' } });
+    // D-201: a manual lane (tests, a one-shot command) never prefetches: the mode behaves as onMiss.
+    if (this.ctx.lane !== 'auto' || this.host.prefetchFor === undefined) return fallBack();
+    // D-202 and ruling K: the prefetch was computed after the newest answer before U, the player's
+    // messages stacked under it skipped (a continue: after the target).
+    const head = plan.kind === 'continue' ? plan.upTo : basisHead(tree, tree.msgs.get(plan.upTo)?.parent ?? null);
+    const look = head === null ? null : this.host.prefetchFor(prefetchBasis(setup, view, tree, head));
+    const stored = look?.record;
+    if (stored !== undefined && stored.status !== 'failed') {
+      return { kind: 'set', input: { picks: recallPicks(stored), source: stored.source }, record: stored, how: 'adopted' };
+    }
+    if (look?.running !== undefined && head !== null) return { kind: 'wait', setup, route, look: look.running, onMiss, head };
+    // Ruling K: a prefetch that failed is a fallback with its own record (its code; its calls count in
+    // /usage) and nothing told; with onMiss sync the turn's recall replaces it.
+    if (stored !== undefined && onMiss === 'lexical') return { kind: 'set', input: { picks: [], source: stored.source }, record: stored, how: 'adopted' };
+    // Nothing held for the basis (no answer before U, a prefetch never begun, a session just opened).
+    return fallBack();
+  }
+
+  /** Step 3 with M5c: the Director's inserts, recall's part carried out beside it (D-203). */
+  private async agents(): Promise<DepthInsert[]> {
+    const r = this.recallPlan;
+    switch (r.kind) {
+      case 'none':
+        return this.direct();
+      case 'set':
+        this.recalled(r.input, r.record, r.how);
+        return this.direct();
+      case 'sync':
+        return this.alongside(r.setup, r.route);
+      case 'wait':
+        return this.graceWait(r);
+    }
+  }
+
+  /** The Director's route when it will call this turn (on, not a continue), else null. */
+  private directorRoute(): Route | null {
+    if (!this.plans()) return null;
+    return resolveDirector(this.ctx, this.plan.config, this.plan).route;
+  }
+
+  /**
+   * D-203 and ruling K: the Director calls this turn on recall's origin, and that origin has a single
+   * place (the smaller of the two routes' capacities, as their calls will ask for it). Only then do the
+   * two contend: the Director's request goes first, and a grace wait on a local origin holds it back.
+   */
+  private sharesOnePlace(route: Route): boolean {
+    const dir = this.directorRoute();
+    if (dir === null || dir.conn.origin !== route.conn.origin) return false;
+    return this.ctx.sched.forOrigin(route.conn.origin, Math.min(capacityOf(dir.caps), capacityOf(route.caps))).capacity === 1;
+  }
+
+  /**
+   * D-203: a sync recall beside the Director (Promise.allSettled). On one place of one origin the
+   * Director's request is queued first (sched.ts ordered: recall's waits until the Director's is queued,
+   * or until its work ends without a call); otherwise both ask at once (ruling K: two places, or two
+   * origins, never wait for the Director's work before its request, a key command say).
+   */
+  private async alongside(setup: RecallSetup, route: Route): Promise<DepthInsert[]> {
+    const order = this.sharesOnePlace(route) ? ordered(this.ctx.sched) : null;
+    const planned = this.direct(order?.first).finally(() => order?.open());
+    const recalled = this.syncRecall(setup, route, order?.second);
+    const [a, b] = await Promise.allSettled([planned, recalled]);
+    if (a.status === 'rejected') throw a.reason;
+    if (b.status === 'rejected') throw b.reason;
+    return a.value;
+  }
+
+  /**
+   * D-202/D-203: the prefetch for this basis is still queued or in flight: promoted (interactive, never
+   * preempted) and waited for at most graceSec — the Director meanwhile, unless it shares a local
+   * origin's single place with the prefetch (ruling K): then after the wait. In time: adopted. Late:
+   * superseded, a miss (onMiss), told. A failed record: a fallback, not told. A Stop ends the wait and
+   * demotes it: it runs on at background and serves the next reply to the same U.
+   */
+  private async graceWait(r: Extract<RecallPlan, { kind: 'wait' }>): Promise<DepthInsert[]> {
+    const { setup, route, look } = r;
+    look.promote();
+    const graceSec = setup.cfg.recall.graceSec;
+    const waited = this.waitFor(look.done, Math.round(graceSec * 1000));
+    /** What the wait came to: adopted or missed to lexical (done), a sync recall still owed, or a Stop. */
+    const after = async (): Promise<'done' | 'sync' | 'stopped'> => {
+      const got = await waited;
+      if (got === 'stopped') {
+        look.demote();
+        return 'stopped';
+      }
+      if (got === 'late') look.supersede();
+      const rec = got === 'late' ? null : got.rec;
+      if (rec !== null && rec.status !== 'failed') {
+        this.recalled({ picks: recallPicks(rec), source: rec.source }, rec, 'adopted');
+        return 'done';
+      }
+      if (rec === null) this.tellMissed(graceSec, got === 'late');
+      if (r.onMiss === 'sync') return 'sync';
+      const fallback = rec ?? missedRecord({ profile: setup.profile, basis: r.head });
+      this.recalled({ picks: [], source: fallback.source }, fallback, 'adopted');
+      return 'done';
+    };
+    const shared = this.sharesOnePlace(route);
+    if (setup.local && shared) {
+      const next = await after();
+      if (next === 'stopped') return [];
+      return next === 'sync' ? this.alongside(setup, route) : this.direct();
+    }
+    // The Director plans while the turn waits; a sync recall owed by a miss runs after the wait, its
+    // request behind the Director's on one place (ruling K, as alongside orders it).
+    const order = shared ? ordered(this.ctx.sched) : null;
+    const planned = this.direct(order?.first).finally(() => order?.open());
+    const recalled = (async (): Promise<void> => {
+      if ((await after()) === 'sync') await this.syncRecall(setup, route, order?.second);
+    })();
+    const [a, b] = await Promise.allSettled([planned, recalled]);
+    if (a.status === 'rejected') throw a.reason;
+    if (b.status === 'rejected') throw b.reason;
+    return a.value;
+  }
+
+  /** At most `ms` for a prefetch's record: {rec} (null: it ended without one), 'late', or 'stopped' (the turn's Stop). */
+  private async waitFor(done: Promise<RecallRecord | null>, ms: number): Promise<{ rec: RecallRecord | null } | 'late' | 'stopped'> {
+    const ctrl = childController(this.ctrl.signal);
+    try {
+      return await Promise.race([
+        done.then((rec) => ({ rec })),
+        abortableDelay(ms, ctrl.signal, this.ctx.timers).then(
+          () => 'late' as const,
+          () => (this.ctrl.signal.aborted ? ('stopped' as const) : ('late' as const)),
+        ),
+      ]);
+    } finally {
+      // The grace timer goes with the wait.
+      abortWith(ctrl, 'superseded');
+    }
+  }
+
+  /** D-203: recall in the turn, at interactive priority, on the fold the request reads; its record decides the request's tier 1. */
+  private async syncRecall(setup: RecallSetup, route: Route, sched?: Scheduler): Promise<void> {
+    const turnId = this.entry.turn;
+    const ctrl = childController(this.ctrl.signal);
+    const res = await runRecall({
+      setup,
+      route,
+      view: this.turnView(),
+      tree: this.host.tree(),
+      upTo: this.plan.upTo,
+      prefetch: false,
+      counter: this.ctx.counter,
+      env: this.agentEnv(route.conn, sched),
+      signal: ctrl.signal,
+      callKeyPrefix: `${turnId}:recall`,
+      priority: 'interactive',
+      onGrant: () => this.emit({ type: 'agent', agent: 'recall', turnId, status: 'started', source: 'sync' }),
+    });
+    this.recallCalls = res.calls;
+    if (res.truncated && this.host.firstNotice(RECALL_INDEX_TRUNCATED)) this.notice(truncatedNotice(res.omitted, setup.profile, setup.label));
+    if (res.refused && this.host.firstNotice(STRUCTURED_REFUSED_KEY)) {
+      this.notice({ level: 'warn', code: 'caps.suggest', message: structuredRefusedMessage(setup.label, 'recall') });
+    }
+    // D-204: recall_slow once per session, after RECALL_SLOW_AFTER sync recalls slower than RECALL_SLOW_MS.
+    const ms = res.record.ms ?? 0;
+    if (res.record.calls > 0 && ms > RECALL_SLOW_MS && this.host.tally !== undefined) {
+      const n = this.host.tally(RECALL_SLOW);
+      if (n >= RECALL_SLOW_AFTER && this.host.firstNotice(RECALL_SLOW)) this.notice(slowNotice(n, ms, setup.label));
+    }
+    // A Stop during the call: the turn ends stopped-empty and writes nothing (body checks the signal).
+    if (this.ctrl.signal.aborted) return;
+    this.recalled({ picks: recallPicks(res.record), source: res.record.source }, res.record, 'sync');
+  }
+
+  /** recall's part is settled: the request's tier 1 and source; with a record, prep/commit, trace.agents.recall and the event. */
+  private recalled(input: RecallInput, record?: RecallRecord, how?: RecallHow): void {
+    this.recallInput = input;
+    if (record === undefined) return;
+    this.recallRec = record;
+    this.recallAgent = recallAgentRow(record);
+    this.emit({ ...recallEvent(record, how ?? 'sync'), turnId: this.entry.turn });
+  }
+
+  /** D-204 and ruling K: the turn waited for a prefetch and went on without its selection (once per session). */
+  private tellMissed(graceSec: number, late: boolean): void {
+    if (this.host.firstNotice(PREFETCH_MISSED)) this.notice(missedNotice(graceSec, late));
+  }
+
   /**
    * Step 3 (M4, D-101 / D-104): the Director's inserts for this turn. Off: none, nothing recorded. A
    * continue never plans: the target's stored directive is sent again (trace status 'skipped'). Else
    * runDirector on the Director's route (no route → a no_connection record, never a refusal).
    */
-  private async direct(): Promise<DepthInsert[]> {
+  private async direct(sched: Scheduler = this.ctx.sched): Promise<DepthInsert[]> {
     const { plan } = this;
     if (plan.config.director?.enabled !== true) return [];
     const tree = this.host.tree();
@@ -475,19 +798,7 @@ export class TurnRun {
     const turnId = this.entry.turn;
     const ctrl = childController(this.ctrl.signal);
     const persona = header.cast.persona;
-    const env: AgentCallEnv = {
-      sched: this.ctx.sched,
-      fetch: this.ctx.fetch,
-      timeouts: timeoutsFor(route?.conn ?? plan.primary.conn, this.ctx.timeouts),
-      timers: this.ctx.timers,
-      clock: this.ctx.clock,
-      random: this.ctx.random,
-      ...(this.ctx.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: this.ctx.retryMaxDelayMs } : {}),
-      ...(this.ctx.prices ? { prices: this.ctx.prices } : {}),
-      emit: (ev) => this.emit(ev),
-      onProviderError: (info) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, turnId, ...info }),
-      ...(this.keep ? { keepRequest: this.keep } : {}),
-    };
+    const env = this.agentEnv(route?.conn ?? plan.primary.conn, sched);
     // The view body() folded for the D-195 check: the Director plans from what the request reads.
     const view = (this.dirView ??= startView(header, tree, this.host.view(), plan.upTo, this.library().seed));
     const run = await runDirector({
@@ -519,10 +830,39 @@ export class TurnRun {
     return directiveInsert(run.record.directive);
   }
 
-  /** A trace with the Director's calls before the narrator's and its trace.agents row (as is while it is off). */
-  private withDirector(trace: Trace): Trace {
-    if (this.dirAgent === undefined) return trace;
-    return { ...trace, calls: [...this.dirCalls, ...trace.calls], agents: { ...trace.agents, director: this.dirAgent } };
+  /** An agent's call env on this turn (the Director's, recall's): the engine's parts, this turn's events and kept requests. */
+  private agentEnv(conn: Connection, sched: Scheduler = this.ctx.sched): AgentCallEnv {
+    const turnId = this.entry.turn;
+    return {
+      sched,
+      fetch: this.ctx.fetch,
+      timeouts: timeoutsFor(conn, this.ctx.timeouts),
+      timers: this.ctx.timers,
+      clock: this.ctx.clock,
+      random: this.ctx.random,
+      ...(this.ctx.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: this.ctx.retryMaxDelayMs } : {}),
+      ...(this.ctx.prices ? { prices: this.ctx.prices } : {}),
+      emit: (ev) => this.emit(ev),
+      onProviderError: (info) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, turnId, ...info }),
+      ...(this.keep ? { keepRequest: this.keep } : {}),
+    };
+  }
+
+  /**
+   * A trace with the agents' calls before the narrator's — the Director's, then recall's (M5c) — and
+   * their trace.agents rows (as is while both are off). Generalises M4's withDirector.
+   */
+  private withAgents(trace: Trace): Trace {
+    if (this.dirAgent === undefined && this.recallAgent === undefined) return trace;
+    return {
+      ...trace,
+      calls: [...this.dirCalls, ...this.recallCalls, ...trace.calls],
+      agents: {
+        ...trace.agents,
+        ...(this.dirAgent !== undefined ? { director: this.dirAgent } : {}),
+        ...(this.recallAgent !== undefined ? { recall: this.recallAgent } : {}),
+      },
+    };
   }
 
   /** Shape (pure) for a fallback route's caps; its notices keep the once-per-session rule. */
@@ -584,8 +924,8 @@ export class TurnRun {
         tools: leg.tools,
         maxRounds: plan.maxRounds,
         // B3: every model call of the turn counts toward CALL_CEILING, a retried round 0 and (M4,
-        // D-101) the Director's calls too.
-        callsBefore: this.dirCalls.length + calls.length,
+        // D-101) the Director's calls too, and (M5c, §7.4.2) a sync recall's.
+        callsBefore: this.dirCalls.length + this.recallCalls.length + calls.length,
         onText: (delta) => {
           const offset = this.text.length;
           this.text += delta;
@@ -883,13 +1223,13 @@ export class TurnRun {
     };
     // trace.blocks / tokens.estimated stay the round-0 request (preview --turn compares them 1:1);
     // reported is round 0's prompt, the EMA's sample (B13). The loop rides trace.tools / rounds.
-    // M4: the Director's calls come first in trace.calls; gen.usage stays the narrator's (D-101).
-    const sent = this.withDirector(this.sentTrace(asm, shaped, tools));
+    // M4: the Director's calls come first in trace.calls, then (M5c) a sync recall's; gen.usage stays the narrator's (D-101).
+    const sent = this.withAgents(this.sentTrace(asm, shaped, tools));
     const reported = res.firstUsage?.inputTotal;
     const trace: Trace = {
       ...sent,
       tokens: { ...sent.tokens, ...(reported !== undefined ? { reported } : {}) },
-      calls: [...this.dirCalls, ...n.calls],
+      calls: [...this.dirCalls, ...this.recallCalls, ...n.calls],
       ...(tools
         ? {
             ...(res.toolRows.length > 0 ? { tools: res.toolRows } : {}),
@@ -904,7 +1244,14 @@ export class TurnRun {
       addition: this.answerText,
       ...(shaped.cont ? { cont: shaped.cont } : {}),
       // D-104: the plan rides the answer it shaped (a stopped or interrupted one too); a continue writes none.
-      body: { gen, trace, ...(this.dir && plan.kind !== 'continue' ? { dir: this.dir } : {}), ...(Object.keys(asm.varsDiff).length > 0 ? { vars: asm.varsDiff } : {}) },
+      // M5c (D-200): the RecallRecord rides it too, a continue's (its reuse) included.
+      body: {
+        gen,
+        trace,
+        ...(this.dir && plan.kind !== 'continue' ? { dir: this.dir } : {}),
+        ...(this.recallRec ? { recall: this.recallRec } : {}),
+        ...(Object.keys(asm.varsDiff).length > 0 ? { vars: asm.varsDiff } : {}),
+      },
       // Live, a continue on a changed target is discarded (§6.6); recovery says abandoned.
       continueConflict: 'discarded',
     });

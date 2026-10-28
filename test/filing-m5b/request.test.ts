@@ -111,6 +111,12 @@ describe('the call (D-173, D-174)', () => {
     expect(r.fellBack).toBeUndefined();
   });
 
+  test('D-208: both profiles name the answer’s opening (structuredCall sends it as a prefill where the caps take one)', () => {
+    expect(call().opening).toBe('{"filings": [');
+    const lite = filingRequest(base({ profile: 'lite' })) as FilingCall;
+    expect(lite).toMatchObject({ kind: 'call', profile: 'lite', opening: '{"filings": [' });
+  });
+
   test('summary is never offered, whatever allow says', () => {
     const r = call({ allow: ['summary', 'character', 'character'] });
     expect(r.system).toContain('- character (Character): ');

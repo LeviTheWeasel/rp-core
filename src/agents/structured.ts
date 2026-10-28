@@ -44,6 +44,14 @@
 // item: it has a type, an identity or an entry key and no envelope) is unreadable, its own lists are its
 // fields; and a tag:null result says `cutOff` (finish 'length', or a JSON closed by closedItems) so the
 // lane can fail a cut-off answer that gave it nothing to apply.
+// M5c (D-199): a tag:null agent may read the answer's text itself (`rawRead`, recall: a bare list of
+// handles, names, handles in prose); such an agent never reads JSON out of the reasoning, and an
+// answer cut off by finish 'length' with only reasoning is undecodable (§7.4.2, the RoleCall
+// incident). Callers without rawRead read as before. D-208 (the live run: an RP-tuned model answered the
+// recall prompt in character): a tag:null agent may name its answer's JSON opening (`{"entry_ids": [`,
+// `{"filings": [`); on the tagged transport, when the caps take an assistant prefill, every call (the
+// corrective pass's too) sends it as the prefill and the answer is read as the opening and the model's
+// text after it. A rawRead agent's corrective pass quotes its reader's own reason.
 
 import { abortableDelay, abortWith, childController, reasonOf, type AbortReason, type DelayTimers } from '../engine/abort.ts';
 import type { Connection, EngineOptions } from '../engine/api.ts';
@@ -176,7 +184,27 @@ export interface StructuredInput<T> {
   priority?: Priority;
   /** M5b (D-172): background only, the session's compendium.idleDelaySec (the local idle gate). */
   idleDelaySec?: number;
+  /**
+   * M5c (D-199, recall): tag:null only. The agent reads the answer's visible text itself (think tags
+   * cut; the reasoning only when the caps say the answer arrives there and the text is blank), and
+   * structuredCall's own JSON search and `read` are not used. The reasoning is never searched for
+   * JSON; finish 'length' with only reasoning is undecodable before rawRead is asked (readRawAnswer).
+   */
+  rawRead?: (answer: { text: string; finish?: string }) => RawRead<T>;
+  /**
+   * M5c (D-208): tag:null only. The opening of the answer's JSON (recall `{"entry_ids": [`, filing and
+   * the historian `{"filings": [`). On the tagged transport, when the caps take an assistant prefill
+   * (caps.prefill not 'none'), every call sends it as the prefill and the answer read is the opening
+   * followed by the model's text (withOpening). Not sent on the structured transport (the schema shapes
+   * the answer there) nor to caps without a prefill; ignored for tag 'plan'.
+   */
+  opening?: string;
 }
+
+/** M5c (D-199): what a tag:null agent's own reading of its answer's text returns (StructuredInput.rawRead). */
+export type RawRead<T> =
+  | { ok: true; value: T; skipped: Skip[]; cutOff?: true }
+  | { ok: false; code: 'no_output' | 'undecodable' | 'invalid'; message: string };
 
 /** `C`: the failure codes the call can end with (an interactive call is never preempted). */
 export type StructuredResult<T, C extends StructuredFailCode = StructuredFailCode> =
@@ -608,6 +636,65 @@ export function readAnswer<T>(
   return { ok: true, value: got.value, skipped: [...extra, ...cutOff, ...got.skipped], fromReasoning, ...(cut ? { cutOff: true as const } : {}) };
 }
 
+/**
+ * M5c (D-199): one answer read by the agent's own `rawRead` (tag:null). Only the visible text is read
+ * (answerOf: think tags out; the reasoning stands in only for a blank text when the caps say the answer
+ * arrives there, answerInReasoning); JSON sitting in the reasoning is never read (§7.4.2). An answer
+ * cut off by finish 'length' whose text is blank while it reasoned is undecodable (the RoleCall
+ * incident: the budget went to thinking). `cutOff` when rawRead says so or the finish was 'length'.
+ * D-208: with an `opening` sent as the prefill, rawRead reads it followed by the text (withOpening).
+ */
+export function readRawAnswer<T>(
+  res: Pick<CallResult, 'text' | 'reasoning'>,
+  caps: ModelCaps,
+  opts: { finish?: string; opening?: string; rawRead: (answer: { text: string; finish?: string }) => RawRead<T> },
+): Read<T> {
+  const split = splitThink(res.text, res.reasoning, caps);
+  if (opts.finish === 'length' && split.text.trim() === '' && split.reasoning.trim() !== '') {
+    return { ok: false, code: 'undecodable', message: 'the answer was cut off while it was still reasoning' };
+  }
+  const answer = answerOf(res, caps);
+  const got = opts.rawRead({ text: withOpening(opts.opening, answer.text), ...(opts.finish !== undefined ? { finish: opts.finish } : {}) });
+  if (!got.ok) return got;
+  const cut = got.cutOff === true || opts.finish === 'length';
+  return { ok: true, value: got.value, skipped: got.skipped, fromReasoning: false, ...(cut ? { cutOff: true as const } : {}) };
+}
+
+/** D-208: the prefill a call sends: the agent's opening, for tag:null on the tagged transport when the caps take a prefill. */
+export function openingOf(input: Pick<StructuredInput<unknown>, 'tag' | 'transport' | 'opening' | 'route'>): string | undefined {
+  const opening = input.opening ?? '';
+  return input.tag === null && input.transport === 'tagged' && input.route.caps.prefill !== 'none' && opening.trim() !== '' ? opening : undefined;
+}
+
+const squash = (s: string): string => s.replace(/\s+/g, '');
+
+/**
+ * D-208: the text read after a prefill: the opening, then what the model wrote after it. The model's text
+ * alone when it is blank (an empty answer stays empty: no_output), when it writes the opening itself
+ * (blanks aside: a server that answered anew instead of continuing), when it opens a fence, when it
+ * opens a list after an opening that ends in one (an item of that list is never a list: a whole answer),
+ * or when it is one whole JSON object by itself (another envelope, `{"items": [...]}`: a continuation
+ * after the opening closes the opening's list and object, so it never parses alone).
+ */
+export function withOpening(opening: string | undefined, text: string): string {
+  if (opening === undefined || text.trim() === '') return text;
+  const t = text.trimStart();
+  if (squash(t).startsWith(squash(opening)) || /^(?:`{3}|~{3})/.test(t)) return text;
+  if (t.startsWith('[') && opening.trimEnd().endsWith('[')) return text;
+  if (t.startsWith('{') && wholeObject(t)) return text;
+  return opening + text;
+}
+
+/** The text is exactly one JSON object (blanks around it aside). */
+function wholeObject(t: string): boolean {
+  try {
+    const v: unknown = JSON.parse(t);
+    return typeof v === 'object' && v !== null && !Array.isArray(v);
+  } catch {
+    return false;
+  }
+}
+
 // ---- the corrective pass (D-99) -------------------------------------------------------------------
 
 function noOutputReason(tag: 'plan' | null, transport: Transport): string {
@@ -696,6 +783,8 @@ export function structuredCall<T>(input: StructuredInput<T>): Promise<Structured
 export async function structuredCall<T>(input: StructuredInput<T>): Promise<StructuredResult<T>> {
   const { env, route, transport } = input;
   const label = modelLabel(route.conn.id, route.model);
+  // D-208: the answer's opening as the prefill of every call, where the transport and the caps allow it.
+  const prefill = openingOf(input);
   const ctrl = childController(input.turnSignal);
   const attempts: Attempt[] = [];
   const calls: TraceCall[] = [];
@@ -733,6 +822,7 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
       model: route.model,
       caps: route.caps,
       messages,
+      ...(prefill !== undefined ? { prefill } : {}),
       maxTokens,
       samplers: input.samplers,
       ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
@@ -800,8 +890,14 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
       }
       return { ok: false, code: 'provider_error', message: e.message, error: e };
     }
-    const answer = answerOf(res, route.caps);
-    const read = readAnswer(answer, { tag: input.tag, transport, ...(res.finish ? { finish: res.finish.reason } : {}), read: (raw) => input.read(raw) });
+    // D-208: what the model wrote follows the prefill; the echo of a bad answer shows both.
+    const seen = answerOf(res, route.caps);
+    const answer = { ...seen, text: withOpening(prefill, seen.text) };
+    const finish = res.finish ? { finish: res.finish.reason } : {};
+    const read =
+      input.tag === null && input.rawRead !== undefined
+        ? readRawAnswer(res, route.caps, { ...finish, ...(prefill !== undefined ? { opening: prefill } : {}), rawRead: input.rawRead })
+        : readAnswer(answer, { tag: input.tag, transport, ...finish, read: (raw) => input.read(raw) });
     return read.ok ? read : { ...read, answer };
   };
 
@@ -850,7 +946,10 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
     if (ctrl.signal.aborted) return fail(stopCode());
     const code = first.code as 'no_output' | 'undecodable' | 'invalid' | 'missing_directive';
     const answer = first.answer ?? { text: '', reasoning: '' };
-    const reason = correctionReason(code, first.message ?? '', input.tag, transport);
+    // A rawRead agent's reader says what was wrong in its own words (recall: prose is undecodable, but
+    // "no JSON object was found" is what the model needs to hear).
+    const own = input.tag === null && input.rawRead !== undefined ? cutChars((first.message ?? '').trim(), 200) : '';
+    const reason = own !== '' ? own : correctionReason(code, first.message ?? '', input.tag, transport);
     const echo = correctionEcho(answer);
     const correction = correctionText(reason, input.tag, transport);
     const maxTokens = correctionMaxTokens(input.maxTokens, echo, correction, input.count);

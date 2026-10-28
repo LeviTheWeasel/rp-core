@@ -5,6 +5,9 @@
 // thousands of leftover homes per run filled it up.
 // RP_CORE_LANE=manual (M5b, the lead's ruling G): engines opened by tests, and CLIs they spawn, never
 // start a Compendium lane task by themselves; the M5b tests opt in (EngineOptions.lane, memoryWait).
+// RP_CORE_RECALL=lexical (M5c, D-207): the recall mode default is lexical, so the scripted tests and
+// spawned CLIs written before recall make no recall calls; the M5c tests opt in (a mode in the
+// session's config, EngineSeams.recall 'config', or RP_CORE_RECALL=auto in a child's environment).
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +19,7 @@ mkdirSync(tmp);
 process.env.RP_CORE_HOME = root;
 process.env.RP_CORE_TEST = '1';
 process.env.RP_CORE_LANE = 'manual';
+process.env.RP_CORE_RECALL = 'lexical';
 process.env.TMPDIR = tmp;
 
 afterAll(() => {

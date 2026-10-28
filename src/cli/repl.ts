@@ -46,6 +46,7 @@ import {
   type EngineHandle,
   type MemoryLaneWrite,
   type MemoryRow,
+  type MemoryStatus,
   type MemoryWrite,
   type PreviewOptions,
   type SessionHandle,
@@ -58,16 +59,18 @@ import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
 import { entryNames, normalizeName } from '../agents/compendium/apply.ts';
 import { isNote, NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
 import { resolveEntryRef } from '../agents/compendium/refs.ts';
-import { resolveCompendium } from '../agents/compendium/profile.ts';
+import { compendiumProfile, resolveCompendium } from '../agents/compendium/profile.ts';
+import { recallSettings } from '../agents/compendium/recall.ts';
+import { effectiveRecall, recallModeOf } from '../engine/recall.ts';
 import { directorAt } from '../agents/director/state.ts';
 import type { NarratorDirective } from '../agents/director/types.ts';
-import type { CEntry, EntryType, Rec } from '../agents/compendium/types.ts';
+import type { CEntry, CompendiumProfile, EntryType, Rec } from '../agents/compendium/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { ImportWarning } from '../formats/native.ts';
 import type { Event, Notice } from '../protocol/events.ts';
 import { ACTIVE_PROBE_MAX_CALLS, ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS } from '../providers/probe-active.ts';
 import type { ModelCaps } from '../providers/types.ts';
-import type { DeepPartial, JobEntry, MemEntry, Roles, SessionConfig, Trace } from '../session/entries.ts';
+import type { Binding, DeepPartial, JobEntry, MemEntry, RecallRecord, Roles, SessionConfig, Trace } from '../session/entries.ts';
 import { readSessionFile } from '../session/log.ts';
 import type { TreeIndex } from '../session/tree.ts';
 import type { MessageView, PathView } from '../session/view.ts';
@@ -81,12 +84,14 @@ import {
   helpText,
   isLocalCommand,
   parseLine,
+  RECALL_MODES,
   resolveBindingArg,
   type Command,
   type LocalCommand,
   type MessageAt,
   type RoleName,
 } from './repl-commands.ts';
+import type { RecallMode } from '../engine/recall.ts';
 import {
   configOf,
   directorBinding,
@@ -96,12 +101,14 @@ import {
   resolveMessageId,
   siblingIds,
   tailRows,
+  traceRecall,
   windowFor,
   type Journal,
 } from './repl-journal.ts';
 import {
   laneAgentLine,
   laneHeldLine,
+  lanePrefetchLine,
   laneKeysInWords,
   laneResumedWords,
   laneUndoneLine,
@@ -125,7 +132,12 @@ import {
   renderNote,
   renderNoteCard,
   renderNumberedPath,
+  renderProfiles,
+  renderRecallCard,
   renderSearch,
+  recallModeText,
+  recallRunsAs,
+  recallTraceLine,
   presetCapText,
   renderPresets,
   renderPreview,
@@ -138,6 +150,8 @@ import {
   renderWire,
   type EntryProvenance,
   type LaneWords,
+  type ProfileRow,
+  type RecallWords,
   type RowOrigin,
   type Style,
 } from './repl-render.ts';
@@ -190,6 +204,27 @@ export interface ReplDeps {
    */
   capsOf?: (conn: string, model: string) => ModelCaps | null;
   /**
+   * M5c (/memory profile, /memory mode): what the engine sees of a binding's connection (the --provider
+   * override's, when one is set) — its window before the preset and the session's limit (the caps'
+   * context length, else the local or remote default: budget.ts contextWindow) and whether the scheduler
+   * takes its origin for a local server (sched.ts connectionLocality over the engine's connections);
+   * null when the connection is unknown. Optional: without it the windows come from windowOf / capsOf
+   * and auto's choice between prefetch and sync is not said.
+   */
+  routeOf?: (conn: string, model: string) => { window: number; local: boolean } | null;
+  /**
+   * M5c (D-207): the recall mode the engine falls back to for a session whose config sets none: 'lexical'
+   * or 'off' (RP_CORE_RECALL, or an engine seam in tests), 'auto' when nothing replaces the default.
+   * /memory mode and /memory profile say it. Default: process.env.RP_CORE_RECALL, read as Engine.open reads it.
+   */
+  recallDefault?: 'auto' | 'lexical' | 'off';
+  /**
+   * M5c (D-201, the lead's ruling K): the engine's lane mode (EngineOptions.lane). A manual lane never
+   * prefetches: recall's `auto` on a local server and `prefetch` act as on_miss, and /memory mode and
+   * /memory profile say so. Default: process.env.RP_CORE_LANE, read as Engine.open reads it.
+   */
+  lane?: 'auto' | 'manual';
+  /**
    * M3 `/probe --active [--write]`: run cmdProbe with `active` on `target` (conn:model), printing its
    * report to `io`; `signal` is Ctrl+C (the probe then rejects with the abort and stores nothing).
    * Resolves the exit code and whether --write stored anything. Absent where the REPL cannot probe
@@ -209,7 +244,17 @@ export interface ReplDeps {
    * (what the answers' traces name), what it plays (for the wording of a stop) and its window for a
    * model. The banner and /preset then take the window from it, not from config.toml's caps.
    */
-  override?: { conn: string; plays: 'script' | 'recording'; windowOf(model: string): number | null; capsOf?(model: string): ModelCaps | null };
+  override?: {
+    conn: string;
+    plays: 'script' | 'recording';
+    windowOf(model: string): number | null;
+    capsOf?(model: string): ModelCaps | null;
+    /**
+     * The lead's ruling K: what the override puts in place of recall's default mode (engine.ts
+     * scriptRecallDefault: 'lexical' for a script that tags no line for recall), after RP_CORE_RECALL.
+     */
+    recallDefault?: 'lexical' | 'off';
+  };
   /**
    * M5b (D-181): the engine's bus (engine.events()), subscribed before the session was opened, so what
    * the background lane says at open (memory_backlog, slots_shared, a recovered pass) reaches the screen
@@ -537,7 +582,8 @@ function sentBefore(tree: TreeIndex, from: string): { turn: number; from: string
 function laneEvent(ev: Event): boolean {
   switch (ev.type) {
     case 'agent':
-      return ev.turnId === undefined && (ev.agent === 'filing' || ev.agent === 'historian');
+      // M5c (D-202): the recall prefetch is the lane's too (agent{recall} without a turn).
+      return ev.turnId === undefined;
     case 'memory':
       return ev.by !== 'user' || ev.change === 'reverted';
     case 'notice':
@@ -547,11 +593,50 @@ function laneEvent(ev: Event): boolean {
   }
 }
 
+/** D-85: the recorder's binding (roles.recorder, else the narrator's) and, when it follows, how. */
+function recorderBindingOf(roles: Roles): { binding: Binding; follows?: string } {
+  const r = roles.recorder;
+  return r !== undefined && r !== 'narrator' ? { binding: r } : { binding: roles.narrator, follows: 'follows the narrator' };
+}
+
+/** D-85 (M5c): recall's binding — roles.recall, the narrator's when it says so, else the recorder's (which follows the narrator while unset). */
+function recallBindingOf(roles: Roles): { binding: Binding; follows?: string } {
+  const r = roles.recall;
+  if (r !== undefined && typeof r !== 'string') return { binding: r };
+  if (r === 'narrator') return { binding: roles.narrator, follows: 'follows the narrator' };
+  const rec = recorderBindingOf(roles);
+  return { binding: rec.binding, follows: rec.follows === undefined ? 'follows the recorder' : 'follows the recorder, which follows the narrator' };
+}
+
+/** The session's own compendium.recall.mode when it is a mode (what /memory mode wrote, or config.toml's at creation), else undefined. */
+function rawRecallMode(config: SessionConfig): RecallMode | undefined {
+  const c: unknown = config.compendium;
+  const recall: unknown = typeof c === 'object' && c !== null ? (c as { recall?: unknown }).recall : undefined;
+  const mode: unknown = typeof recall === 'object' && recall !== null ? (recall as { mode?: unknown }).mode : undefined;
+  return RECALL_MODES.find((m) => m === mode);
+}
+
 /** A --debug line about a lane call's provider failure (M5b): it waits for a pause in lanePending, as the lane's events do. */
 interface LaneDebug {
   type: 'debug';
   line: string;
 }
+
+type AgentEvent = Extract<Event, { type: 'agent' }>;
+
+/**
+ * M5c (D-202): a recall prefetch's event with the lane's prefetch as it arrived (MemoryStatus.prefetch:
+ * the answer it was computed after and its record; the event names neither). It waits in lanePending.
+ */
+interface LanePrefetch {
+  type: 'prefetch';
+  sessionId: string;
+  ev: AgentEvent;
+  pre?: NonNullable<MemoryStatus['prefetch']>;
+}
+
+/** The prefetch statuses that end a run (/memory wait waits for one while a prefetch runs or is queued). */
+const PREFETCH_ENDS: ReadonlySet<string> = new Set(['done', 'failed', 'preempted', 'skipped']);
 
 // ---- the REPL ---------------------------------------------------------------------------------------
 
@@ -597,7 +682,7 @@ class Repl {
   /** The text is edited outside the input line: a named $VISUAL / $EDITOR, or the host's editText. */
   private readonly ownEditor: boolean;
   /** M5b (D-181): the open session's lane events (and --debug lines of its calls) not shown yet: shown at a pause, never inside an answer. */
-  private lanePending: (Event | LaneDebug)[] = [];
+  private lanePending: (Event | LaneDebug | LanePrefetch)[] = [];
   /** A flush is scheduled after the burst of lane events that arrived (a pass publishes its events in one tick). */
   private laneFlushing = false;
   /** Set while /memory wait waits: its passes' lines print as they end; calling it stops waiting (Ctrl+C). */
@@ -1037,7 +1122,14 @@ class Repl {
       // A switched session's events are not this one's (/open, /fork).
       if (ev.sessionId !== this.session.id || !laneEvent(ev)) continue;
       if (ev.type === 'agent' && (ev.status === 'done' || ev.status === 'failed' || ev.status === 'preempted')) this.laneEnded++;
-      this.lanePending.push(redactEvent(ev, this.deps.redact));
+      if (ev.type === 'agent' && ev.agent === 'recall') {
+        // M5c: which answer the prefetch followed and what it picked are the lane's to say, now.
+        const ends = PREFETCH_ENDS.has(ev.status);
+        const pre = ends ? this.prefetchNow() : undefined;
+        this.lanePending.push({ type: 'prefetch', sessionId: ev.sessionId, ev, ...(pre !== undefined ? { pre } : {}) });
+      } else {
+        this.lanePending.push(redactEvent(ev, this.deps.redact));
+      }
       this.laneArrived();
     }
   }
@@ -1085,6 +1177,7 @@ class Repl {
     this.lanePending = [];
     if (evs.length === 0) return;
     const words = this.laneWords();
+    const recall = this.recallWords();
     const out: ({ line: string } | { notice: Extract<Event, { type: 'notice' }> })[] = [];
     const told = new Set<string>();
     const held: Record<'filing' | 'historian', Extract<Event, { type: 'memory' }>[]> = { filing: [], historian: [] };
@@ -1097,6 +1190,15 @@ class Repl {
       if (ev.type === 'debug') {
         endUndo();
         out.push({ line: `debug: ${ev.line}` });
+        continue;
+      }
+      if (ev.type === 'prefetch') {
+        endUndo();
+        // A prefetch the reply just shown waited for and used ('⋯ recall: adopted') is not announced after it.
+        if (ev.ev.status === 'done' && ev.pre !== undefined && this.adoptedByLastAnswer(ev.pre.on)) continue;
+        const now = ev.ev.status === 'preempted' && ev.pre !== undefined ? this.prefetchStanding(ev.pre) : undefined;
+        const line = lanePrefetchLine(ev.ev, ev.pre, recall, now);
+        if (line !== null) out.push({ line });
         continue;
       }
       if (ev.type === 'memory') {
@@ -1621,7 +1723,9 @@ class Repl {
       const rows = t.trace.compendium || recap ? this.entryRows() : undefined;
       const names = rows ? new Map(rows.map((r) => [r.key, r.name])) : undefined;
       const refs = rows && recap ? new Map(rows.map((r) => [r.key, r.ref])) : undefined;
-      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles), names, refs)));
+      // M5c (D-206): what recall gave the block of the request shown (ruling K: the trace's own entry's record).
+      const recall = recallTraceLine(t.trace, traceRecall(j, m.id), this.recallWords());
+      return this.say(this.redact(renderTrace(m.id, t, titles, this.traceMisses(m.id, t, titles), names, refs, recall)));
     }
     this.say(this.style.dim('no answer with a trace on this path yet (greetings have none)'));
   }
@@ -1964,6 +2068,12 @@ class Repl {
         return this.laneWait(c.sec);
       case 'status':
         return this.laneStatus();
+      case 'recall':
+        return this.recallOf(c.at);
+      case 'profile':
+        return this.profiles();
+      case 'mode':
+        return this.recallMode(c.mode);
       case 'show': {
         let got: ReturnType<SessionHandle['memoryGet']>;
         try {
@@ -2206,7 +2316,8 @@ class Repl {
   /**
    * /memory wait [sec] (D-171, D-181): until the background lane has nothing left to run (in manual mode
    * this runs it), or `sec` passed. The passes' lines print as they end; then one line on where it stands.
-   * Ctrl+C stops waiting (the work goes on).
+   * Ctrl+C stops waiting (the work goes on). M5c (ruling I): memoryWait waits for the recall prefetch too
+   * (one queued, running or owed for the head), so the prefetch's line comes with the others.
    */
   private async laneWait(sec: number | undefined): Promise<void> {
     if (!this.compendiumOn()) return this.say(this.style.dim('the Compendium is off for this session: nothing runs in the background (/memory on)'));
@@ -2229,10 +2340,219 @@ class Repl {
     this.say(this.style.dim(renderLaneWait(r, this.laneEnded !== ended, sec, this.laneWords())));
   }
 
-  /** /memory status (D-180): what runs, what waits, what is parked, the answers not filed yet. */
+  /** /memory status (D-180): what runs, what waits, what is parked, the answers not filed yet; M5c: the recall prefetch. */
   private laneStatus(): void {
     if (!this.compendiumOn()) this.say(this.style.yellow(COMPENDIUM_OFF));
-    this.say(renderLaneStatus(this.session.memoryStatus(), this.laneWords()));
+    this.say(renderLaneStatus(this.session.memoryStatus(), this.recallWords()));
+  }
+
+  // ---- recall (M5c, D-206) ---------------------------------------------------------------------------------
+
+  /** M5c: the lane's recall prefetch now (MemoryStatus.prefetch); undefined when there is none or the session cannot say. */
+  private prefetchNow(): MemoryStatus['prefetch'] {
+    try {
+      return this.session.memoryStatus().prefetch;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Ruling K (a prefetch that gave way to a turn): whether the lane owes a prefetch on its basis still
+   * (it runs again), and where the answer it followed stands now: the last answer on the path, earlier
+   * on it (the story went on), or off it (a swipe, a regen or a rewind replaced it).
+   */
+  private prefetchStanding(pre: NonNullable<MemoryStatus['prefetch']>): { again: boolean; answer: 'last' | 'earlier' | 'gone' } {
+    const path = this.session.view().path;
+    const last = path.findLast((m) => m.role === 'assistant')?.id;
+    const answer = pre.on === last ? 'last' : path.some((m) => m.id === pre.on) ? 'earlier' : 'gone';
+    return { again: this.prefetchNow()?.basis === pre.basis, answer };
+  }
+
+  /** Whether the last answer on the path adopted the prefetch computed after `on` (its record: a prefetch with that basis). */
+  private adoptedByLastAnswer(on: string): boolean {
+    const last = this.session.view().path.findLast((m) => m.role === 'assistant');
+    if (last === undefined || last.id === on) return false;
+    const rec = effectiveRecall(this.journal().tree, last.id);
+    return rec !== null && rec.source === 'prefetch' && rec.basis === on;
+  }
+
+  /**
+   * What the recall lines name: `#n` of a message on this path (as the lane lines); an answer a swipe
+   * replaced, `<id> (another version of #n)`; an entry's C<n> and name now. Lazy.
+   */
+  private recallWords(): RecallWords {
+    let positions: Map<string, number> | undefined;
+    let entries: Map<string, { ref: string; name: string }> | undefined;
+    return {
+      at: (id) => {
+        positions ??= new Map(this.session.view().path.map((m, i) => [m.id, i + 1]));
+        const n = positions.get(id);
+        if (n !== undefined) return `#${n}`;
+        const parent = this.journal().tree.msgs.get(id)?.parent;
+        const p = parent !== undefined && parent !== null ? positions.get(parent) : undefined;
+        return p !== undefined ? `${id} (another version of #${p + 1})` : id;
+      },
+      entry: (key) => (entries ??= new Map(this.entryRows().map((r) => [r.key, { ref: r.ref, name: r.name }]))).get(key),
+    };
+  }
+
+  /**
+   * D-207: the recall mode in place of the default, as the engine chose it, and who chose it:
+   * ReplDeps.recallDefault (its 'auto': nothing replaces it), else RP_CORE_RECALL as the engine reads it,
+   * else the --provider script's (ruling K: lexical when it tags no line for recall).
+   */
+  private recallDefault(): { mode: 'lexical' | 'off'; from: 'env' | 'script' } | undefined {
+    const v = this.deps.recallDefault ?? process.env.RP_CORE_RECALL;
+    if (v === 'lexical' || v === 'off') return { mode: v, from: 'env' };
+    if (this.deps.recallDefault !== undefined) return undefined;
+    const script = this.deps.override?.recallDefault;
+    return script !== undefined ? { mode: script, from: 'script' } : undefined;
+  }
+
+  /** D-201: the engine's lane mode (ReplDeps.lane, else RP_CORE_LANE as Engine.open reads it). */
+  private laneMode(): 'auto' | 'manual' {
+    return this.deps.lane ?? (process.env.RP_CORE_LANE === 'manual' ? 'manual' : 'auto');
+  }
+
+  /** 'conn:model' a binding's calls run on (the --provider override's connection when one is set). */
+  private modelLabel(b: { conn: string; model: string }): string {
+    return `${this.deps.override?.conn ?? b.conn}:${b.model}`;
+  }
+
+  /**
+   * An agent's window as the engine computes it (budget.ts contextWindow): its connection's (routeOf: the
+   * caps', else the local or remote default; without routeOf the caps' alone), within the session's limit
+   * and, for the narrator, the preset's. null when it is not known here.
+   */
+  private agentWindow(b: { conn: string; model: string }, config: SessionConfig, preset: boolean): number | null {
+    const o = this.deps.override;
+    let w = this.deps.routeOf?.(b.conn, b.model)?.window ?? null;
+    if (w === null) w = o ? o.windowOf(b.model) : (this.deps.windowOf?.(b.conn, b.model) ?? null);
+    if (w === null || !(w > 0)) return null;
+    const limits = [config.window, preset ? this.presetMaxContext(config.preset) : undefined].filter((n): n is number => typeof n === 'number' && n > 0);
+    return Math.min(w, ...limits);
+  }
+
+  /**
+   * /memory recall [--turn <#n|id>] (D-206): the RecallRecord of the last answer on the path, or of the
+   * answer named — a continued answer's newest record (effectiveRecall). Without a record, why: recall did
+   * not run (lexical), it was off, or the request had no Compendium input.
+   */
+  private recallOf(at: MessageAt | undefined): void {
+    let id: string | null | undefined;
+    if (at === undefined) {
+      id = this.session
+        .view()
+        .path.findLast((m) => m.role === 'assistant' && m.gen?.kind !== 'greeting')?.id;
+      if (id === undefined) return this.say(this.style.dim('no answer on this path yet: recall runs before a reply (greetings have none)'));
+    } else {
+      id = this.messageAt('recall', at);
+      if (id === null) return;
+    }
+    const j = this.journal();
+    const m = j.tree.msgs.get(id);
+    const words = this.recallWords();
+    const where = words.at(id);
+    if (m?.role !== 'assistant') return this.say(this.style.red(`/memory recall: message ${where} is the player's; recall runs before an answer (/memory recall takes the answer)`));
+    if (m.gen?.kind === 'greeting') return this.say(this.style.dim(`${where} is a greeting: recall runs before a reply, so it has none`));
+    const rec = effectiveRecall(j.tree, id);
+    if (rec !== null) return this.say(this.redact(renderRecallCard(where, rec, words)));
+    const source = latestTrace(j, id)?.trace.compendium?.source;
+    if (source === 'off') return this.say(this.style.dim(`recall for ${where}: none: recall was off (no recall call; /memory mode)`));
+    if (source === 'lexical') return this.say(this.style.dim(`recall for ${where}: none: recall did not run, the selector picked alone (lexical; /memory mode)`));
+    this.say(this.style.dim(`recall for ${where}: none: its request had no Compendium entries to pick from (the Compendium off, or no typed entry yet)`));
+  }
+
+  /**
+   * /memory profile (D-206, §7.4.6): each Compendium agent's profile now and why — the block by the
+   * narrator's window (the banner's: its last answer's, else its connection's, within the preset's and the
+   * session's limits), recall by its model's (recall → recorder → narrator, D-85), filing and the
+   * historian by the recorder's; compendium.profile full or lite decides for every agent.
+   */
+  private profiles(): void {
+    const config = configOf(this.journal());
+    const cfg = resolveCompendium(config.compendium);
+    if (!cfg.enabled) this.say(this.style.yellow(COMPENDIUM_OFF));
+    const setting = cfg.profile;
+    const profileOf = (w: number | null): CompendiumProfile | null => (setting !== 'auto' ? setting : w === null ? null : compendiumProfile('auto', w));
+    const roles = config.roles;
+    const narrator = roles.narrator;
+    const narratorWindow = this.bannerInfo().window ?? this.agentWindow(narrator, config, true);
+    const recorder = recorderBindingOf(roles);
+    const recorderWindow = this.agentWindow(recorder.binding, config, false);
+    const recall = recallBindingOf(roles);
+    const recallWindow = this.agentWindow(recall.binding, config, false);
+    const recallProfile = profileOf(recallWindow);
+    const mode = recallModeOf(config, this.recallDefault()?.mode);
+    const settings = recallProfile !== null ? recallSettings(cfg.recall, recallProfile) : null;
+    // D-201: what recall does for the next reply (a manual lane never prefetches: on_miss decides).
+    const runs = recallRunsAs({ mode, local: this.deps.routeOf?.(recall.binding.conn, recall.binding.model)?.local ?? null, onMiss: cfg.recall.onMiss, lane: this.laneMode() });
+    const row = (agent: ProfileRow['agent'], b: { conn: string; model: string }, window: number | null, whose: string, more: Partial<ProfileRow>): ProfileRow => ({
+      agent,
+      profile: profileOf(window),
+      model: this.modelLabel(b),
+      window,
+      whose,
+      ...more,
+    });
+    const rows: ProfileRow[] = [
+      row('block', narrator, narratorWindow, "the narrator's", {}),
+      row('recall', recall.binding, recallWindow, "the recall model's", {
+        ...(recall.follows !== undefined ? { follows: recall.follows } : {}),
+        ...(settings !== null ? { detail: `up to ${settings.maxEntries} picks, reading the last ${settings.contextMessages} messages` } : {}),
+        ...(mode === 'lexical' || mode === 'off'
+          ? { off: `recall mode ${mode} (/memory mode)` }
+          : runs === 'lexical'
+            ? { off: `recall mode ${mode}, but the lane is manual (RP_CORE_LANE): no prefetch, and on_miss gives lexical (/memory mode)` }
+            : {}),
+      }),
+      row('filing', recorder.binding, recorderWindow, "the recorder's", {
+        ...(recorder.follows !== undefined ? { follows: recorder.follows } : {}),
+        ...(cfg.filing.enabled ? {} : { off: 'compendium.filing.enabled is false' }),
+      }),
+      row('historian', recorder.binding, recorderWindow, "the recorder's", {
+        ...(recorder.follows !== undefined ? { follows: recorder.follows } : {}),
+        ...(cfg.historian.interval > 0 ? {} : { off: 'compendium.historian.interval is 0' }),
+      }),
+    ];
+    this.say(renderProfiles(setting, rows));
+  }
+
+  /**
+   * /memory mode [m] (D-206): bare, how recall runs for this session — the mode, where it comes from (the
+   * session's config, RP_CORE_RECALL, the default) and what it does on this recall model's server; with a
+   * mode, compendium.recall.mode of this session through configure (the next reply follows it; the
+   * lane's prefetch at once).
+   */
+  private recallMode(mode: RecallMode | undefined): void {
+    let config = configOf(this.journal());
+    const set = mode !== undefined;
+    if (mode !== undefined) {
+      if (rawRecallMode(config) === mode) return this.say(this.style.dim(`recall mode is already ${mode} for this session; nothing changed`));
+      try {
+        this.session.configure({ compendium: { recall: { mode } } });
+      } catch (e) {
+        if (e instanceof Refusal) return this.say(this.style.red(`/memory mode: ${this.redact(e.message)}`));
+        throw e;
+      }
+      config = configOf(this.journal());
+    }
+    const cfg = resolveCompendium(config.compendium);
+    const { binding } = recallBindingOf(config.roles);
+    const replaced = this.recallDefault();
+    const from = set ? 'set' : rawRecallMode(config) !== undefined ? 'session' : (replaced?.from ?? 'default');
+    const text = recallModeText({
+      mode: recallModeOf(config, replaced?.mode),
+      from,
+      local: this.deps.routeOf?.(binding.conn, binding.model)?.local ?? null,
+      onMiss: cfg.recall.onMiss,
+      graceSec: cfg.recall.graceSec,
+      model: this.modelLabel(binding),
+      lane: this.laneMode(),
+    });
+    this.say(text);
+    if (!cfg.enabled) this.say(this.style.yellow('the Compendium is off for this session: recall runs only while it is on (/memory on)'));
   }
 
   /**

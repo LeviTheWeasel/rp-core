@@ -50,7 +50,9 @@ interface Command {
 }
 
 const PROVIDER_HELP = `  --provider script:<file>  play a scripted provider (JSONL, one call per line) for every role;
-                            a first line {"caps": {...}} sets its caps (e.g. "tools": "prompted")
+                            a first line {"caps": {...}} sets its caps (e.g. "tools": "prompted");
+                            a script with no line {"agent": "recall", ...} makes no recall calls
+                            (lexical) unless a recall mode is set
   --provider record:<file>  use the configured connections and append every model call to <file>
                             (JSONL; keys and header values are scrubbed)
   --provider replay:<file>  play a recording back instead of the network; a request that differs
@@ -122,7 +124,10 @@ banner says whether the narrator can use tools (native, prompted or off). Ctrl+C
 what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
 previous answer. The Compendium files the story in the background between turns (its lines start
 with ⋯ memory:); a script does not wait for it unless it says /memory wait. RP_CORE_LANE=manual
-runs that work only at /memory wait.
+runs that work only at /memory wait. Before a reply, recall picks the entries the narrator will need
+(/memory mode: auto, sync, prefetch, lexical, off; its lines start with ⋯ recall:); with
+RP_CORE_LANE=manual it never prefetches (auto on a local server and prefetch act as on_miss).
+RP_CORE_RECALL=lexical (or off) is the mode of every session that sets none: no recall calls.
 ${KEEP_HELP}
 ${PROVIDER_HELP}
 Exit 0 at /quit or the end of input; 3 under --provider script: or replay: when an answer failed

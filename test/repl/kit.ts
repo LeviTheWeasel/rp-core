@@ -120,11 +120,18 @@ export interface ReplRigOptions {
   caps?: ModelCaps;
   /** ReplOptions.env ($VISUAL / $EDITOR / NO_COLOR); default process.env. */
   env?: Record<string, string | undefined>;
+  /**
+   * M5c: engine seams — the lane's mode (default: the preload's manual) and the recall mode default
+   * ('config': the session's own mode applies, not the preload's RP_CORE_RECALL=lexical).
+   */
+  engine?: { lane?: 'auto' | 'manual'; recall?: 'lexical' | 'off' | 'config' };
+  /** M5c: the scripted origin is local to the scheduler (scripted.ts localOrigin); absent: remote. */
+  local?: boolean;
 }
 
 export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Promise<ReplRig> {
   const home = o.home ?? tmpHome('rp-core-repl-');
-  const provider = createScriptedProvider(script);
+  const provider = createScriptedProvider(script, o.local !== undefined ? { localOrigin: o.local } : undefined);
   if (o.wire) {
     (provider as Provider).wire = (req) => ({ url: 'http://127.0.0.1:9/v1/chat/completions', body: { model: req.model.model, max_tokens: req.maxTokens, n: req.messages.length } });
   }
@@ -138,6 +145,8 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
     timeZone: 'UTC',
     checkpoint: { chars: 8, ms: 5, datasyncMs: 5 },
     retryMaxDelayMs: 5,
+    ...(o.engine?.lane !== undefined ? { lane: o.engine.lane } : {}),
+    ...(o.engine?.recall !== undefined ? { recall: o.engine.recall } : {}),
   });
   const session = o.sessionId ? engine.session(o.sessionId) : engine.createSession({ character: o.character ?? MIRA, persona: LEVI, ...(o.config ? { config: o.config } : {}) });
   const out = memoryChannel();
@@ -167,6 +176,8 @@ export async function replRig(script: ScriptCall[], o: ReplRigOptions = {}): Pro
       // The banner's tools word and /preview's transport: the engine's connections' caps.
       capsOf: (c) => (c === 'script' || c === 'alt' ? caps : null),
       ...(o.windowOf ? { windowOf: o.windowOf } : {}),
+      // The engine's lane, when the rig sets it (else both read RP_CORE_LANE, the preload's manual).
+      ...(o.engine?.lane !== undefined ? { lane: o.engine.lane } : {}),
       ...o.deps,
     },
     { interactive: o.interactive ?? false, ...(o.env ? { env: o.env } : {}) },

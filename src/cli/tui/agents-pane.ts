@@ -242,8 +242,10 @@ export function agentsLines(s: AgentsState, width: number, o: PaneOptions = {}):
 
   for (const o of s.others) {
     lines.push([]);
-    const status: Line = o.status
-      ? [{ text: `${o.status}${o.count !== undefined ? ` (${o.count})` : ''}${o.code ? ` [${o.code}]` : ''}`, tone: AGENT_TONE[o.status] ?? 'text' }]
+    // M5c: a recall prefetch that ended with its picks says so (its event's status is the lane's `done`).
+    const said = o.agent === 'recall' && o.status === 'done' && o.source === 'prefetch' ? 'prefetched' : o.status;
+    const status: Line = said
+      ? [{ text: `${said}${o.count !== undefined ? ` (${o.count})` : ''}${o.code ? ` [${o.code}]` : ''}`, tone: AGENT_TONE[said] ?? 'text' }]
       : [];
     push(heading(cap(o.agent), status));
     const more = [o.source ?? '', o.ms !== undefined ? secs(o.ms) : '', o.reason ?? ''].filter(Boolean);

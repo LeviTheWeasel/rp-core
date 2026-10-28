@@ -17,13 +17,15 @@
 //   SCRIPT_CAPS, and a replay_mismatch then says why the caps are generic (another model, or the
 //   recorded connection missing from config.toml). A call stopped while recording replays its
 //   events and then holds for Ctrl+C in an interactive chat; anywhere else it fails at once
-//   ('replay_aborted').
+//   ('replay_aborted'). M5c (the lead's ruling K): the scheduler takes the replay origin for local
+//   when the recorded connection's origin was (recall's `auto` then prefetches as it did).
 // Files are read (script, replay) or opened for appending (record) before anything else runs, so a
 // bad path fails before a session is touched.
 
 import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Connection } from '../engine/api.ts';
+import { connectionLocality } from '../engine/sched.ts';
 import { createRecordingProvider, createReplayProvider, parseRecording, type RecordedCall } from '../providers/record.ts';
 import { createScriptedProvider, parseScriptFile, SCRIPT_CAPS, scriptCapsWith } from '../providers/scripted.ts';
 import type { ModelCaps } from '../providers/types.ts';
@@ -72,7 +74,12 @@ function readFile(path: string, file: string, what: string): string {
 /**
  * Build the script override connection: id 'script', origin 'script:<absolute file>', local. Its caps
  * are SCRIPT_CAPS, with the file's leading `{"caps": {...}}` line merged over them when it has one
- * (M3: a script can give the connection tools, e.g. {"caps": {"tools": "prompted"}}).
+ * (M3: a script can give the connection tools, e.g. {"caps": {"tools": "prompted"}}). M5c (D-207): the
+ * same line's `"local": true|false` is the scheduler's locality of the script's origin (the provider's
+ * localOrigin; recall's `auto` prefetches on a local one) and the connection's `local`; without it the
+ * origin stays remote for the scheduler and the connection local for windows and timeouts, as before.
+ * A script that tags no line `"agent": "recall"` makes recall's default lexical (the lead's ruling K,
+ * engine.ts scriptRecallDefault), so a script written before recall plays as it always did.
  */
 export function scriptConnection(spec: string, command = 'send'): Connection {
   const { scheme, file } = parseProviderSpec(spec, command);
@@ -87,7 +94,8 @@ export function scriptConnection(spec: string, command = 'send'): Connection {
   } catch (e) {
     throw new ScriptFileError(`${file}: ${errText(e)}`);
   }
-  return { id: 'script', provider: createScriptedProvider(parsed.calls), caps, origin: `script:${path}`, local: true };
+  const provider = createScriptedProvider(parsed.calls, parsed.local !== undefined ? { localOrigin: parsed.local } : undefined);
+  return { id: 'script', provider, caps, origin: `script:${path}`, local: parsed.local ?? true };
 }
 
 /** A recording file, parsed (ScriptFileError naming the line on bad input). */
@@ -103,7 +111,11 @@ export function readRecording(file: string): RecordedCall[] {
 /**
  * The replay override connection: id 'replay', origin 'replay:<absolute file>'. `connections` (read
  * lazily, at the first turn) are config.toml's: a call recorded on one of them is replayed with that
- * connection's caps for its model, and `local` follows the first recorded call's connection.
+ * connection's caps for its model, and `local` follows the first recorded call's connection. So does the
+ * scheduler's locality of the replay origin (the provider's `localOrigin`, the lead's ruling K): what the
+ * scheduler took that connection's origin for while recording, so the replay schedules (and recall's
+ * `auto` and `on_miss` choose) as the recording did. With no recorded connection in config.toml it says
+ * none, and the origin is remote (isLocalOrigin of 'replay:…').
  * `opts.holdAborted`: a call recorded as aborted holds for Ctrl+C (an interactive chat).
  */
 export function replayConnection(
@@ -142,6 +154,14 @@ export function replayConnection(
   const provider = createReplayProvider(calls, {
     ...(opts.holdAborted ? { holdAborted: true } : {}),
     note: (req) => fallbackNote(req.model.model),
+  });
+  // sched.ts declaredLocality reads it when the origin is first used (config.toml's connections are in by then).
+  Object.defineProperty(provider, 'localOrigin', {
+    enumerable: true,
+    get(): boolean | undefined {
+      const conn = recordedOn();
+      return conn ? connectionLocality(() => Object.values(connections()))(conn.origin) : undefined;
+    },
   });
   return {
     id: 'replay',

@@ -89,8 +89,8 @@ describe('classes and help', () => {
     for (const l of ['/preset', '/lore', '/preview']) expect(cmd(l).name).not.toBe('later');
     const help = helpText();
     for (const s of ['/preset', '/lore add <id|file>', '/lore rm <id>', '/lore test <text>', '/preview [n] [--wire] [--verdicts]']) expect(help).toContain(s);
-    // M4: /director is no longer later (D-113); the Later line keeps the M5 subcommands.
-    expect(help).toContain('Later: /memory recall|');
+    // M4: /director is no longer later (D-113); M5c: nor are the Compendium's (D-206).
+    expect(help).not.toContain('Later:');
     expect(help).not.toContain('(M2)');
   });
 });

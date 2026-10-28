@@ -35,8 +35,12 @@ const DIR = import.meta.dir;
 const M5A = join(ROOT, 'test', 'demo-m5a');
 const LANTERN = join(ROOT, 'test', 'fixtures', 'ru', 'lantern', 'lantern.compendium.json');
 const CONFIG = '[compendium]\nidle_delay_sec = 0\n\n[compendium.historian]\ninterval = 3\n';
-/** The lane in auto mode (a person's default); no editor, so /e takes the next piped line; no colour. */
-const ENV = { RP_CORE_LANE: 'auto', VISUAL: '', EDITOR: '', NO_COLOR: '1' };
+/**
+ * The lane in auto mode (a person's default); no editor, so /e takes the next piped line; no colour.
+ * RP_CORE_RECALL is removed (cli(), every spawned CLI): the scripts tag no line for recall, so recall
+ * makes no call without it (ruling K), as for a person running the documented commands.
+ */
+const ENV = { RP_CORE_LANE: 'auto', RP_CORE_RECALL: undefined, VISUAL: '', EDITOR: '', NO_COLOR: '1' };
 
 const linesOf = (file: string): string[] => readFileSync(join(DIR, file), 'utf8').split('\n').filter((l) => l.trim() !== '');
 /** What the person types: process 1 (the story), 2 (killed), 3 (reopened), 4 (opened once more). */
@@ -72,8 +76,8 @@ let entries: Entry[];
 /** `rp-core chat` on the scripted model `provider` (a file here). */
 const chatArgs = (provider: string, ...more: string[]): string[] => ['chat', id, ...more, '--provider', `script:${join(DIR, provider)}`];
 
-async function cli(argv: string[], stdin: string, env?: Record<string, string>): Promise<RunResult> {
-  const r = await run(['--home', home, ...argv], { stdin, ...(env ? { env } : {}) });
+async function cli(argv: string[], stdin: string, env?: Record<string, string | undefined>): Promise<RunResult> {
+  const r = await run(['--home', home, ...argv], { stdin, env: { RP_CORE_RECALL: undefined, ...env } });
   steps.push({ args: argv, r });
   return r;
 }

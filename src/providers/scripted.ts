@@ -15,13 +15,23 @@
 // with a `{"caps": {...}}` line (parseScriptFile), a partial caps record the caller merges over
 // SCRIPT_CAPS (scriptCapsWith), so a `script:` connection can offer tools. SCRIPT_CAPS keeps tools
 // 'none'. hashRequest is unchanged: toolChoice and stop are not part of the hash.
+//
+// M5c (.notes/m5c-decisions.md D-207): a call line {"steps": [...], "agent": "<agent>"} is that agent's:
+// a request takes the first unconsumed line tagged with its `agent`, else the first unconsumed untagged
+// line, so a Director and a recall running at once each get their own answers whatever order they ask
+// in; untagged lines keep today's order (a script without tags plays exactly as before). The file's
+// first line may also say `"local": true` (or false), the scheduler's locality of the script's origin;
+// createScriptedProvider takes it as `localOrigin` (sched.ts connectionLocality). The lead's ruling K: a
+// provider says whether any line is tagged for recall (`recallTagged`); a script with none was not written
+// for recall, and an engine it overrides makes recall's default lexical (engine.ts scriptRecallDefault).
+// A hash mismatch names the script call that holds the hash, not the request's arrival number.
 
 import { createHash } from 'node:crypto';
 import { abortableDelay } from '../engine/abort.ts';
 import { checkCapsRows, mergeCaps } from './caps.ts';
 import { PROVIDER_ERROR_CATEGORY, PROVIDER_ERROR_MESSAGE, ProviderError } from './types.ts';
 import type { ProviderErrorCategory, ProviderEnv, Replay, StreamEv } from './types.ts';
-import type { FinishReason, ModelCaps, ModelRequest, Provider, ProviderErrorCode, Usage } from './types.ts';
+import type { CallAgent, FinishReason, ModelCaps, ModelRequest, Provider, ProviderErrorCode, Usage } from './types.ts';
 
 export type ScriptStep =
   | { text: string }
@@ -56,6 +66,8 @@ export interface ScriptCall {
   steps: ScriptStep[];
   /** If set, the request hash (hashRequest) must match, else the call fails loudly with a diff hint. */
   requestHash?: string;
+  /** M5c (D-207): only a request of this agent takes the call (ModelRequest.agent); untagged: any, in order. */
+  agent?: CallAgent;
 }
 
 // ---- error categories ---------------------------------------------------------------------------
@@ -83,6 +95,14 @@ const REPLAY_KINDS: Readonly<Record<Replay['kind'], true>> = {
   'gemini-parts': true,
   reasoning_details: true,
   tool_extra: true,
+};
+
+const AGENTS: Readonly<Record<CallAgent, true>> = {
+  narrator: true,
+  director: true,
+  recall: true,
+  filing: true,
+  historian: true,
 };
 
 const USAGE_FIELDS: Readonly<Record<keyof Usage, true>> = {
@@ -218,8 +238,8 @@ function parseStep(v: unknown, fail: (msg: string) => never): ScriptStep {
 
 function parseCall(v: unknown, fail: (msg: string) => never): ScriptCall {
   if (Array.isArray(v)) return { steps: parseSteps(v, fail) };
-  if (!isRecord(v)) fail('a call must be a JSON array of steps or {"steps": [...], "requestHash"?: "..."}');
-  onlyKeys(v, ['steps', 'requestHash'], fail);
+  if (!isRecord(v)) fail('a call must be a JSON array of steps or {"steps": [...], "requestHash"?: "...", "agent"?: "..."}');
+  onlyKeys(v, ['steps', 'requestHash', 'agent'], fail);
   if (!Array.isArray(v.steps)) fail('"steps" must be an array');
   const call: ScriptCall = { steps: parseSteps(v.steps, fail) };
   if (v.requestHash !== undefined) {
@@ -228,6 +248,10 @@ function parseCall(v: unknown, fail: (msg: string) => never): ScriptCall {
       fail('"requestHash" must be 16 lowercase hex chars (the output of hashRequest)');
     }
     call.requestHash = v.requestHash;
+  }
+  if (v.agent !== undefined) {
+    if (typeof v.agent !== 'string' || !has(AGENTS, v.agent)) fail(`"agent" must be one of ${Object.keys(AGENTS).join(', ')}, got ${JSON.stringify(v.agent)}`);
+    call.agent = v.agent;
   }
   return call;
 }
@@ -335,15 +359,28 @@ function parseCapsPatch(v: unknown, fail: (msg: string) => never): Partial<Model
   return JSON.parse(JSON.stringify(v)) as Partial<ModelCaps>;
 }
 
+/** The first line of a script file: `{"caps": {...}}`, `{"local": true}` or both in one object. */
+const isHeader = (v: unknown): v is Record<string, unknown> => isRecord(v) && ('caps' in v || 'local' in v);
+
+/** Why a header line after the first is refused: its own keys, and that caps and local share the first line's object. */
+function misplacedHeader(v: Record<string, unknown>): string {
+  const keys = ['caps', 'local'].filter((k) => k in v);
+  const shape = `{${keys.map((k) => `"${k}": ...`).join(', ')}}`;
+  return `a ${shape} line must be the first line of the file (caps and local go together there, in one object: {"caps": {...}, "local": true})`;
+}
+
 /**
  * Parse a script FILE: parseScript, except that the first non-empty line may be `{"caps": {...}}`,
  * a partial caps record for the scripted connection (merged over SCRIPT_CAPS by the caller:
- * scriptCapsWith). A caps line anywhere else is an error. Throws Error with the line number.
+ * scriptCapsWith), and/or `"local": true|false` (M5c, D-207: the scheduler's locality of the
+ * script's origin, createScriptedProvider's `localOrigin`). Such a line anywhere else is an error.
+ * Throws Error with the line number.
  */
-export function parseScriptFile(text: string): { calls: ScriptCall[]; caps?: Partial<ModelCaps> } {
+export function parseScriptFile(text: string): { calls: ScriptCall[]; caps?: Partial<ModelCaps>; local?: boolean } {
   const lines = text.replace(/^\uFEFF/, '').split('\n');
   const at = firstLine(lines);
   let caps: Partial<ModelCaps> | undefined;
+  let local: boolean | undefined;
   if (at >= 0) {
     let value: unknown;
     try {
@@ -351,29 +388,33 @@ export function parseScriptFile(text: string): { calls: ScriptCall[]; caps?: Par
     } catch {
       value = undefined; // parseScript reports it with its line number
     }
-    if (isRecord(value) && 'caps' in value) {
+    if (isHeader(value)) {
       const fail = (msg: string): never => {
         throw new Error(`script line ${at + 1}: ${msg}`);
       };
-      onlyKeys(value, ['caps'], fail);
-      caps = parseCapsPatch(value.caps, fail);
+      onlyKeys(value, ['caps', 'local'], fail);
+      if ('caps' in value) caps = parseCapsPatch(value.caps, fail);
+      if ('local' in value) {
+        const said = value.local;
+        local = typeof said === 'boolean' ? said : fail('"local" must be a boolean (true: the scheduler treats the script\'s origin as local)');
+      }
       lines[at] = ''; // the line numbers of the calls stay the editor's
     }
   }
-  // A caps line later in the file: say so instead of "unknown field caps".
+  // A caps or local line later in the file: say so (naming its keys) instead of "unknown field caps".
   lines.forEach((raw, n) => {
     const line = raw.trim();
-    if (!line.startsWith('{') || !line.includes('"caps"')) return;
+    if (!line.startsWith('{') || !(line.includes('"caps"') || line.includes('"local"'))) return;
     let v: unknown;
     try {
       v = JSON.parse(line);
     } catch {
       return; // parseScript reports bad JSON
     }
-    if (isRecord(v) && 'caps' in v) throw new Error(`script line ${n + 1}: a {"caps": ...} line must be the first line of the file`);
+    if (isHeader(v)) throw new Error(`script line ${n + 1}: ${misplacedHeader(v)}`);
   });
   const calls = parseScript(lines.join('\n'));
-  return caps !== undefined ? { calls, caps } : { calls };
+  return { calls, ...(caps !== undefined ? { caps } : {}), ...(local !== undefined ? { local } : {}) };
 }
 
 /** SCRIPT_CAPS with a script file's caps patch merged over it (deep, as caps rows merge; source stays 'script'). */
@@ -452,7 +493,55 @@ export interface ScriptedProvider extends Provider {
   readonly requests: ModelRequest[];
   /** Release a {pause} step. Releasing a name nobody waits on is remembered (release-before-pause works). */
   release(name: string): void;
+  /** Calls not yet taken (tagged ones included). */
   remaining(): number;
+  /**
+   * M5c (D-207): the script's own word on its origin's locality (createScriptedProvider's `localOrigin`,
+   * a script file's `"local"`), read by the scheduler (sched.ts connectionLocality). Absent: it says none.
+   */
+  readonly localOrigin?: boolean;
+  /**
+   * The lead's ruling K (M5c): whether any line of the script is tagged `"agent": "recall"`. A script with
+   * none was not written for recall (every script before M5c): as an engine's providerOverride it makes
+   * recall's default mode lexical (engine.ts scriptRecallDefault), so a recall call never takes the
+   * untagged lines the narrator and the Director wait for.
+   */
+  readonly recallTagged: boolean;
+}
+
+/** createScriptedProvider's options. */
+export interface ScriptedOptions {
+  timers?: { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(h: unknown): void };
+  /** D-207: the scheduler treats the connection's origin as local (true) or remote (false). */
+  localOrigin?: boolean;
+}
+
+/** The calls of a script no request has taken yet (D-207). */
+interface ScriptQueue {
+  /** The call a request of `agent` takes (its own first line, else the first untagged one) and its place in the script (0-based). */
+  take(agent: CallAgent): { call: ScriptCall; at: number } | undefined;
+  remaining(): number;
+  /** The lines left for agents other than `agent`, counted per agent ('director 1, recall 2'; '' when none). */
+  taggedFor(agent: CallAgent): string;
+}
+
+function scriptQueue(calls: readonly ScriptCall[]): ScriptQueue {
+  // Each call keeps its place in the script: with tags, the n-th request may take a later line.
+  const left = calls.map((call, at) => ({ call, at }));
+  return {
+    take(agent) {
+      // The agent's own line first; else the next untagged one. Lines tagged for others wait for them.
+      let i = left.findIndex((c) => c.call.agent === agent);
+      if (i < 0) i = left.findIndex((c) => c.call.agent === undefined);
+      return i < 0 ? undefined : left.splice(i, 1)[0];
+    },
+    remaining: () => left.length,
+    taggedFor(agent) {
+      const others = new Map<string, number>();
+      for (const { call: c } of left) if (c.agent !== undefined && c.agent !== agent) others.set(c.agent, (others.get(c.agent) ?? 0) + 1);
+      return [...others].map(([a, n]) => `${a} ${n}`).join(', ');
+    },
+  };
 }
 
 function failure(code: ProviderErrorCode, message: string, afterOutput: boolean): StreamEv {
@@ -469,14 +558,11 @@ async function* guarded(signal: AbortSignal, inner: AsyncGenerator<StreamEv>): A
   signal.throwIfAborted();
 }
 
-export function createScriptedProvider(
-  calls: ScriptCall[],
-  opts?: { timers?: { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(h: unknown): void } },
-): ScriptedProvider {
-  const script = [...calls];
+export function createScriptedProvider(calls: ScriptCall[], opts?: ScriptedOptions): ScriptedProvider {
+  const script = scriptQueue(calls);
+  const total = calls.length;
   const timers = opts?.timers;
   const requests: ModelRequest[] = [];
-  let next = 0;
   // Pause gates. Each release lets exactly one pause through: the oldest one waiting on that name,
   // or, when nobody waits, the next one to arrive (a banked token).
   const banked = new Map<string, number>();
@@ -517,21 +603,30 @@ export function createScriptedProvider(
     });
   }
 
-  async function* play(req: ModelRequest, call: ScriptCall | undefined, index: number): AsyncGenerator<StreamEv> {
-    if (!call) {
+  /**
+   * `taken`: the call and its place in the script (undefined: none left for this agent); `index`: the
+   * request's arrival number (0-based), which the tool ids and the exhausted message use.
+   */
+  async function* play(req: ModelRequest, taken: { call: ScriptCall; at: number } | undefined, index: number, others: string): AsyncGenerator<StreamEv> {
+    if (!taken) {
+      // Lines left that are tagged for other agents are named: the script is not used up, it is out of this agent's.
+      const tagged = others === '' ? '' : `; left for other agents: ${others}`;
       yield failure(
         'script_exhausted',
-        `${PROVIDER_ERROR_MESSAGE.script_exhausted}: request ${index + 1} has no call left (the script has ${script.length})`,
+        `${PROVIDER_ERROR_MESSAGE.script_exhausted}: request ${index + 1} has no call left (the script has ${total})${tagged}`,
         false,
       );
       return;
     }
+    const { call } = taken;
     if (call.requestHash !== undefined) {
       const actual = hashRequest(req);
       if (actual !== call.requestHash) {
+        // The call that holds the hash (its place among the script's calls); the request's own number when they differ.
+        const which = taken.at === index ? `script call ${taken.at + 1}` : `script call ${taken.at + 1} (taken by request ${index + 1}, the ${req.agent}'s)`;
         yield failure(
           'bad_request',
-          `script call ${index + 1}: request hash mismatch: expected ${call.requestHash}, actual ${actual} ` +
+          `${which}: request hash mismatch: expected ${call.requestHash}, actual ${actual} ` +
             `(${describeRequest(req)}); if the change is intended, set requestHash to ${actual}`,
           false,
         );
@@ -595,15 +690,16 @@ export function createScriptedProvider(
   return {
     requests,
     release,
-    remaining: () => script.length - next,
+    remaining: () => script.remaining(),
+    ...(opts?.localOrigin !== undefined ? { localOrigin: opts.localOrigin } : {}),
+    recallTagged: calls.some((c) => c.agent === 'recall'),
     stream(req: ModelRequest, _env: ProviderEnv): AsyncIterable<StreamEv> {
       // Recorded and consumed at call time, not on first iteration, so a test can assert on
       // `requests` and `remaining()` as soon as the engine has asked.
       requests.push(req);
       const index = requests.length - 1;
-      const call = script[next];
-      if (call) next++;
-      return guarded(req.signal, play(req, call, index));
+      const taken = script.take(req.agent);
+      return guarded(req.signal, play(req, taken, index, taken ? '' : script.taggedFor(req.agent)));
     },
   };
 }

@@ -162,6 +162,8 @@ describe('when it runs (Bunraku compendium-historian.test.ts)', () => {
     expect(r.user).toContain('[1] assistant: Evening.');
     expect(r.user).not.toContain('HELD BACK');
     expect(r).toMatchObject({ temperature: 0.3, maxTokens: 4_096 });
+    // D-208: the answer's opening (a prefill on the tagged transport where the caps take one).
+    expect(r.opening).toBe('{"filings": [');
   });
 
   test('a second run starts `overlap` messages before the covered end and calls them overlap', () => {

@@ -54,6 +54,21 @@
 // Auto mode also holds back while the head is a user message younger than max(idleDelaySec, 2 s) (a
 // `send` its `runTurn` follows), and spaces a key's attempts after a failure: 15 s × 2^(attempt − 1),
 // at most 5 min (manual memoryWait ignores both). memoryWait in auto mode only waits.
+//
+// M5c (.notes/m5c-decisions.md D-202, D-203, rulings G): the prefetch. While the lane is in auto mode,
+// the head is an assistant message (an answer, or the greeting the first reply will answer), the
+// Compendium has a live typed entry and the session's recall mode asks for a prefetch (prefetch, or
+// auto on a local recall origin; engine/recall.ts), the lane derives `prerecall:<head>` for the
+// head's basis (recall.ts prefetchBasis) unless it holds a record for it. It runs first — before
+// file and hist tasks, after a starved one — at background priority with a boost the turn can promote
+// (sched.ts), on the recall route, and writes nothing: no job row, no journal, never recovered (a crash
+// is a miss). Its record is kept in memory by basis (the last PREFETCH_KEEP); a turn adopts the one of
+// its basis (prefetchFor), or waits for the run still queued or in flight. A run whose basis the path
+// left (a new head, an edit, a hide, a Compendium change, a recall setting or model change) is
+// superseded; an interactive request preempts it (it starts again after the idle gate). Its events go
+// on the bus: agent{recall} queued, started, preempted, done/failed, skipped (superseded). memoryWait
+// waits for a prefetch queued or in flight too (ruling I), and a player's message stacked under the
+// head answer keeps the run valid (ruling K: the turn's basis is the newest answer before U).
 
 import { foldStaged, normalizeName } from '../agents/compendium/apply.ts';
 import { cutMiddle, filingReader, filingRequest, stageFiling, type FilingExchange, type FilingItem } from '../agents/compendium/filing.ts';
@@ -91,7 +106,7 @@ import { contextWindow, DEFAULT_LOCAL_WINDOW } from '../prompt/budget.ts';
 import { estimateTokens, MESSAGE_OVERHEAD_TOKENS } from '../prompt/tokens.ts';
 import type { EventBody, Notice } from '../protocol/events.ts';
 import type { JSONSchema, ModelCaps, ModelRequest } from '../providers/types.ts';
-import type { Binding, Entry, EntryInput, JobEntry, MemEntry, SessionConfig, SessionHeader } from '../session/entries.ts';
+import type { Binding, Entry, EntryInput, JobEntry, MemEntry, RecallRecord, SessionConfig, SessionHeader } from '../session/entries.ts';
 import { mergePatch } from '../session/fold.ts';
 import { hex8 } from '../session/ids.ts';
 import { SessionLockedError } from '../session/log.ts';
@@ -99,13 +114,14 @@ import { pathTo, type TreeIndex } from '../session/tree.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { abortWith, reasonOf } from './abort.ts';
 import { Refusal, type Connection, type LaneTaskInfo, type MemoryLaneWrite, type MemoryStatus } from './api.ts';
-import { resolveConnection, resolvePrimary, routeTo, type Route } from './admit.ts';
+import { resolveConnection, resolveRecorder, type Route } from './admit.ts';
 import type { EngineCtx } from './context.ts';
 import { timeoutsFor } from './narrate.ts';
-import type { SessionLibrary } from './request.ts';
+import { basisHead, prefetchBasis, RECALL_INDEX_TRUNCATED, recallEvent, recallSetup, runRecall, truncatedNotice, wantsPrefetch, type RecallSetup } from './recall.ts';
+import { liveTyped, type SessionLibrary } from './request.ts';
 import { modelLabel } from './route.ts';
-import { STARVED_AFTER, type OriginSemaphore, type Scheduler } from './sched.ts';
-import { keepRequestFile } from './turn.ts';
+import { boosted, createBoost, STARVED_AFTER, type Boost, type OriginSemaphore, type Scheduler } from './sched.ts';
+import { keepRequestFile, type PrefetchLook } from './turn.ts';
 
 /** What the lane needs from its session (SessionImpl implements it). */
 export interface LaneHost {
@@ -181,6 +197,31 @@ interface Running {
   done: Promise<void>;
 }
 
+/** M5c (D-202): a prefetch run (`prerecall:<head>`): no job, no row; its record stays in memory. */
+interface PreRun {
+  key: string;
+  head: string;
+  /** recall.ts prefetchBasis of the head when it began. */
+  basis: string;
+  ctrl: AbortController;
+  /** The turn's lever (D-203): promoted while a turn waits for it. */
+  boost: Boost;
+  /** No call of it has been given a place yet (`agent{started}` comes with the first). */
+  waiting: boolean;
+  /** Its record, or null when it ends without one (superseded, preempted, shut down). */
+  done: Promise<RecallRecord | null>;
+}
+
+/** A prefetch the lane would run now: the head, its basis and the recall setup. */
+interface PreWanted {
+  head: string;
+  basis: string;
+  setup: RecallSetup & { route: Route };
+}
+
+/** D-202: prefetch records kept in memory (the newest by basis). */
+const PREFETCH_KEEP = 8;
+
 /** The recorder's route and what goes with it. */
 interface Recorder {
   binding: Binding;
@@ -198,6 +239,8 @@ type Prepared =
       system: string;
       user: string;
       schema: { name: string; schema: JSONSchema };
+      /** D-208: the answer's opening (FILING_OPENING / HISTORIAN_OPENING), structuredCall's `opening`. */
+      opening: string;
       maxTokens: number;
       temperature: number;
       profile: CompendiumProfile;
@@ -259,26 +302,8 @@ function samplersFor(binding: Binding, temperature: number): Partial<Samplers> {
   return { ...own, temperature: own.temperature ?? temperature };
 }
 
-/**
- * D-85: the recorder's binding and route. `roles.recorder` absent or 'narrator' → the narrator's
- * connection and model only (not its reply settings); an explicit binding keeps all its fields. A
- * connection that is missing or whose caps cannot be resolved gives route null (the lane waits).
- * providerOverride applies.
- */
-export function resolveRecorder(ctx: EngineCtx, config: SessionConfig): { binding: Binding; route: Route | null } {
-  const role = config.roles.recorder;
-  const narrator = config.roles.narrator;
-  const own = role !== undefined && role !== 'narrator';
-  const binding: Binding = own ? role : { conn: narrator.conn, model: narrator.model };
-  try {
-    if (!own) return { binding, route: resolvePrimary(ctx, config) };
-    const conn = resolveConnection(ctx, role.conn);
-    return { binding, route: conn ? routeTo(conn, role.model) : null };
-  } catch (e) {
-    if (e instanceof Refusal) return { binding, route: null };
-    throw e;
-  }
-}
+/** D-85: the recorder's binding and route (admit.ts since M5c; re-exported for the lane's callers). */
+export { resolveRecorder };
 
 /** The connections a session's bindings resolve to (narrator, its fallback, Director, recorder, recall), by id. */
 function sessionConnections(ctx: EngineCtx, config: SessionConfig): Map<string, Connection> {
@@ -567,6 +592,12 @@ export class Lane {
   private rev = 0;
   private cache: { stamp: string; config: SessionConfig; seed: LibrarySeed; plan: Plan } | null = null;
   private pumping = false;
+  /** M5c (D-202): the running prefetch, if any (one task at a time: it and a file/hist task never run together). */
+  private pre: PreRun | null = null;
+  /** M5c (D-202): prefetch records by basis (insertion order: the oldest goes first past PREFETCH_KEEP). */
+  private readonly prefetched = new Map<string, RecallRecord>();
+  /** M5c: the prefetch basis told as queued (agent{recall, queued} once per basis). */
+  private preQueued: string | null = null;
 
   constructor(
     private readonly ctx: EngineCtx,
@@ -608,10 +639,156 @@ export class Lane {
     if (this.hold) this.ctx.timers.clearTimeout(this.hold.timer);
     this.hold = null;
     this.wake();
+    // M5c: a prefetch is never recovered (a crash or a close is a miss).
+    const pre = this.pre;
+    if (pre) {
+      abortWith(pre.ctrl, 'shutdown');
+      await pre.done;
+    }
     const r = this.running;
     if (!r) return;
     abortWith(r.ctrl, 'shutdown');
     await r.done;
+  }
+
+  // ---- M5c: the prefetch (D-202) -------------------------------------------------------------------
+
+  /**
+   * D-202/D-203: what the lane holds for a turn's basis: its record, or the run still queued or in
+   * flight (the turn promotes it and waits at most graceSec); null when neither.
+   */
+  prefetchFor(basis: string): PrefetchLook | null {
+    const record = this.prefetched.get(basis);
+    if (record !== undefined) return { record };
+    const pre = this.pre;
+    if (pre === null || pre.basis !== basis || pre.ctrl.signal.aborted) return null;
+    return {
+      running: {
+        done: pre.done,
+        promote: () => pre.boost.promote(),
+        demote: () => pre.boost.demote(),
+        supersede: () => abortWith(pre.ctrl, 'superseded'),
+      },
+    };
+  }
+
+  /** The prefetch the lane would run for the head now (auto mode, an assistant head, a mode that asks for one), or null. */
+  private preWanted(): PreWanted | null {
+    if (this.closed || this.mode !== 'auto') return null;
+    const setup = recallSetup(this.ctx, this.host.currentConfig());
+    if (setup === null || setup.route === null || !wantsPrefetch(setup)) return null;
+    const view = this.host.view();
+    const head = view.path.at(-1);
+    if (head === undefined || head.role !== 'assistant' || liveTyped(view.compendium).length === 0) return null;
+    return { head: head.id, basis: prefetchBasis(setup, view, this.host.tree(), head.id), setup: { ...setup, route: setup.route } };
+  }
+
+  /** A prefetch is owed: wanted, no record held for its basis, not running. */
+  private preDue(): PreWanted | null {
+    const w = this.preWanted();
+    if (w === null || this.prefetched.has(w.basis) || this.pre?.basis === w.basis) return null;
+    return w;
+  }
+
+  /**
+   * The running prefetch still stands: the head is its head (same basis), or a user message answering it
+   * — one or several, stacked (the turn about to adopt it, ruling K: recall.ts basisHead); the recall
+   * setup still asks for it.
+   */
+  private preValid(pre: PreRun): boolean {
+    if (this.mode !== 'auto') return false;
+    const setup = recallSetup(this.ctx, this.host.currentConfig());
+    if (setup === null || setup.route === null || !wantsPrefetch(setup)) return false;
+    const view = this.host.view();
+    const tree = this.host.tree();
+    const head = view.path.at(-1);
+    if (head === undefined || basisHead(tree, head.id) !== pre.head) return false;
+    return prefetchBasis(setup, view, tree, pre.head) === pre.basis;
+  }
+
+  /** Keeps a prefetch's record (the newest PREFETCH_KEEP). */
+  private keepPrefetch(basis: string, rec: RecallRecord): void {
+    this.prefetched.delete(basis);
+    this.prefetched.set(basis, rec);
+    while (this.prefetched.size > PREFETCH_KEEP) this.prefetched.delete(this.prefetched.keys().next().value!);
+  }
+
+  /** D-202: one prefetch run, at background priority under its boost; its record is kept by basis, nothing written. */
+  private beginPrefetch(w: PreWanted): void {
+    const ctrl = new AbortController();
+    const boost = createBoost();
+    let settle!: (rec: RecallRecord | null) => void;
+    const done = new Promise<RecallRecord | null>((resolve) => (settle = resolve));
+    const run: PreRun = { key: `prerecall:${w.head}`, head: w.head, basis: w.basis, ctrl, boost, waiting: true, done };
+    this.pre = run;
+    this.preQueued = w.basis;
+    const publish = (body: EventBody): void => {
+      if (!this.closed) this.host.publish(body);
+    };
+    const cfg = w.setup.cfg;
+    const env: AgentCallEnv = {
+      sched: boosted(this.ctx.sched, boost),
+      fetch: this.ctx.fetch,
+      timeouts: timeoutsFor(w.setup.route.conn, this.ctx.timeouts),
+      timers: this.ctx.timers,
+      clock: this.ctx.clock,
+      random: this.ctx.random,
+      ...(this.ctx.retryMaxDelayMs !== undefined ? { retryMaxDelayMs: this.ctx.retryMaxDelayMs } : {}),
+      ...(this.ctx.prices ? { prices: this.ctx.prices } : {}),
+      emit: (ev) => publish(ev),
+      onProviderError: (i) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, ...i }),
+      ...(this.ctx.keepRequests === true ? { keepRequest: (req: ModelRequest) => this.keepRequest(req) } : {}),
+    };
+    const view = this.host.view();
+    const tree = this.host.tree();
+    void (async (): Promise<RecallRecord | null> => {
+      const res = await runRecall({
+        setup: w.setup,
+        route: w.setup.route,
+        view,
+        tree,
+        upTo: w.head,
+        prefetch: true,
+        counter: this.ctx.counter,
+        env,
+        signal: ctrl.signal,
+        // A prefetch has no job: `p_<head>:recall:0` (kept as p_<head>_recall_0.json).
+        callKeyPrefix: `p_${w.head}:recall`,
+        priority: 'background',
+        idleDelaySec: cfg.idleDelaySec,
+        onGrant: () => {
+          if (!run.waiting || this.pre !== run) return;
+          run.waiting = false;
+          publish({ type: 'agent', agent: 'recall', status: 'started', source: 'prefetch' });
+        },
+      });
+      if (this.closed) return null;
+      if (res.preempted) {
+        publish({ type: 'agent', agent: 'recall', status: 'preempted' });
+        return null;
+      }
+      if (ctrl.signal.aborted) {
+        if (reasonOf(ctrl.signal) === 'superseded') publish({ type: 'agent', agent: 'recall', status: 'skipped', reason: 'superseded' });
+        return null;
+      }
+      if (res.truncated && this.host.firstNotice(RECALL_INDEX_TRUNCATED)) this.notice(truncatedNotice(res.omitted, w.setup.profile, w.setup.label));
+      if (res.refused && this.host.firstNotice(STRUCTURED_REFUSED_KEY)) {
+        this.notice({ level: 'warn', code: 'caps.suggest', message: structuredRefusedMessage(w.setup.label, 'recall') });
+      }
+      this.keepPrefetch(w.basis, res.record);
+      publish(recallEvent(res.record, 'prefetch'));
+      return res.record;
+    })()
+      .catch(() => null)
+      .then((rec) => {
+        if (this.pre === run) this.pre = null;
+        settle(rec);
+        if (!this.closed) {
+          this.refresh();
+          this.pump();
+        }
+        this.wake();
+      });
   }
 
   /** The memoryWait loops look again. */
@@ -814,7 +991,9 @@ export class Lane {
    * D-171 memoryWait, until nothing is left to run or `timeoutMs` passed (idle false; a running task
    * goes on). Manual mode runs the lane (never while a turn of the session runs: it waits for the
    * turn; a failure's wait and a fresh message's hold do not apply). Auto mode only waits (ruling I):
-   * the lane starts its tasks itself, after a turn, a fresh message's hold or a failure's wait.
+   * the lane starts its tasks itself, after a turn, a fresh message's hold or a failure's wait — and
+   * (M5c, ruling I) the recall prefetch too: one queued or in flight is waited for to its end, one owed
+   * for the head until the lane begins it; idle is false while either is so.
    */
   async wait(timeoutMs?: number): Promise<MemoryStatus & { idle: boolean }> {
     let timedOut = false;
@@ -835,12 +1014,17 @@ export class Lane {
           await Promise.race([this.running.done, timeout]);
           continue;
         }
+        if (this.pre) {
+          await Promise.race([this.pre.done, timeout]);
+          continue;
+        }
         const plan = this.plan();
         const next = plan.tasks.find((t) => this.startable(t));
-        if (!next || this.recorder(plan.cfg) === null) break;
-        if (this.mode === 'auto' || this.host.busy()) {
+        const owed = this.preDue() !== null;
+        if ((!next || this.recorder(plan.cfg) === null) && !owed) break;
+        if (this.mode === 'auto' || this.host.busy() || !next) {
           this.pump();
-          if (!this.running) await Promise.race([this.nextLook(), timeout]);
+          if (!this.running && !this.pre) await Promise.race([this.nextLook(), timeout]);
           continue;
         }
         const went = this.tryBegin(next, plan);
@@ -856,7 +1040,8 @@ export class Lane {
     const status = this.status();
     const plan = this.plan();
     const runnable = this.recorder(plan.cfg) !== null && plan.tasks.some((t) => this.startable(t));
-    return { ...status, idle: !timedOut && status.running === undefined && !runnable };
+    const prefetching = this.pre !== null || this.preDue() !== null;
+    return { ...status, idle: !timedOut && status.running === undefined && !runnable && !prefetching };
   }
 
   // ---- the derivation ---------------------------------------------------------------------------------
@@ -1062,12 +1247,20 @@ export class Lane {
     const plan = this.plan();
     const r = this.running;
     if (r && !this.stillValid(r, plan.cfg)) abortWith(r.ctrl, 'superseded');
+    // M5c (D-202): a prefetch whose basis the path left is superseded; one owed is told as queued once.
+    const pre = this.pre;
+    if (pre && !pre.ctrl.signal.aborted && !this.preValid(pre)) abortWith(pre.ctrl, 'superseded');
+    const due = this.pre === null ? this.preDue() : null;
+    if (due !== null && this.preQueued !== due.basis) {
+      this.preQueued = due.basis;
+      this.host.publish({ type: 'agent', agent: 'recall', status: 'queued' });
+    }
     const keys = new Set(plan.tasks.map((t) => t.key));
     for (const t of plan.tasks) {
       if (!this.announced.has(t.key)) this.host.publish({ type: 'agent', agent: t.task === 'file' ? 'filing' : 'historian', status: 'queued' });
     }
     this.announced = keys;
-    const n = plan.tasks.length + (r ? 1 : 0);
+    const n = plan.tasks.length + (r ? 1 : 0) + (this.pre !== null || due !== null ? 1 : 0);
     if (n !== this.told) {
       this.told = n;
       this.host.publish({ type: 'idle', background: n });
@@ -1142,9 +1335,15 @@ export class Lane {
     if (this.closed || this.mode !== 'auto' || this.pumping || this.host.busy()) return;
     this.pumping = true;
     try {
-      for (let quick = 0; quick < PUMP_GUARD && !this.running && !this.closed; ) {
+      for (let quick = 0; quick < PUMP_GUARD && !this.running && !this.pre && !this.closed; ) {
         const plan = this.plan();
         const next = plan.tasks.find((t) => !this.backoff.has(t.key) && this.startable(t));
+        // M5c (D-202): the prefetch goes first, but after a starved task (D-172).
+        const due = this.preDue();
+        if (due !== null && !(next !== undefined && this.starved.has(preemptKey(next)))) {
+          this.beginPrefetch(due);
+          break;
+        }
         if (!next || this.holding(plan.cfg)) break;
         const went = this.tryBegin(next, plan);
         if (went === 'none') break;
@@ -1383,6 +1582,7 @@ export class Lane {
         system: req.system,
         user: req.user,
         schema: req.schema,
+        opening: req.opening,
         maxTokens: Math.max(1, Math.floor(Math.min(req.maxTokens, capOut, bindOut))),
         temperature: req.temperature,
         profile: req.profile,
@@ -1432,6 +1632,7 @@ export class Lane {
       system: req.system,
       user: req.user,
       schema: req.schema,
+      opening: req.opening,
       maxTokens: Math.max(1, Math.floor(Math.min(req.maxTokens, room, capOut, bindOut))),
       temperature: req.temperature,
       profile,
@@ -1494,6 +1695,8 @@ export class Lane {
       system: prep.system,
       user: [prep.user],
       tag: null,
+      // D-208: a prefill where the transport and the caps take one (structuredCall decides).
+      opening: prep.opening,
       route: rec.route,
       transport,
       samplers: samplersFor(rec.binding, prep.temperature),

@@ -20,6 +20,8 @@
 //      aliases and data;
 //   g. --keep-requests: the Director's request holds [COMPENDIUM CONTEXT] with Мира.
 // Each step is its own test over the one recorded run; the last prints the transcript.
+// RP_CORE_RECALL is removed from every spawned CLI (the test preload sets it to lexical): the commands
+// run as a person types them, and chat.jsonl tags no line for recall, so recall makes no call (ruling K).
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -52,7 +54,7 @@ const shq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 interface Step {
   args: string[];
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   stdin?: string;
   r: RunResult;
 }
@@ -67,8 +69,8 @@ let bookAfter: Buffer;
 let said: { line: string; out: string }[];
 let ms: number;
 
-async function cli(args: string[], o: { env?: Record<string, string>; stdin?: string } = {}): Promise<RunResult> {
-  const r = await run(['--home', home, ...args], { ...(o.stdin !== undefined ? { stdin: o.stdin } : {}), ...(o.env ? { env: o.env } : {}) });
+async function cli(args: string[], o: { env?: Record<string, string | undefined>; stdin?: string } = {}): Promise<RunResult> {
+  const r = await run(['--home', home, ...args], { ...(o.stdin !== undefined ? { stdin: o.stdin } : {}), env: { RP_CORE_RECALL: undefined, ...o.env } });
   steps.push({ args, ...o, r });
   return r;
 }

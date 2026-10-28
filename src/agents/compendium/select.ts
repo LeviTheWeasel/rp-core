@@ -8,7 +8,8 @@
 // user message: U is empty, so it gets tiers 2 and 3 (section H). An entry is picked once, at its
 // best tier. Inside a tier: entries named like the card's character or the persona last (they are in
 // the prompt anyway), then (tier 2) the newer message first, then the entry changed last, then handle
-// order. Matching is mention.ts's (D-169 as narrowed in section I: a proper name's words in any order
+// order. M5c (.notes/m5c-decisions.md D-203, D-153 amended): tier 1 keeps recall's own ranking (the
+// order of `recallPicks`), nothing else. Matching is mention.ts's (D-169 as narrowed in section I: a proper name's words in any order
 // within one text, a phrase name or a lore key as a run, a key's secondary keys and logic honoured;
 // U with the guidance is one text, each window message another). Pure.
 
@@ -32,7 +33,7 @@ export interface SelectInput {
   windowTexts: readonly string[];
   /** The card character's and the persona's names (PathView.castNames). */
   castNames: readonly string[];
-  /** Entry keys recall picked (M5c; none in M5a). */
+  /** Entry keys recall picked (M5c; none in M5a), in recall's order: tier 1 keeps it (D-203). */
   recallPicks?: readonly string[];
 }
 
@@ -41,6 +42,8 @@ interface Ranked {
   cast: boolean;
   /** Tier 2: index of the newest window message naming the entry (higher = newer); -1 otherwise. */
   msg: number;
+  /** Tier 1: the entry's place in recall's picks (D-203); -1 otherwise. */
+  rank: number;
   lastSeq: number;
   /** Handle number, then input position. */
   c: number;
@@ -62,7 +65,9 @@ export function select(input: SelectInput): Pick[] {
   const guided = input.guidance !== undefined && input.guidance.trim() !== '';
   const named = mentionText(guided ? `${input.uText}\n${input.guidance}` : input.uText);
   const window = input.windowTexts.slice(-WINDOW_MESSAGES).map(mentionText);
-  const recall = new Set(input.recallPicks ?? []);
+  // D-203: recall's order (a key picked twice keeps its first place).
+  const recall = new Map<string, number>();
+  for (const key of input.recallPicks ?? []) if (!recall.has(key)) recall.set(key, recall.size);
 
   const ranked: Ranked[] = [];
   const seen = new Set<string>();
@@ -81,12 +86,13 @@ export function select(input: SelectInput): Pick[] {
       else return;
     }
     const ref = input.refOf(e.key);
-    ranked.push({ pick: { key: e.key, ref, tier, via: VIA[tier] }, cast: isCast(e), msg, lastSeq: e.prov.lastSeq, c: handleNumber(ref), at });
+    ranked.push({ pick: { key: e.key, ref, tier, via: VIA[tier] }, cast: isCast(e), msg, rank: tier === 1 ? recall.get(e.key)! : -1, lastSeq: e.prov.lastSeq, c: handleNumber(ref), at });
   });
 
   ranked.sort(
     (a, b) =>
       a.pick.tier - b.pick.tier ||
+      (a.pick.tier === 1 ? a.rank - b.rank : 0) ||
       Number(a.cast) - Number(b.cast) ||
       b.msg - a.msg ||
       b.lastSeq - a.lastSeq ||

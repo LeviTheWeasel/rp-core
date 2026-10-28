@@ -23,11 +23,19 @@
 // M1b: the checkpointed text goes through the same post-processing as a live answer before it
 // commits (§6.2 step 9, D-57): leaked tool-call markup is stripped, with one notice per open.
 
+import { checkRecallRecord } from '../agents/compendium/recall.ts';
 import { continuationResult } from '../prompt/shape.ts';
 import { stripToolCallLeaks } from '../tools/leaks.ts';
 import type { Entry, Generation, PrepEntry, TurnEntry } from '../session/entries.ts';
 import type { Notice } from '../protocol/events.ts';
 import { placeCommit, type Journal } from './commit.ts';
+
+
+/** M5c (D-200): a recovered answer's RecallRecord, from its prep (checkRecallRecord: a malformed one is left out). */
+function recalled(prep: PrepEntry | undefined): { recall?: NonNullable<ReturnType<typeof checkRecallRecord>> } {
+  const rec = prep?.recall === undefined ? null : checkRecallRecord(prep.recall);
+  return rec === null ? {} : { recall: rec };
+}
 
 export interface RecoverJournal extends Journal {
   entries(): readonly Entry[];
@@ -148,7 +156,8 @@ export function recoverSession(j: RecoverJournal): RecoveryReport {
         gen: recoveredGen(prep),
         ...(prep ? { trace: { ...prep.trace, partial: true as const } } : {}),
         ...(prep?.dir ? { dir: prep.dir } : {}),
-        ...(prep?.recall ? { recall: prep.recall } : {}),
+        // M5c (D-200): the record the turn wrote into prep (a malformed one reads as absent).
+        ...recalled(prep),
         ...(prep?.vars ? { vars: prep.vars } : {}),
       },
       continueConflict: 'abandoned',

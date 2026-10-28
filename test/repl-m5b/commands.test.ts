@@ -52,8 +52,10 @@ describe('parsing', () => {
     for (const l of ['/memory wait', '/memory wait 5', '/memory status']) expect(commandClass(cmd(l))).toBe('read');
   });
 
-  test('recall\'s subcommands are still later; /help lists the M5b ones and the Later line keeps M5c', () => {
-    for (const sub of ['recall', 'profile', 'mode']) expect(cmd(`/memory ${sub}`)).toEqual({ name: 'later', command: `memory ${sub}`, when: 'M5c (recall)' });
+  test('recall\'s subcommands arrived with M5c (D-206); /help lists the M5b ones and has no Later line', () => {
+    expect(cmd('/memory recall')).toEqual({ name: 'memory', action: 'recall' });
+    expect(cmd('/memory profile')).toEqual({ name: 'memory', action: 'profile' });
+    expect(cmd('/memory mode')).toEqual({ name: 'memory', action: 'mode' });
     const help = helpText();
     for (const s of [
       '/memory undo <ref|#n> [file|hist]   take back what the filing agent (or the historian) wrote from message n',
@@ -64,7 +66,7 @@ describe('parsing', () => {
     ]) {
       expect(help).toContain(s);
     }
-    expect(help).toContain('\nLater: /memory recall|profile|mode (M5c, recall).\n');
+    expect(help).not.toContain('Later:');
     expect(help).not.toContain('M5b');
   });
 });

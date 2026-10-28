@@ -127,15 +127,45 @@ export interface Trace {
 export type { DirectorRecord };
 /** A `dir` as the journal holds it: written as a DirectorRecord, read back as any object. */
 export type StoredDirectorRecord = DirectorRecord | Record<string, unknown>;
-/** §7.4.2 RecallRecord. Opaque until M5. */
-export type RecallRecord = Record<string, unknown>;
+/**
+ * §7.4.2 RecallRecord (M5c, D-200): what recall picked for an answer. Written in `prep` and the commit
+ * only when recall ran or a prefetch was missed. `picks` hold entry KEYS in the model's order; no entry
+ * text is stored (assembly reads the current fold). Read back through agents/compendium/recall.ts
+ * checkRecallRecord: a malformed stored record reads as absent.
+ */
+export interface RecallRecord {
+  v: 1;
+  status: 'recalled' | 'empty' | 'skipped' | 'failed';
+  source: 'sync' | 'prefetch' | 'lexical' | 'reused';
+  profile: 'full' | 'lite';
+  picks: { ref: string; reason?: string }[];
+  unknown: number;
+  repeated: number;
+  trimmed: number;
+  omitted: number;
+  byName: number;
+  salvaged: number;
+  calls: number;
+  ms?: number;
+  model?: string;
+  transport?: 'structured' | 'tagged';
+  code?: 'timeout' | 'provider_error' | 'no_output' | 'undecodable' | 'transport_unsupported' | 'aborted' | 'no_connection' | 'prefetch_missed' | 'empty_index' | 'no_room';
+  /** prefetch: the answer A(n) it was computed after. */
+  basis?: string;
+  /** swipe: the replaced answer; continue: its target. */
+  reusedFrom?: string;
+  /** Token usage of its calls, for /usage. */
+  usage?: { input: number; output: number };
+}
+/** A `recall` as the journal holds it: written as a RecallRecord, read back as any object. */
+export type StoredRecallRecord = RecallRecord | Record<string, unknown>;
 
 export interface CommitBody {
   blocks: Block[];
   gen?: Generation;
   trace?: Trace;
   dir?: StoredDirectorRecord;
-  recall?: RecallRecord;
+  recall?: StoredRecallRecord;
   vars?: VarsDiff;
 }
 
@@ -198,7 +228,7 @@ export interface CompendiumConfig {
 export interface CompendiumTrace {
   /** CompendiumView.rev the request read. */
   rev: string;
-  /** M5a: always 'lexical' (the model-free selector); M5c adds recall sources. */
+  /** M5a: 'lexical' (the model-free selector); M5c: the turn's RecallRecord source, or 'lexical' / 'off' without one (D-203). */
   source: 'sync' | 'prefetch' | 'lexical' | 'reused' | 'off';
   profile: 'full' | 'lite';
   picks: { ref: string; key: string; via: 'mention' | 'model' | 'window' | 'constant' }[];
@@ -344,7 +374,7 @@ export interface PrepEntry {
   seq: number;
   turn: string;
   dir?: StoredDirectorRecord;
-  recall?: RecallRecord;
+  recall?: StoredRecallRecord;
   vars?: VarsDiff;
   trace: Trace;
   /** continue only: how the addition is joined and the target's text at turn start (recovery needs both). */

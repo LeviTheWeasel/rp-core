@@ -10,6 +10,8 @@
 // slot). Keys are resolved lazily at the first call that needs one.
 
 import type { Connection, EngineOptions } from '../engine/api.ts';
+import { connectionLocality } from '../engine/sched.ts';
+import { contextWindow } from '../prompt/budget.ts';
 import { buildConnections, loadConfig, type RpConfig } from '../config/config.ts';
 import { createSecretResolver, scrub, type SecretResolver } from '../config/secrets.ts';
 import type { ModelCaps, ProviderError } from '../providers/types.ts';
@@ -149,4 +151,22 @@ export function connectionWindow(c: Connection, model: string): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * M5c (/memory profile, /memory mode; ReplDeps.routeOf): a binding's connection as the engine sees it —
+ * its window before the preset's and the session's limits (budget.ts contextWindow over the resolved
+ * caps: their context length, else the local or remote default) and whether the scheduler takes its
+ * origin for a local server (sched.ts connectionLocality over the connections engineOptions gives the
+ * engine, the --provider override's included). The override serves every binding. null when the
+ * connection is unknown or its caps cannot be resolved for the model.
+ */
+export function routeOf(rt: Pick<Runtime, 'connections' | 'provider'>, conn: string, model: string): { window: number; local: boolean } | null {
+  const c = rt.provider ?? (Object.hasOwn(rt.connections, conn) ? rt.connections[conn] : undefined);
+  if (!c) return null;
+  const caps = connectionCaps(c, model);
+  if (caps === null) return null;
+  const all = Object.values(rt.connections);
+  const isLocal = connectionLocality(() => (rt.provider ? [...all, rt.provider] : all));
+  return { window: contextWindow({ caps, local: c.local }), local: isLocal(c.origin) };
 }

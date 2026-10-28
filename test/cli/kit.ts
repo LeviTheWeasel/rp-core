@@ -18,17 +18,20 @@ export interface RunResult {
   stderr: string;
 }
 
-export function spawnCli(args: readonly string[], opts: { stdin?: string; env?: Record<string, string> } = {}) {
+/** `env` is merged over this process's; a variable set to undefined is removed (RP_CORE_RECALL: undefined undoes the preload's). */
+export function spawnCli(args: readonly string[], opts: { stdin?: string; env?: Record<string, string | undefined> } = {}) {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries({ ...process.env, ...opts.env })) if (v !== undefined) env[k] = v;
   return Bun.spawn([process.execPath, MAIN, ...args], {
     cwd: ROOT,
     stdin: opts.stdin !== undefined ? new Blob([opts.stdin]) : 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, ...opts.env },
+    env,
   });
 }
 
-export async function run(args: readonly string[], opts: { stdin?: string; env?: Record<string, string> } = {}): Promise<RunResult> {
+export async function run(args: readonly string[], opts: { stdin?: string; env?: Record<string, string | undefined> } = {}): Promise<RunResult> {
   const p = spawnCli(args, opts);
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, stdout, stderr };

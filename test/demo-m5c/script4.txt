@@ -1,0 +1,7 @@
+/r
+/trace
+/memory recall
+/c
+/trace
+/memory recall
+/quit

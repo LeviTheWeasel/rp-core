@@ -39,11 +39,11 @@ describe('/director', () => {
     expect(commandClass(cmd('/director off'))).toBe('edit');
   });
 
-  test('/help lists /director and its switch; the Later line keeps only the Compendium', () => {
+  test('/help lists /director and its switch; no Later line since M5c', () => {
     const help = helpText();
     expect(help).toContain("/director          the Story Director's plan: chapter, arcs, seeds, hidden arcs, the last directive");
     expect(help).toContain('/director on|off   let the Director plan every reply, or stop it (its plan is kept)');
     expect(help).not.toContain('/director (M4)');
-    expect(help).toContain('Later: /memory recall|profile|mode (M5c, recall).');
+    expect(help).not.toContain('Later:');
   });
 });

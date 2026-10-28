@@ -1,0 +1,16 @@
+/memory mode auto
+/model
+/memory profile
+/director on
+— Но ведь кто-то видел, как его увозили той ночью?
+/trace
+/memory recall
+/preview
+/r
+/trace
+/director off
+— Где мне искать Фрола в такой час?
+/memory wait
+/trace
+/memory recall
+/quit

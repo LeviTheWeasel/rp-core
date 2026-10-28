@@ -40,7 +40,9 @@
 //   cut head+tail to fit it (a message bigger than the recorder's window no longer stops the
 //   historian); a plot named by an alias is its plot, and its arc is keyed by the canonical name;
 //   historianOps says how many summaries the answer offered and how many it holds, so the lane can fail
-//   an answer whose summaries were all refused; a list key holding null, '' or "none" is nothing.
+//   an answer whose summaries were all refused; a list key holding null, '' or "none" is nothing;
+// - M5c (D-208; Bunraku sends no prefill): the request names its answer's opening, `{"filings": [`,
+//   which structuredCall sends as an assistant prefill on the tagged transport when the caps take one.
 
 import type { MemOp } from '../../session/entries.ts';
 import type { JSONSchema } from '../../providers/types.ts';
@@ -63,6 +65,8 @@ export const OVERLAP_SHARE = 1 / 3;
 /** A summary's text is cut to this many chars (D-68.2). */
 export const SUMMARY_CHARS = 1_500;
 export const HISTORIAN_TEMPERATURE = 0.3;
+/** D-208: the opening of the answer, sent as an assistant prefill where the caps take one (structuredCall `opening`). */
+export const HISTORIAN_OPENING = '{"filings": [';
 /** An item nested deeper than this is refused (Bunraku MAX_DEPTH). */
 export const MAX_DEPTH = 6;
 
@@ -554,6 +558,8 @@ export interface HistorianRequest {
   maxTokens: number;
   temperature: number;
   schema: { name: string; schema: JSONSchema };
+  /** D-208: HISTORIAN_OPENING, structuredCall's `opening`. */
+  opening: string;
 }
 
 /** Everything structuredCall needs from the historian but the route (D-176): tag null, repair on. */
@@ -575,6 +581,7 @@ export function historianRequest(input: HistorianRequestInput): HistorianRequest
     maxTokens: HISTORIAN_LIMITS[profile].maxTokens,
     temperature: HISTORIAN_TEMPERATURE,
     schema: { name: 'historian', schema: historianSchema(profile) },
+    opening: HISTORIAN_OPENING,
   };
 }
 

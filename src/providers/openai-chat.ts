@@ -270,6 +270,19 @@ function toolFields(req: ModelRequest, tools: readonly ToolSpec[]): Rec {
   return out;
 }
 
+/**
+ * M5c (D-198, the "+1 024" rule): whether a request with reasoning 'none' carries an off switch on this
+ * wire for these caps: the caps confirm reasoning can be turned off and reasoningControl sends it (an
+ * effort 'none', the model's own off shape, or the template's enable_thinking:false). False when it
+ * sends nothing (no control, a control this wire does not speak, or no confirmed switch).
+ */
+export function sendsReasoningOff(caps: ModelCaps): boolean {
+  const r = caps.reasoning;
+  if (r.control === 'effort') return r.efforts?.includes('none') === true || (r.canDisable && isRecord(r.offShape));
+  if (r.control === 'toggle') return r.canDisable;
+  return false;
+}
+
 /** Thinking on/off/effort per caps.reasoning.control; 'auto' (or no setting) sends nothing. */
 function reasoningControl(req: ModelRequest): Rec {
   const r = req.caps.reasoning;

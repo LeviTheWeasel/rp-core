@@ -29,6 +29,14 @@
 // verbs memoryUndo (revert rows, after a dry run), memoryRefile and memoryRetry (job retry rows)
 // follow D-159 (session_busy during a turn, changed:false); memoryWait and memoryStatus are allowed
 // during a turn (memoryWait starts nothing while it runs, the lead's ruling I).
+//
+// M5c (.notes/m5c-decisions.md D-202…D-204): a turn reaches the lane's prefetches through
+// prefetchFor and counts slow recalls through tally (recall_slow); /preview --turn rebuilds a past
+// answer's block from its own RecallRecord (tier 1 and trace.compendium.source; a later continue's record
+// is not the request's, ruling K), never calling recall. memoryStatus and memoryWait also say the
+// prefetch for the next reply (the lead's ruling H: MemoryStatus.prefetch), read off the lane by the
+// head's basis; memoryWait waits for it as well (ruling I). close() stops a running turn before the lane
+// closes (a grace wait ends as a Stop, not a miss).
 
 import { statSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -81,8 +89,10 @@ import { isoNow, type EngineCtx } from './context.ts';
 import { Lane, taskOn, type LaneHost } from './lane.ts';
 import { firstRoundLast, modelRequest, roundFields } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
-import { buildRequest, compendiumConfigOf, compendiumNotices, loadLibrary, maxTokensFor, type SessionLibrary } from './request.ts';
-import { TurnRun, type EventBody, type TurnHost } from './turn.ts';
+import { buildRequest, compendiumConfigOf, compendiumNotices, liveTyped, loadLibrary, maxTokensFor, type RecallInput, type SessionLibrary } from './request.ts';
+import { basisHead, prefetchBasis, recallSetup, wantsPrefetch } from './recall.ts';
+import { checkRecallRecord, recallPicks } from '../agents/compendium/recall.ts';
+import { TurnRun, type EventBody, type PrefetchLook, type TurnHost } from './turn.ts';
 import { traceForSent } from '../prompt/assemble.ts';
 import { loreSources } from '../prompt/assemble/lore.ts';
 import { readRecapTrace } from '../prompt/assemble/recap.ts';
@@ -550,6 +560,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   private readonly held = new Set<string>();
   private readonly turnIds = new Set<string>();
   private readonly noticed = new Set<string>();
+  /** M5c: session-level tallies (TurnHost.tally: slow sync recalls). */
+  private readonly tallies = new Map<string, number>();
   /**
    * The next turn's seed, drawn early by a preview of it and kept until a turn takes it, so what is
    * seeded ({{random}}, {{pick}}, lore chance and groups) comes out in the turn as the preview showed.
@@ -721,6 +733,18 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   /** M5b: after the turn's terminal event, the lane looks again (a committed answer may be accepted, D-171). */
   turnSettled(): void {
     this.lane.poke();
+  }
+
+  /** M5c (D-202): the lane's prefetch for a turn's basis (TurnHost.prefetchFor). */
+  prefetchFor(basis: string): PrefetchLook | null {
+    return this.lane.prefetchFor(basis);
+  }
+
+  /** M5c (D-204): a session-level tally (recall_slow), +1, the new count. */
+  tally(key: string): number {
+    const n = (this.tallies.get(key) ?? 0) + 1;
+    this.tallies.set(key, n);
+    return n;
   }
 
   // ---- reading -----------------------------------------------------------------------------------
@@ -923,6 +947,19 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     }
   }
 
+  /**
+   * M5c: the recall input a past answer's request had: its record's picks and the trace's source (none:
+   * as M5a). The message's own record, not a later continue's (ruling K): the preview rebuilds the
+   * request `past` (the message's own trace) was written for.
+   */
+  private previewRecall(tree: TreeIndex, id: string, past: Trace | undefined): RecallInput | undefined {
+    const own = tree.msgs.get(id)?.recall;
+    const rec = own === undefined ? null : checkRecallRecord(own);
+    const source = past?.compendium?.source;
+    if (rec === null && source === undefined) return undefined;
+    return { picks: recallPicks(rec), source: source ?? rec?.source ?? 'lexical' };
+  }
+
   private buildPreview(opts: PreviewOptions): PreviewResult {
     if (!isObject(opts)) throw new Refusal('invalid_params', 'preview options must be an object');
     if (opts.draft !== undefined && typeof opts.draft !== 'string') throw new Refusal('invalid_params', 'draft must be a string');
@@ -987,6 +1024,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     seed ??= this.seedOfNextTurn();
     const explain = opts.explain === true;
     const placements = this.previewDirective(tree, plan, opts.turn);
+    // M5c (D-203; §7.4.2 "/preview --turn rebuilds the block from prep.recall"): a past answer's tier 1
+    // is its RecallRecord's picks, with the source its trace names. A preview never calls recall.
+    const recall = opts.turn !== undefined ? this.previewRecall(tree, opts.turn, past) : undefined;
 
     const built = buildRequest({
       home: this.ctx.home,
@@ -1004,6 +1044,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       library,
       ...(explain ? { explain: true } : {}),
       ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
+      ...(recall !== undefined ? { recall } : {}),
     });
     if (!built.ok) {
       // A shape failure is the request failing to build, as assemble's own.
@@ -1137,13 +1178,13 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
 
   close(): Promise<void> {
     this.closing ??= (async () => {
-      // M5b (D-171): the lane first, so nothing it does lands after the log is closed.
-      await this.lane.close();
+      // M5c (ruling K): the running turn is stopped before the lane closes, so a grace wait for the
+      // prefetch ends as a Stop, not as a miss of the prefetch the lane's close cancels. M5b (D-171):
+      // the lane closes before the log, so nothing it does lands after the log is closed.
       const run = this.running;
-      if (run) {
-        run.stop('shutdown');
-        await run.result;
-      }
+      run?.stop('shutdown');
+      await this.lane.close();
+      if (run) await run.result;
       this.log.close();
       this.onClose(this);
     })();
@@ -1596,12 +1637,45 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (!isObject(opts)) throw new Refusal('invalid_params', 'memoryWait takes {timeoutMs?}');
     const t = opts.timeoutMs;
     if (t !== undefined && !(typeof t === 'number' && Number.isFinite(t) && t >= 0)) throw new Refusal('invalid_params', 'timeoutMs must be a number of milliseconds, 0 or more');
-    return this.lane.wait(t);
+    return this.lane.wait(t).then((status) => this.withPrefetch(status));
   }
 
   memoryStatus(): MemoryStatus {
     this.assertOpen();
-    return this.lane.status();
+    return this.withPrefetch(this.lane.status());
+  }
+
+  /** The lead's ruling H: a lane status with the recall prefetch for the next reply, when one is wanted. */
+  private withPrefetch<S extends MemoryStatus>(status: S): S {
+    if (this.closing) return status;
+    const prefetch = this.prefetchNow();
+    return prefetch === null ? status : { ...status, prefetch };
+  }
+
+  /**
+   * D-202 and ruling H: the prefetch the lane holds or owes for the head, as MemoryStatus.prefetch says it
+   * — the lane derives one for an answer at the head (the greeting too); a player's message at the head
+   * (one or several stacked, ruling K) reads the one computed after the newest answer before it (the turn
+   * about to adopt it). null when the lane is manual, the Compendium is off or has no live typed entry,
+   * or the recall mode does not prefetch.
+   */
+  private prefetchNow(): NonNullable<MemoryStatus['prefetch']> | null {
+    if (this.lane.mode !== 'auto') return null;
+    const setup = recallSetup(this.ctx, this.config);
+    if (setup === null || !wantsPrefetch(setup)) return null;
+    const view = this.view();
+    const head = view.path.at(-1);
+    if (head === undefined || liveTyped(view.compendium).length === 0) return null;
+    const tree = this.tree();
+    const at = basisHead(tree, head.id);
+    const on = at === null ? undefined : view.path.find((m) => m.id === at);
+    if (on === undefined) return null;
+    const basis = prefetchBasis(setup, view, tree, on.id);
+    const look = this.lane.prefetchFor(basis);
+    if (look?.record !== undefined) return { basis, on: on.id, state: 'ready', record: look.record };
+    if (look?.running !== undefined) return { basis, on: on.id, state: 'running' };
+    // Owed and not begun: the lane derives a prefetch only while an answer is the head.
+    return head === on ? { basis, on: on.id, state: 'queued' } : null;
   }
 
   /** A lane verb's message (on the active path) and task kind; not_found / invalid_params. */

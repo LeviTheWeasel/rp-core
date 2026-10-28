@@ -91,16 +91,23 @@ describe('help and later', () => {
       '/memory edit <ref> <title> | <keys> | <text>',
       '/memory retire <ref> [reason], /memory restore <ref>',
       '/memory export <name> [--format core|compendium] [--force]',
-      'Later: /memory recall|profile|mode (M5c, recall).',
+      '/memory recall [--turn #n|id]',
+      '/memory profile',
+      '/memory mode [auto|sync|prefetch|lexical|off]',
     ]) {
       expect(help).toContain(s);
     }
     const r = await lanternRig(calls());
-    r.type('/memory recall', '/memory profile lite', '/memory mode sync', '/memory forget C1');
+    r.type('/memory recall', '/memory profile lite', '/memory mode fast', '/memory forget C1');
     r.end();
     expect(await r.done).toBe(0);
     const out = r.out();
-    for (const s of ['recall', 'profile', 'mode']) expect(out).toContain(`/memory ${s} arrives with M5c (recall)\n`);
-    expect(after(out, '/memory forget C1')).toBe('/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status\n');
+    // M5c (D-206): they arrived; their arguments are checked.
+    expect(out).not.toContain('arrives with M5c');
+    expect(after(out, '/memory profile lite')).toBe('/memory profile takes nothing after it (it shows the profile of every Compendium agent)\n');
+    expect(after(out, '/memory mode fast')).toContain('/memory mode takes auto, sync, prefetch, lexical or off (got "fast")');
+    expect(after(out, '/memory forget C1')).toBe(
+      '/memory: "forget" is not a subcommand; /memory lists the Compendium, then show, tree, new, add, edit, retire, restore, export, on, off, undo, refile, retry, wait, status, recall, profile, mode\n',
+    );
   });
 });

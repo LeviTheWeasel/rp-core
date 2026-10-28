@@ -199,4 +199,9 @@ export interface CompendiumBlockInput {
   inPrompt: ReadonlySet<string>;
   /** Entries hidden or elements dropped by freshness (for the trace). */
   hidden: number;
+  /**
+   * M5c (D-203): where tier 1 came from, for trace.compendium.source — the turn's RecallRecord source,
+   * or 'lexical' / 'off' without one. Absent: 'lexical' (M5a's model-free selector).
+   */
+  source?: 'sync' | 'prefetch' | 'lexical' | 'reused' | 'off';
 }
