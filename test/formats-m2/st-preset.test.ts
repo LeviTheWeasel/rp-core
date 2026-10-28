@@ -618,6 +618,20 @@ describe('RoleCall exports (D-71 mixed, D-43 amendment)', () => {
     extensions: { rolecall: { schema_version: 1, edition_kind: 'rolecall' } },
   });
 
+  test("a custom marker with text is sent, as RoleCall's loader sends it (enabled && (content || marker)); an empty one stays an unknown marker", () => {
+    const custom = { identifier: 'rcRule', name: 'Rule', system_prompt: true, marker: true, content: 'RULE TEXT', role: 'system' };
+    const empty = { identifier: 'rcEmpty', name: 'Empty', system_prompt: true, marker: true, content: '' };
+    const r = convert(rc({}, [custom, empty], [['rcRule', true], ['rcEmpty', true]]));
+    expect(byId(r.value, 'rcRule')).toMatchObject({ enabled: true, content: 'RULE TEXT' });
+    expect(byId(r.value, 'rcEmpty')).toMatchObject({ enabled: false, content: '' });
+    expect(r.warnings.filter((w) => w.code === 'unknown_marker').map((w) => w.path)).toEqual(['prompts[3].identifier']);
+    expect(valid(r.value)).toBe(true);
+    // The same rows in a plain ST file: ST sends neither (system_prompt true).
+    const st1 = convert(st({}, [custom], [['rcRule', true]]));
+    expect(byId(st1.value, 'rcRule').enabled).toBe(false);
+    expect(codes(st1)).toContain('unknown_marker');
+  });
+
   test('isRoleCallExport: extensions.rolecall present', () => {
     expect(isRoleCallExport(rc())).toBe(true);
     expect(isRoleCallExport(st())).toBe(false);

@@ -1824,6 +1824,13 @@ class Repl {
       this.say(this.style.red(`/preview: ${what} is a greeting; it was not generated, so there is no request to rebuild`));
       return null;
     }
+    // A preview rebuilds an answer from its trace (seed, clock): an imported answer (D-188) has none.
+    const entry = this.journal().tree.msgs.get(m.id);
+    if (entry?.gen?.kind !== 'model' || !entry.trace) {
+      const why = this.session.header().imported ? 'was imported from RoleCall; rp-core did not build its request' : 'has no trace; its request was not kept';
+      this.say(this.style.red(`/preview: ${what} ${why}, so there is none to rebuild (/preview alone shows the next request)`));
+      return null;
+    }
     return m.id;
   }
 

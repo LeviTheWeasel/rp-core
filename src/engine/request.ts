@@ -40,6 +40,18 @@
 // before upTo, as freshness finds the last request, D-152), the profile of the narrator's window, and
 // older arc revisions read back from the mem rows (arcRevisionText). The slot's summaries count as in
 // the prompt for the lore tools (D-156). Compendium off: no input, the M5a request.
+//
+// D-195 (ux#2): RequestInput.fitCheck — whether the request can be built at all, asked by turn.ts
+// before the Director's model calls. Both modes stop after pass A (the tool passes fall back to it and
+// never refuse). 'exact' is pass A of the request itself. 'bound' is cheap and errs on the side of
+// "does not fit": no lore run (the session's books, the notes, the card's and the persona's own
+// books), no Compendium block and no {{recap}} input, with the whole lore share held back from the
+// window in their place (the lore run takes at most that share and the block what the lore left of it).
+// On large books the lore run is most of an assemble (over a second against about a tenth without
+// it), so a bound that fits settles the question at a fraction of an assemble; a bound that does not
+// fit only means 'exact' decides. Lore can still tip a request over by what the share does not bound
+// (ignoreBudget entries, message overheads, a variable lore sets): then the turn is refused after the
+// plan, as before D-195.
 
 import { contractText } from '../agents/director/render.ts';
 import type { Route } from './admit.ts';
@@ -63,7 +75,7 @@ import { entryKey, entryLabel, type LoreRunResult, type LoreSource } from '../lo
 import { assemble, type AssembleInput, type AssembleResult } from '../prompt/assemble.ts';
 import { loreSources, regexNotice } from '../prompt/assemble/lore.ts';
 import { readRecapTrace, type RecapRequest } from '../prompt/assemble/recap.ts';
-import { contextWindow, replyReserve } from '../prompt/budget.ts';
+import { contextWindow, loreBudget, replyReserve } from '../prompt/budget.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import { subRng } from '../prompt/rng.ts';
 import { shape } from '../prompt/shape.ts';
@@ -129,6 +141,11 @@ export interface RequestInput {
   library?: SessionLibrary;
   /** Also return the lore verdicts (preview, /lore test) [D-45]. */
   explain?: boolean;
+  /**
+   * D-195 (ux#2): only whether the request can be built (pass A alone; the file comment). 'bound':
+   * ok means the request fits, a refusal means only that 'exact' must decide; 'exact': the request.
+   */
+  fitCheck?: 'bound' | 'exact';
   /**
    * TEST SEAM (M3): the tool sets the selection draws from instead of the built-ins (EngineSeams
    * toolSets). Hosts never set it; the rules that decide WHEN a set is offered stay the same.
@@ -540,26 +557,28 @@ export function buildRequest(input: RequestInput): BuiltRequest {
   const tokenFactor = tokenFactorFor(input.tree, view, primary.model, input.counter.id);
   const compendium = resolveCompendium(plan.config.compendium);
   if (compendium.enabled) notices.push(...compendiumNotices(view.compendium));
+  // D-195: the bound check reads no lore and no Compendium input (the file comment).
+  const bound = input.fitCheck === 'bound';
   // C5: the path's live notes are one more book, before the session's (the lore engine gathers
   // '@notes' after '@card'); none without notes, so an M2 request stays as it was. D-142: the
   // Compendium entries of readable books leave the lore (the same array when there is none).
   const notes = notesBook(view.compendium);
   const routed = routeBooks(lib.sources, compendiumConfigOf(plan.config));
   const withNotes = (books: LoreSource[]): LoreSource[] => (notes ? [{ key: NOTES_BOOK_KEY, book: notes }, ...books] : books);
-  const lorebooks = withNotes(routed);
-  const block = compendiumBlockInput(view, input.tree, compendium, window, plan.guidance);
-  const recap = recapRequest(view, input.tree, plan.upTo, compendium, window);
+  const lorebooks = bound ? [] : withNotes(routed);
+  const block = bound ? undefined : compendiumBlockInput(view, input.tree, compendium, window, plan.guidance);
+  const recap = bound ? undefined : recapRequest(view, input.tree, plan.upTo, compendium, window);
 
   const base: AssembleInput = {
     sessionId: input.sessionId,
     view,
     upTo: plan.upTo,
     kind: plan.kind,
-    cast: input.header.cast,
+    cast: bound ? withoutBooks(input.header.cast) : input.header.cast,
     preset: plan.preset,
     lorebooks,
     // trace.loreHashes hashes the books as loaded (the lead's ruling I); the request is the same.
-    ...(routed !== lib.sources ? { booksAsLoaded: withNotes(lib.sources) } : {}),
+    ...(!bound && routed !== lib.sources ? { booksAsLoaded: withNotes(lib.sources) } : {}),
     ...(input.explain ? { explain: true } : {}),
     counter: input.counter,
     placements: input.placements,
@@ -567,7 +586,8 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     ...(plan.guidance ? { guidance: { text: plan.guidance, ...(plan.rejected !== undefined ? { rejected: plan.rejected } : {}) } } : {}),
     caps: primary.caps,
     window,
-    reserve,
+    // D-195: the bound holds the lore share back in place of the lore and the block it left out.
+    reserve: bound ? reserve + loreBudget(window, reserve) : reserve,
     tokenFactor,
     seed: input.seed,
     now: input.now,
@@ -587,7 +607,7 @@ export function buildRequest(input: RequestInput): BuiltRequest {
 
   // C1: what is worth offering, read off pass A.
   const transport = primary.caps.tools;
-  if (plan.kind === 'continue' || transport === 'none') return passA();
+  if (input.fitCheck !== undefined || plan.kind === 'continue' || transport === 'none') return passA();
   const sets = input.toolSets ?? BUILTIN_TOOL_SETS;
   const sources = loreSources(input.header.cast, lorebooks);
   const history = a.asm.trace.trimmed !== null;
@@ -662,6 +682,14 @@ export function buildRequest(input: RequestInput): BuiltRequest {
     tools,
     ...(echoOf ? { echo: true as const } : {}),
   };
+}
+
+/** D-195: the cast without the card's and the persona's own lorebooks (the bound check runs no lore). */
+function withoutBooks(cast: SessionHeader['cast']): SessionHeader['cast'] {
+  const { book: _card, ...character } = cast.character;
+  if (!cast.persona) return { character };
+  const { book: _persona, ...persona } = cast.persona;
+  return { character, persona };
 }
 
 /**

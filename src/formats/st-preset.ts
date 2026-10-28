@@ -21,7 +21,8 @@
 //   worldInfoAfter → {{lore::after}}, dialogueExamples →
 //   {{lore::examples_before}}{{examples}}{{lore::examples_after}}, charDescription →
 //   {{description}}, charPersonality → {{personality}}, scenario → {{scenario}},
-//   personaDescription → {{persona}}; an unknown marker is kept disabled with a warning;
+//   personaDescription → {{persona}}; an unknown marker is kept disabled with a warning (in a
+//   RoleCall export only when it has no text: RoleCall's loader sends a custom marker's text);
 // - a disabled marker stays a disabled block and sends nothing, with a warning per slot (D-71, ST);
 //   only a missing chatHistory is synthesised (enabled, at the end), with a warning;
 // - injection_position 0 → 'relative', 1 → { depth: injection_depth, order: injection_order }, but
@@ -431,8 +432,11 @@ function toDraft(row: Row, enabled: boolean, unreferenced: boolean, index: numbe
   let on = enabled;
   const plainSt = !c.rc && !c.rcBorn;
   // ST sends a custom relative prompt by its system_prompt flag alone (marker is ignored there), so
-  // a custom "marker" with system_prompt false and text is an ordinary block in an ST file.
-  const markerWithText = plainSt && r.marker === true && r.system_prompt === false && content.trim() !== '';
+  // a custom "marker" with system_prompt false and text is an ordinary block in an ST file. RoleCall's
+  // loader sends every enabled prompt with text or a marker flag (`enabled && (content || marker)`),
+  // so in a RoleCall export a custom marker that carries text is an ordinary block too (D-71 parity).
+  const hasText = content.trim() !== '';
+  const markerWithText = r.marker === true && hasText && ((plainSt && r.system_prompt === false) || c.rc);
   if (slot !== undefined) {
     if (content.trim() !== '') {
       c.w.fold('marker_content', at('content'), star('content'), "a marker's own text is not sent (ST replaces the marker); kept in extras");

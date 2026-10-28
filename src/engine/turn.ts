@@ -59,6 +59,12 @@
 // M5b (.notes/m5b-decisions.md D-171): the kept-request writer is shared with the session's background
 // lane (keepRequestFile), and the session hears when a turn has settled (after its terminal event), so
 // the lane's events never land inside a turn's stream on the bus.
+//
+// RoleCall import (.notes/rcimport-decisions.md D-195, ux#2): a turn the Director would plan first
+// asks whether its request can be built without the directive (cannotFit: a cheap bound, then pass A
+// only when the bound does not fit); when it cannot (most often context_length_exceeded: the
+// never-trimmed part is larger than the narrator's window) the turn ends there, with the refusal it
+// would get after the plan, before any Director call. A turn that fits plans as before.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -237,7 +243,7 @@ export class TurnRun {
   private dirCalls: TraceCall[] = [];
   /** M4: trace.agents.director; undefined while the Director is off. */
   private dirAgent: DirectorAgentRow | { status: 'skipped' } | undefined;
-  /** M4: the view at U the Director planned from (request.ts startView). */
+  /** M4: the view at U the Director planned from (request.ts startView); D-195: folded before the fit check. */
   private dirView: PathView | undefined;
   /** M5a: the session's books for this turn (read once, at the start). */
   private lib: SessionLibrary | undefined;
@@ -319,28 +325,22 @@ export class TurnRun {
     const { plan } = this;
     const hooked = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx);
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
+    // D-195 (ux#2): a request that cannot be built is refused before the Director's model calls.
+    if (this.plans()) {
+      this.dirView = startView(this.host.header(), this.host.tree(), this.host.view(), plan.upTo, this.library().seed);
+      const refused = this.cannotFit(hooked);
+      if (refused) {
+        this.keyedNotices(refused.notices);
+        return this.failEarly('request', refused.code, refused.message);
+      }
+    }
     // Step 3 (M4): the Director plans before assemble; a Stop meanwhile ends the turn like one above.
     const directed = await this.direct();
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
     const placements = directed.length > 0 ? [...hooked, ...directed] : hooked;
 
     // Steps 4–5: assemble and shape for the primary model (request.ts, the same function preview runs).
-    const request: RequestInput = {
-      home: this.ctx.home,
-      sessionId: this.host.sessionId,
-      header: this.host.header(),
-      tree: this.host.tree(),
-      // The view the Director read (folded at U on a swipe), so the request does not fold it again.
-      view: this.dirView ?? this.host.view(),
-      library: this.library(),
-      plan,
-      seed: this.entry.seed,
-      now: this.entry.now,
-      timeZone: this.ctx.timeZone,
-      counter: this.ctx.counter,
-      placements,
-      ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
-    };
+    const request = this.requestInput(placements);
     const built = buildRequest(request);
     this.keyedNotices(built.notices);
     if (!built.ok) return this.failEarly('request', built.code, built.message);
@@ -417,6 +417,45 @@ export class TurnRun {
     return trace;
   }
 
+  /** The request of this turn with these inserts (steps 4–5; the D-195 check before the Director too). */
+  private requestInput(placements: DepthInsert[]): RequestInput {
+    return {
+      home: this.ctx.home,
+      sessionId: this.host.sessionId,
+      header: this.host.header(),
+      tree: this.host.tree(),
+      // The view the Director read (folded at U on a swipe), so the request does not fold it again.
+      view: this.dirView ?? this.host.view(),
+      library: this.library(),
+      plan: this.plan,
+      seed: this.entry.seed,
+      now: this.entry.now,
+      timeZone: this.ctx.timeZone,
+      counter: this.ctx.counter,
+      placements,
+      ...(this.ctx.toolSets ? { toolSets: this.ctx.toolSets } : {}),
+    };
+  }
+
+  /**
+   * D-195 (ux#2): the refusal this turn's request gets without the Director's directive, or null when
+   * it can be built. The directive only adds to the never-trimmed part, so a request that cannot be
+   * built without it cannot be built with it. The cheap bound first (request.ts fitCheck): when it
+   * fits, so does the request, at a fraction of an assemble; only when it does not is pass A of the
+   * request itself built, whose refusal is the one the turn gives below.
+   */
+  private cannotFit(placements: DepthInsert[]): Extract<BuiltRequest, { ok: false }> | null {
+    const input = this.requestInput(placements);
+    if (buildRequest({ ...input, fitCheck: 'bound' }).ok) return null;
+    const exact = buildRequest({ ...input, fitCheck: 'exact' });
+    return exact.ok ? null : exact;
+  }
+
+  /** The Director runs runDirector this turn (on, and not a continue): it may call its model. */
+  private plans(): boolean {
+    return this.plan.config.director?.enabled === true && this.plan.kind !== 'continue';
+  }
+
   /**
    * Step 3 (M4, D-101 / D-104): the Director's inserts for this turn. Off: none, nothing recorded. A
    * continue never plans: the target's stored directive is sent again (trace status 'skipped'). Else
@@ -449,8 +488,8 @@ export class TurnRun {
       onProviderError: (info) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, turnId, ...info }),
       ...(this.keep ? { keepRequest: this.keep } : {}),
     };
-    const view = startView(header, tree, this.host.view(), plan.upTo, this.library().seed);
-    this.dirView = view;
+    // The view body() folded for the D-195 check: the Director plans from what the request reads.
+    const view = (this.dirView ??= startView(header, tree, this.host.view(), plan.upTo, this.library().seed));
     const run = await runDirector({
       tree,
       view,

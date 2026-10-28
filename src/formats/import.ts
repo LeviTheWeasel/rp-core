@@ -10,7 +10,9 @@
 // JSON, then as an export envelope. M1a imported cards only; M2 adds ST chat-completion presets
 // (st-preset.ts), ST world info files and bare character_book files (st-worldinfo.ts), saved to
 // library/presets and library/lorebooks; M5a adds `compendium-v1.0.0` (compendium-v1.ts, D-162),
-// a library lorebook named after `lorebook.name`.
+// a library lorebook named after `lorebook.name`. RoleCall's story export (a .rolecall zip) is routed
+// by `rp-core import` to the story importer before detection (D-185); here a zip, RoleCall's account
+// backup and a bare story.jsonl are refused with a reason.
 // CONTRACT FILE: signatures are fixed; the formats agent implements the bodies.
 //
 // Bunraku's registry of 29 scoring adapters is deliberately not ported: one fixed order is enough.
@@ -29,6 +31,7 @@ import {
   notChatCompletionReason,
 } from './kind-markers.ts';
 import { saveToLibrary, type LibraryKind } from './library.ts';
+import { isZip } from './zip.ts';
 import {
   validateCharacter,
   validateLoreBook,
@@ -73,7 +76,28 @@ interface Detection {
   repaired?: boolean;
 }
 
+/** RoleCall's account backup: a `.rolecall` JSON file, not the story export (D-185). */
+const RC_BACKUP_REASON =
+  "RoleCall's account backup (format rolecall-backup), not a story export: export the story itself from RoleCall (its .rolecall zip) and import that";
+/** RoleCall's story.jsonl on its own (the zip holds the same data; D-185). */
+const RC_JSONL_REASON = "RoleCall's story.jsonl on its own is not imported: import the .rolecall export it came from (the zip holds the same story)";
+
+/** The first line of a JSONL file, parsed, when it is RoleCall's story manifest line. */
+function isStoryJsonl(bytes: Uint8Array): boolean {
+  const head = new TextDecoder('utf-8').decode(bytes.subarray(0, 4096));
+  const line = head.split('\n', 1)[0] ?? '';
+  try {
+    const v = JSON.parse(line.charCodeAt(0) === 0xfeff ? line.slice(1) : line) as unknown;
+    return typeof v === 'object' && v !== null && (v as { kind?: unknown }).kind === 'manifest' && (v as { format?: unknown }).format === 'rolecall-story';
+  } catch {
+    return false;
+  }
+}
+
 function detectFull(bytes: Uint8Array): Detection {
+  // `rp-core import` never gets here with a ZIP: it takes a story export and refuses any other ZIP
+  // itself (cli/import-story.ts storyArchive); this reason is for the other callers (new --card, /preset…).
+  if (isZip(bytes)) return { kind: 'unknown', reason: 'a ZIP archive; the only archive rp-core imports is a RoleCall story export (.rolecall), with `rp-core import <file>`' };
   if (isPng(bytes)) {
     // A PNG is a card or nothing: no other kind travels in PNG text chunks here. A card chunk that
     // cannot be decoded still makes it a card file, so the import reports the decode error.
@@ -85,8 +109,9 @@ function detectFull(bytes: Uint8Array): Detection {
     const text = new TextDecoder('utf-8').decode(bytes);
     parsed = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text) as unknown;
   } catch {
-    return { kind: 'unknown', reason: 'neither a PNG nor JSON' };
+    return { kind: 'unknown', reason: isStoryJsonl(bytes) ? RC_JSONL_REASON : 'neither a PNG nor JSON' };
   }
+  if (typeof parsed === 'object' && parsed !== null && (parsed as { format?: unknown }).format === 'rolecall-backup') return { kind: 'unknown', reason: RC_BACKUP_REASON };
   // The honest reading wins; repairs are tried only when it is not recognised as anything.
   const readings = readingsOf(parsed);
   for (const [i, reading] of readings.entries()) {

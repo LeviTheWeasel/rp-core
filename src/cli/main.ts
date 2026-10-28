@@ -9,7 +9,8 @@
 // --lore, preview, --provider record:/replay:. M3: probe --active, a script's caps line, tool lines
 // in send's text mode. M4.5: tui and new --tui
 // (the full-screen host; OpenTUI is imported dynamically on that path only). M5a: --keep-requests on
-// chat, tui and new (D-164). `--stdio` comes in M6.
+// chat, tui and new (D-164). The RoleCall story import: `import <file.rolecall>` (D-185, import-story.ts).
+// `--stdio` comes in M6.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
@@ -145,12 +146,13 @@ ${PROVIDER_HELP}
 Exit 0 at /quit; 3 under --provider script: or replay: when an answer failed; 64 without a terminal.`,
   },
   import: {
-    flags: { as: 'string', json: 'bool' },
-    usage: 'rp-core import <file> [--as name] [--json]',
-    summary: 'import a card, preset or lorebook into the library; prints its library id',
-    help: `Detects the file and converts it to the native format, in this order: PNG card, JSON card
-(CCv1/V2/V3), SillyTavern chat-completion preset, RoleCall Compendium export (compendium-v1.0.0),
-SillyTavern world info, a bare character_book.
+    flags: { as: 'string', json: 'bool', chat: 'string', model: 'string', compendium: 'string', 'dry-run': 'bool', new: 'bool', 'keep-raw': 'bool' },
+    usage:
+      'rp-core import <file> [--as name] [--json]\n       rp-core import <story.rolecall> [--chat main|all|<id prefix>[,…]] [--model conn:model] [--compendium on|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]',
+    summary: 'import a card, preset or lorebook into the library, or a RoleCall story as sessions',
+    help: `Detects the file and converts it to the native format, in this order: RoleCall story export
+(.rolecall zip, below), PNG card, JSON card (CCv1/V2/V3), SillyTavern chat-completion preset,
+RoleCall Compendium export (compendium-v1.0.0), SillyTavern world info, a bare character_book.
 It lands in library/characters, library/presets or library/lorebooks as <id>.json, where id is
 the name in lower case with its words joined by "-". The name is the file's own name field when
 it has one (cards, Compendium exports and character_books do); SillyTavern writes none into
@@ -159,7 +161,29 @@ The preset id "builtin" is the built-in layout's: a preset of that name becomes 
 Importing the same file twice is a no-op; a different file with the same name gets id-2.
 Warnings name what the file holds that rp-core does not honour.
   --as <name>  save under this name instead
-  --json       print {"kind","id","path","name","warnings"}`,
+  --json       print {"kind","id","path","name","warnings"}
+
+A RoleCall story export (RoleCall's per-story .rolecall zip; its account backup, a .rolecall JSON
+file, is not one) becomes library items and sessions: the character, the persona, the preset (and a
+copy "<preset> (<story>)" when the chat's own settings change it), the lorebooks (identical ones
+once), then one session per chat with its messages, swipes as versions, the reasoning split off as
+RoleCall did, the Story Director's state and the lorebooks attached. The Compendium is turned on
+after the imported past (it is not filed again; the lorebooks carry it). Trackers, storyboards and
+RoleCall's chat summary are not carried (a warning says each; warnings name the session or library
+item they are about). Everything is written at once or not at all. A chat imported before is skipped
+(refused when it is all that was asked); an equal library item is reused. Each imported session's
+next request is then built, never sent: one that does not fit the narrator's window is a warning.
+  --chat main|all|<prefix>  the main chat (default), every chat (an exact copy of another is
+                            skipped), or the chats whose id starts so (comma-separated, main may
+                            stand among them; the session lines show each chat's id)
+  --model conn:model        the sessions' narrator (default: config.toml's)
+  --compendium on|off       turn the Compendium on after the import (default on)
+  --as <title>              the story's title (default: the main chat's)
+  --dry-run                 print what would be imported, write nothing
+  --new                     import again as new sessions
+  --keep-raw                copy each chat's tracker, storyboard and Director files to
+                            <home>/imports/<session>/ (a line says what was kept where)
+  --json                    print {"dryRun","library","sessions","skipped","kept","warnings"}`,
   },
   send: {
     flags: { kind: 'string', guidance: 'string', json: 'bool', provider: 'string' },
@@ -456,7 +480,15 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const file = p.positionals[0];
       if (file === undefined) throw new UsageError('which file? rp-core import <file>', name);
       const as = str(p, 'as');
-      return cmdImport({ home: home.dir, file, json, io, ...(as !== undefined ? { as } : {}) });
+      const story = {
+        ...(str(p, 'chat') !== undefined ? { chat: str(p, 'chat')! } : {}),
+        ...(str(p, 'model') !== undefined ? { model: str(p, 'model')! } : {}),
+        ...(str(p, 'compendium') !== undefined ? { compendium: str(p, 'compendium')! } : {}),
+        dryRun: bool(p, 'dry-run'),
+        fresh: bool(p, 'new'),
+        keepRaw: bool(p, 'keep-raw'),
+      };
+      return cmdImport({ home: home.dir, file, json, io, story, rt: () => runtimeOf(home, deps, p), ...(as !== undefined ? { as } : {}) });
     }
     case 'sessions':
       noPositionals(p, name, 0);

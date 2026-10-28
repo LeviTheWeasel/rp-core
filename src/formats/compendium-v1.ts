@@ -24,7 +24,8 @@
 // Bunraku, `lorebook: null` is refused (RoleCall accepts it).
 // Behaviour reference (facts, not code), RoleCall apps/rc/src @fb8dc623e: lib/lorebook/compendium-parser.ts
 // and app/api/content/lorebooks/compendium/import/route.ts (detection, the version warning, string
-// triggers, the id remap that UUID ids avoid), lib/lorebook/matcher.ts (unflagged regex triggers).
+// triggers, the id remap that UUID ids avoid), lib/lorebook/matcher.ts (unflagged regex triggers),
+// lib/lorebook/engine.ts (each book capped at its own token_budget: kept in extras and said).
 
 import { createHash } from 'node:crypto';
 import { identityField, isEntryType } from '../agents/compendium/entry-types.ts';
@@ -427,7 +428,7 @@ function entryOf(row: Rec, c: RowCtx): LoreEntry {
 const BOOK_MAPPED = new Set(['name', 'global_case_sensitive', 'global_match_whole_words', 'global_scan_depth', 'global_recursion']);
 /** Ids of the source account and deployment (creator, fork lineage), RoleCall's row state: dropped. */
 const BOOK_DROPPED = new Set(['id', 'creator_id', 'forked_from_id', 'original_creator_id', 'status', 'created_at', 'updated_at']);
-/** Book fields kept in extras without a word, unless they hold RoleCall's default (a budget of 0 is none). */
+/** Book fields kept in extras, unless they hold RoleCall's default (a budget of 0 is none); a budget is said. */
 const BOOK_KEPT: Readonly<Record<string, unknown>> = {
   description: undefined,
   genre: undefined,
@@ -522,6 +523,11 @@ function readBook(json: unknown, opts: CompendiumReadOptions, sink: WarningSink)
     if (kept && v === BOOK_KEPT[k]) continue;
     const path = joinPath('lorebook', k);
     if (!kept) sink.add('unknown_field', path, `unknown lorebook field "${k}" kept in extras`);
+    else if (k === 'token_budget') {
+      // RoleCall caps each book at its own budget (LorebookEngine.usePerLorebookBudgets); rp-core's
+      // books share one lore budget, so the cap is said, not applied.
+      sink.add('not_honoured', path, `RoleCall's own token budget of this book (${JSON.stringify(v)}) is not honoured: rp-core's lorebooks share one budget; kept in extras`);
+    }
     put(extras, k, boundSaid(v, () => sink.add('too_deep', path, TOO_DEEP)));
   }
   const envelope: Rec = {};

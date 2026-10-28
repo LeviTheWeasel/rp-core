@@ -11,7 +11,8 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
   places, items…) from RoleCall exports, from your own entries and, in the background, from the
   story itself: a filing agent writes down what each answer established, and a historian summarises
   the story for the narrator once old messages leave its prompt. The narrator gets the entries the
-  story names. A Story Director can plan the story before each answer (off by default).
+  story names. A Story Director can plan the story before each answer (off by default). A story
+  begun in RoleCall [goes on here](#continuing-a-rolecall-story) from its export.
   Besides the line chat there is a [full-screen TUI](#the-full-screen-tui) with the models, the chat
   and the agents side by side.
 - **Built with:** TypeScript on [Bun](https://bun.sh), with four runtime dependencies: `re2js`
@@ -30,24 +31,26 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 6. [The full-screen TUI](#the-full-screen-tui)
 7. [Editing messages and choosing an editor](#editing-messages-and-choosing-an-editor)
 8. [Presets and lorebooks](#presets-and-lorebooks)
-9. [Tools and search](#tools-and-search)
-10. [Notes](#notes)
-11. [The Compendium](#the-compendium): [its background agents](#the-background-agents), the
+9. [Continuing a RoleCall story](#continuing-a-rolecall-story): [exporting it](#exporting-the-story-from-rolecall),
+   [what comes over](#what-comes-over), [when it does not fit](#when-the-story-does-not-fit)
+10. [Tools and search](#tools-and-search)
+11. [Notes](#notes)
+12. [The Compendium](#the-compendium): [its background agents](#the-background-agents), the
     [`{{recap}}` slot](#the-recap-slot), [the /memory commands](#the-memory-commands), [the keys](#the-compendium-keys)
-12. [The Story Director](#the-story-director)
-13. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-14. [Active probes](#active-probes)
-15. [config.toml reference](#configtoml-reference)
-16. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-17. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-18. [Where your data lives](#where-your-data-lives)
-19. [Troubleshooting](#troubleshooting)
-20. [Command reference](#command-reference)
-21. [Development](#development)
+13. [The Story Director](#the-story-director)
+14. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
+15. [Active probes](#active-probes)
+16. [config.toml reference](#configtoml-reference)
+17. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+18. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+19. [Where your data lives](#where-your-data-lives)
+20. [Troubleshooting](#troubleshooting)
+21. [Command reference](#command-reference)
+22. [Development](#development)
 
 ## What works today
 
-**Works now (M5b, and the M4.5 TUI):**
+**Works now (M5b, the M4.5 TUI and the RoleCall story import):**
 
 | Area | What you get |
 |---|---|
@@ -63,6 +66,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Compendium | Typed entries of 11 kinds (characters, places, items, events, plots…) from RoleCall Compendium exports and from your own `/memory new`. Each answer, the entries the story names go to the narrator in one block, short or whole by the window; the Director sees the characters and places in the scene. You edit library entries without touching the book, and export the session's entries as a lorebook or a RoleCall file (`/memory`) |
 | Compendium agents | In the background, between turns: a filing agent writes what each accepted answer established into the Compendium, and a historian writes summaries and `[Arc]` overviews of the story. Once old messages leave the prompt, the `{{recap}}` slot gives the narrator those overviews and summaries. Swipes and rewinds take an answer's records off the path, edits file it again; `/memory undo`, `refile`, `retry`, `wait` and `status` steer the work. On a local server they wait until you pause, and a turn never waits for them |
 | Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
+| RoleCall stories | `rp-core import <story>.rolecall` continues a story from RoleCall's export: the character, the persona, the preset with the chat's own settings and the lorebooks (identical ones once) go to the library, then each chat you pick (the main one by default) becomes a session with every swipe, the reasoning split off as RoleCall did, the Director's state and the Compendium on from the import. A dry run first, all or nothing, and a warning when the story does not fit the narrator's window ([details](#continuing-a-rolecall-story)) |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
 | Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, which Compendium entries were picked, what the `{{recap}}` slot held, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
 | Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls; `rp-core compact` shrinks a session's journal |
@@ -645,11 +649,24 @@ end.
 
 rp-core reads SillyTavern's chat-completion presets and its world info (lorebook) files, and
 RoleCall's Compendium exports. You import a file once into your library; from then on a session
-names it by its library id.
+names it by its library id. A RoleCall story export brings its own preset and lorebooks along
+([Continuing a RoleCall story](#continuing-a-rolecall-story)).
 
 ### Importing
 
-`rp-core import` recognises the file by its content, whatever its name.
+`rp-core import` recognises the file by its content, whatever its name:
+
+| File | Becomes | In |
+|---|---|---|
+| A character card: PNG or JSON (CCv1, V2, V3) | a character | `library/characters` |
+| A SillyTavern chat-completion preset, also one exported from RoleCall | a preset | `library/presets` |
+| SillyTavern world info, or a bare `character_book` | a lorebook | `library/lorebooks` |
+| A RoleCall Compendium export (`compendium-v1.0.0`) | a lorebook whose typed entries feed [the Compendium](#the-compendium) | `library/lorebooks` |
+| A RoleCall story export (a `.rolecall` zip) | the character, persona, preset and lorebooks, then one session per chosen chat ([details](#continuing-a-rolecall-story)) | `library/…`, `sessions` |
+
+Refused, with the reason: the other SillyTavern files below ("Not a preset"), RoleCall's account
+backup (also a `.rolecall` file, but JSON), RoleCall's story as a lone `.jsonl` file, and any other
+ZIP archive.
 
 ```bash
 rp-core import "My Preset.json"
@@ -805,7 +822,8 @@ their own line.
   seed and clock, under today's preset and lorebooks. When the rebuild cannot match what was sent, a
   notice says what changed: the preset, a book, the history (an edit or a hidden message since),
   which old messages the budget leaves out, the author's note, the window, the model, or how the
-  messages are shaped for it (another model's connection may merge or re-role them).
+  messages are shaped for it (another model's connection may merge or re-role them). An answer
+  [imported from RoleCall](#continuing-a-rolecall-story) has no request to rebuild, and the line says so.
 - **`/preview --verdicts`** (also with *n*) adds every lore entry's verdict, as `/lore test` prints
   them.
 - **`/preview --wire`** prints the JSON body as the server would receive it, then the notices. Headers,
@@ -816,6 +834,241 @@ their own line.
   stdout; the notices and the verdicts go to stderr. A one-shot preview draws its own seed: `{{random}}`, `{{roll}}` and lore entries with
   a probability below 100 % can come out differently in the next `send`. Inside the chat, `/preview`
   and `/lore test` use the next answer's seed.
+
+## Continuing a RoleCall story
+
+A story you began in RoleCall can go on in rp-core. RoleCall exports a story as one `.rolecall`
+file, and `rp-core import` turns it into library items and a session that opens where RoleCall left
+off: the character, your persona, the preset with the chat's own settings, the lorebooks, every
+message with its swipes, and the Story Director's plan.
+
+```bash
+rp-core import harbor-nights.rolecall --dry-run
+rp-core import harbor-nights.rolecall
+rp-core chat s_795cec5b
+```
+
+### Exporting the story from RoleCall
+
+In RoleCall's Scenes, right-click the story and choose **Export to JSONL → RoleCall (.rolecall
+zip)**. A branch's own menu has the same item under **Export As**. RoleCall decrypts the story in
+your browser for the export, so it may ask for your recovery phrase first. The download is named
+`<story>-rolecall-<date>.rolecall`; any name works, since rp-core recognises the file by its
+content. It is a ZIP archive with the whole story tree (the main timeline and every branch), the
+character card, your persona, the preset, the lorebooks, and for each chat its tracker, its
+storyboard and the Director's state.
+
+Two other RoleCall files look alike. Both are refused, with the reason:
+
+- **RoleCall (JSONL)**, from the same menu: the same story as one `.jsonl` file. Export the
+  `.rolecall` zip instead; it holds the same data, and the card, the preset and the books besides.
+- **Your account backup**, which RoleCall also names `.rolecall`. It is one JSON file for the whole
+  account, not a story.
+
+Import the file as RoleCall wrote it: an archive unpacked and packed again usually has its
+`manifest.json` one folder down, and rp-core refuses it with plain words.
+
+### Running the import
+
+Run it with `--dry-run` first. It reads and checks everything and writes nothing. This is the
+synthetic export the tests build (`test/rcimport/kit.ts`, every name in it invented):
+
+```
+$ rp-core import harbor-nights.rolecall --dry-run
+character tavik-ashvale                  new  "Tavik Ashvale"
+persona   wren-calder                    new  "Wren Calder"
+preset    quill-lantern-v2-1                new  "Quill & Lantern v2.1" · 12 blocks on
+preset    quill-lantern-v2-1-harbor-nights  new  "Quill & Lantern v2.1 (Harbor Nights)" · the chat's own settings applied
+lorebook  ashvale-saga                   new  "Ashvale Saga" · 6 entries, 1 identical copy merged
+lorebook  ashvale-saga-compendium        new  "Ashvale Saga Compendium" · 18 entries, 2 consumed row(s) disabled
+lorebook  harbor-atlas                   new  "Harbor Atlas" · 6 entries
+session   s_795cec5b                     new  "Harbor Nights" · chat c8a2838b · 12 messages (15 versions) · head 7b0f5451 · director on, its state at turn 5 · compendium on from the import
+rp-core: dry run: nothing was written
+rp-core: warning: the story export does not say which messages were hidden in RoleCall; every message is imported visible
+…
+rp-core: warning: preset quill-lantern-v2-1: macros rp-core does not run stay literal text: {{else}}, {{/if}}, {{.pace}}
+…
+rp-core: warning: 1 tracker (relationships, calendar, resources…) not carried: rp-core has no trackers (--keep-raw keeps a copy)
+…
+rp-core: warning: s_795cec5b: the Compendium starts after the imported 5 turns: it files and summarises new turns only; the imported ones stay in the history and the lorebooks
+rp-core: hint: run it again without --dry-run to import
+```
+
+- **Library items.** One line each: the kind, the library id, `new`, `same (already in the
+  library)` or `reused (an equal book)`, the name, and a detail.
+- **Sessions.** One line per imported chat: its id and title, the RoleCall chat it came from (the
+  first 8 characters of its id), the messages and their versions (a message with three swipes is
+  three versions), the head (the message the session opens at), the Director and the Compendium. A
+  branch that shares its start with its parent ends with `fork of <session>`.
+- **Warnings** go to stderr. One about a library item names it. One about a session names it when
+  the run imports more than one (the Compendium and fit lines always do), and one that holds for
+  several sessions is one line. Most say where rp-core does something differently from RoleCall; a
+  real 800-message export gives about forty-five. Read them once.
+
+Without `--dry-run` you get the same report, and everything is written at once: the library items,
+then the sessions' journals. If anything fails, what the run wrote is removed again (`import
+failed: …; nothing was imported`), and a library item the run reused is never touched. Then each
+new session's next request is built, never sent, to check that the story fits its narrator
+([below](#when-the-story-does-not-fit)), and the hints say how to go on:
+
+```
+rp-core: hint: `rp-core chat s_795cec5b` continues the story (`rp-core tui s_795cec5b` full-screen)
+rp-core: hint: its narrator is ollama:qwen3:14b; /model in the chat changes it
+```
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | Read and check everything, print the report, write nothing |
+| `--chat main` | The main timeline only (the default): the chat RoleCall marks as the main one |
+| `--chat all` | Every chat of the story. A chat whose messages equal another's is skipped with a line; a branch whose copied start equals its parent's becomes a [fork](#swipes-branches-and-forks) of the parent's session, otherwise a session of its own |
+| `--chat <prefix>[,<prefix>…]` | The chats whose id starts so, in any case; `main` may stand in the list. A prefix that names no chat, or several, is refused with the list of chats: id, title and size |
+| `--model conn:model` | The narrator of the new sessions, a connection of `config.toml`. Without it, `[roles] narrator`. RoleCall's model choice does not come over |
+| `--compendium on\|off` | Turn the [Compendium](#the-compendium) on after the imported past (`on`, the default), or leave it off. `/memory on` later starts it from that moment |
+| `--as <title>` | The story's title; without it, the main chat's. The preset's copy is named after it |
+| `--new` | Import chats that were imported before once more, as new sessions |
+| `--keep-raw` | Copy each chat's `tracker.json`, `storyboard.json` and `dm-context.json` to `<home>/imports/<session>/`, for your reference; rp-core does not read them |
+| `--json` | The report as one JSON object: `{"dryRun", "library", "sessions", "skipped", "warnings"}`, and `"kept"` with `--keep-raw`; each warning with its `code`, `message`, `count` and the sessions or items it names |
+
+```bash
+# every branch too, on a bigger model, under another title
+rp-core import harbor-nights.rolecall --chat all --model openrouter:vendor/model --as "Harbor Nights II"
+# one branch, by the start of its chat id (a prefix that names nothing lists them)
+rp-core import harbor-nights.rolecall --chat 12eb
+# without the Compendium, keeping RoleCall's tracker and storyboard files beside the session
+rp-core import harbor-nights.rolecall --compendium off --keep-raw
+# a second copy of a story imported before
+rp-core import harbor-nights.rolecall --new
+```
+
+**Importing again.** The session id comes from the RoleCall chat's id, so a chat imported before is
+skipped with a line, and the run is refused when that chat was all it asked for:
+
+```
+rp-core: skipped chat c8a2838b "Harbor Nights": already imported as s_795cec5b
+```
+
+So `--chat all` after the main chat imports the rest, and a branch imported later still becomes a
+fork of the session its parent was imported as, when that session holds the branch point. A newer
+export of the same story, after you played on in RoleCall, does not update the session: `--new`
+imports it as a new one. Library items that did not change are reused; a changed preset or book is
+saved under a new id (`-2`).
+
+Exit codes: 0 when the import ran (or would run); 1 when it is refused (`import failed: …`: no
+character card in the export, a `--chat` that names nothing, a chat already imported, a file that is
+not a story export); 64 for a bad flag value.
+
+### What comes over
+
+- **The character**, from the card in the export, read as any card is. The database row beside it
+  (`.raw.json`) is never read.
+- **Your persona**, with the text RoleCall sent for it: its sections (appearance, personality,
+  history…) in RoleCall's order and markup, else its description. It is saved in
+  `library/personas/` and is the session's persona, so `{{user}}` is its name.
+- **The preset**, rebuilt from RoleCall's prompt rows as RoleCall's own preset export writes it,
+  then read with RoleCall's rules, like any RoleCall preset ([Importing](#importing)): the same
+  prompts in the same order, and a marker that carries text is sent, as RoleCall sends it. When
+  the chat had settings of its own (prompt toggles, samplers, Start Reply With, a message limit),
+  they go into a copy named `<preset> (<story>)`, and the session uses the copy. RoleCall macros
+  rp-core does not run (`{{if}}`, `{{setvar}}`, `{{.x}}`, …) stay text, named in one warning.
+- **The lorebooks**, each read as a [RoleCall Compendium](#importing-a-rolecall-compendium) book:
+  typed entries feed the Compendium, plain rows stay lore, `[Arc]` overviews become arc entries.
+  Books with the same rows (RoleCall's forks and copies of a book) come in once. A different book
+  whose name is taken gets the start of its RoleCall id added (`Harbor Atlas (5f0c2a1e)`), because
+  rp-core reads a book once by name. Rows a Compendium split consumed come in disabled: their data
+  lives in the typed rows. A book equal to one already in your library is reused. The session gets
+  the books the chat had on, in RoleCall's order.
+- **The messages**, all of them, with their swipes and times. Swipes become versions of their
+  message, as rp-core's own swipes are, and the version RoleCall showed is the one on the path: `/[`
+  and `/]` walk the last answer's versions, `/tails` lists the others. The first message, when it is
+  the character's, is the greeting. `{{user}}` and `{{char}}` in the text are written out with the
+  names, as RoleCall showed them.
+- **Reasoning.** Stored reasoning, and `<think>` blocks inside the text, become the answer's
+  reasoning (`/think show`), split as RoleCall split them from the history it sent, by RoleCall's
+  own rules (an unclosed tag too). So the narrator gets the history RoleCall sent. A chat that kept
+  inline thinking in its history keeps its answers as they are.
+- **The Story Director**, when the chat had RoleCall's Director on in its full mode: on, with
+  RoleCall's personality, following the narrator's model. Its state at the last turn (chapters,
+  arcs, seeds, hidden arcs, the last directive) is renumbered (`arc-1`, `seed-1`, …) and fitted to
+  the 32 KB cap. It sits on every version of the last answer, and the same state, dated a turn
+  earlier and without the last directive, on every version of the answer before it. Your next message plans the next turn from RoleCall's state; a
+  swipe (`/r`) of the last answer keeps RoleCall's last directive; `/regen` plans that turn again.
+  What rp-core's Director does not keep (hidden events, off-screen NPC actions, parallel timelines,
+  core memories, RoleCall's DM notes, the details of each arc and seed) is left out, with a warning
+  each.
+- **The Compendium**, on from the import (`compendium on from the import`): the filing agent and the
+  historian work on the turns you play from now on. The imported past is not filed or summarised
+  again: on a long story that would be hundreds of calls, and the lorebooks already carry it.
+  RoleCall's summaries stay entries of their books: they fire by their keys like other lore, and the
+  narrator's search finds them, but the [`{{recap}}` slot](#the-recap-slot) does not use them (it
+  uses the books' `[Arc]` overviews). One warning per session says how far RoleCall's summaries
+  reach. On a real 800-message export they covered turn 364 of 402, so turns 365–402 are summarised
+  nowhere; they stay in the history while it has room for them.
+- **Branches** (`--chat all`): each chat is a session. A branch keeps its own title, else it is
+  `<story> · <branch name>` (or `<story> · chat <id>`).
+
+### What does not come over
+
+Most of these are one warning line with counts, said only when the story used them:
+
+- **Trackers** (relationships, calendar, resources…) and **the storyboard**: rp-core has neither.
+  `--keep-raw` keeps the files.
+- **RoleCall's chat summary.** The warning says whether the lorebooks carry the story's past.
+- **Hidden messages and images.** The export carries neither: every message comes in visible
+  (`/hide n` hides one again), and without images.
+- **TunnelVision, immersion modules, mind and the agent loop.** For a book TunnelVision managed,
+  RoleCall sent only its constant rows and fetched the rest with its tools; here its rows fire by
+  keyword like any lore. A warning names those books.
+- **Per-book token budgets.** rp-core's lorebooks share one budget.
+- **Chat settings with no preset field** (reasoning effort, for one).
+- **Older plans of the Director.** Only its last state comes over.
+- **The requests.** rp-core did not build the imported answers' requests, so `/preview n` on one
+  says so; `/preview` alone shows the next request.
+
+### When the story does not fit
+
+A RoleCall story often runs on a model with a large window, under a preset that keeps a lot of it
+for the answer. After the writes, the import builds each new session's next request, without
+sending it. When the parts that are never trimmed do not fit the narrator's window, a warning says
+so. Here is the synthetic story on a narrator with a 2 048-token window:
+
+```
+rp-core: warning: s_795cec5b: the story does not fit its narrator ollama:qwen3:14b: its next request needs about 1416 tokens, but only 1024 are available (window 2048 - reply reserve 1024), so every turn would be refused; choose a narrator with a larger window (/model in the chat, --model when importing) or the built-in layout (/preset builtin); `rp-core preview s_795cec5b` shows the parts
+```
+
+On a real 800-message export with five large lorebooks, the request needed about 40 000 tokens; a
+16 384-token narrator left 8 384 after the preset's reply reserve of 8 000. On a 65 536-token window
+it fit. What to do:
+
+- **A narrator with a larger window:** `--model` when you import, or `/model narrator
+  <conn:model>` in the chat (saved in the session). Set the model's `context_length` so rp-core knows
+  its window: the check uses the window rp-core knows, and for a local model it does not know it
+  assumes 8 192 ([details](#the-context-window-the-one-thing-to-get-right)). The preset's own
+  context size, as RoleCall stored it or the chat set it, can still make the window smaller
+  ([details](#importing)).
+- **The built-in layout:** `/preset builtin` sends rp-core's short layout instead of RoleCall's
+  preset. The preset's instructions are then not sent; `/preset <id>` brings them back.
+- **See the parts:** `rp-core preview <session>` (or `/preview` in the chat) refuses with the
+  parts and their sizes: the preset's blocks with the lore, the in-chat inserts, the Director's
+  contract and your message. `/director off` saves the Director's part.
+
+A turn that cannot fit is refused before the Director plans, so it costs no Director call. The
+check needs the written session, so a dry run does not make it.
+
+### Your story stays on your machine
+
+- **The file is your story in plain text.** RoleCall keeps your chats encrypted end to end and
+  decrypts them in your browser to export them. So the `.rolecall` file holds everything
+  unencrypted: every message and swipe, the reasoning, your persona, the Director's hidden arcs.
+  Keep it as you would keep a private journal.
+- **The import is local.** rp-core reads the file on your machine and writes only under your home
+  (`library/`, `sessions/`, and with `--keep-raw` `imports/`). It sends nothing anywhere: no model
+  is called, and the fit check builds the request without sending it.
+- **Then it is an ordinary session.** Each turn sends its history to the narrator you chose. A
+  local model keeps the story on your machine; a hosted API gets what each request holds.
+- **Reporting a problem.** The report prints titles, names and chat ids on your terminal. Do not
+  attach the export to a bug report: the warning codes and counts (`--json`) say enough. rp-core's
+  tests build a synthetic export; the one test that can read yours (`RP_CORE_RC_EXPORT`, off by
+  default) only checks that it opens and keeps nothing.
 
 ## Tools and search
 
@@ -2235,10 +2488,12 @@ a temporary folder that is removed at exit.
   library/characters/  imported cards in the native format
   library/presets/     imported presets
   library/lorebooks/   imported world info, lorebooks and Compendium books
+  library/personas/    personas from imported RoleCall stories
   sessions/<id>.jsonl  one session = one append-only journal
   sessions/<id>.lock   held while a process has the session open
   sessions/<id>.requests/  with --keep-requests: every model request of each turn and of the agents
   exports/             RoleCall files written by /memory export --format compendium
+  imports/<session>/   RoleCall's tracker, storyboard and Director files, with import --keep-raw
   logs/tui.log         what the full-screen TUI said and logged
 ```
 
@@ -2248,6 +2503,10 @@ answer's line also holds the Director's plan at that point (its state is at most
 notes, Compendium entries and edits of book entries are lines of the same journal, and so is the
 agents' work: a `job` line before each call, then one `mem` line with what the pass wrote (or a
 `job` line saying it failed).
+
+A session imported from RoleCall is written in one go: its header names the RoleCall chat it came
+from and the export's date (`imported`), and its first lines are the story's messages. Your own
+turns follow as in any session.
 
 ### Compacting a session
 
@@ -2293,6 +2552,8 @@ That is a copy of the M4 live session (6 answers with the Director on). A second
 | `⋯ director: failed (no_room)` and notice `director_no_room` | The Director's window cannot hold its shortened prompt and 600 tokens for a plan; nothing was sent | Give its model a bigger window and set `context_length` ([Small windows](#small-windows)); 4 096 is too small |
 | `⋯ director: failed (timeout)` | The Director did not answer within `timeout_sec` (default 660 s on a local server, 180 s on a remote one) | Raise `timeout_sec` under `[director]` for new sessions; check that the model is not loading or spilling to the CPU (`ollama ps`) |
 | `the Compendium is off for this session` | The session was made before M5a, or `/memory off` was used. Entries are kept but not sent | `/memory on` |
+| `warning: s_…: the story does not fit its narrator …` after `rp-core import` | The imported story's preset, card and lore need more than the narrator's window leaves; every turn would be refused (before the Director's calls) | A narrator with a larger window and its `context_length` set (`/model narrator <conn:model>`), or `/preset builtin` ([details](#when-the-story-does-not-fit)) |
+| `import failed: … already imported as s_…` | That RoleCall chat is a session already | `rp-core chat s_…` continues it; `--new` imports it once more; `--chat all` imports the chats not imported yet |
 | A Compendium entry the message names is not in the block | Every significant word of its name must be in one message, matched by its roots; the block also has an entry limit and a budget | `/trace` names each pick and each cut; add an alias the story uses (`/memory edit`) |
 | notice `library_entry_missing` | You changed a book's entry in this session, and the entry or its book is gone | Add the book back (`/lore add <id>`): the change applies again |
 | `⋯ memory: filing #7 parked after 3 failed attempts` | Every attempt of that pass failed: a timeout, a server error, or an answer that held nothing the reader could use | `--debug` shows the server's words; `/memory retry #7` runs it again. `parked: it does not fit the recorder's window [no_room]`: give the recorder a bigger window or another model ([The recorder](#the-recorder-their-model)) |
@@ -2319,6 +2580,7 @@ redacted.
 | `chat <session> [--keep-requests] [--provider …]` | The chat on a session (lock and crash recovery first) |
 | `tui <session> [--keep-requests] [--provider …]` | The same chat full-screen: models, chat and agents side by side ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
 | `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info, a character_book or a RoleCall Compendium export into the library; prints its id |
+| `import <story.rolecall> [--chat main\|all\|<prefix>[,…]] [--model conn:model] [--compendium on\|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]` | Imports a RoleCall story export: its library items, then one session per chosen chat (the main one by default); prints a line per item and session, the warnings and the hints ([details](#continuing-a-rolecall-story)) |
 | `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
 | `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |
 | `probe [conn[:model]] [--active] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only) and the caps a model gets; `--active` also tries one model with a few tiny calls ([details](#active-probes)); `--write` stores what was learned |
@@ -2349,7 +2611,7 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | Code | Meaning |
 |---|---|
 | `0` | done |
-| `1` | other error (unreadable card, script or recording, a missing session for `show`, unreachable server for `probe`/`models`) |
+| `1` | other error (unreadable card, script or recording, a refused import, a missing session for `show`, unreachable server for `probe`/`models`) |
 | `2` | stopped |
 | `3` | failed; also a piped `chat` under `--provider script:` or `replay:` in which an answer failed |
 | `4` | conflict |
@@ -2364,12 +2626,13 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite: 5573 tests in 299 files (5570 pass); the 3 live tests below are skipped without `RP_CORE_LIVE=1` |
+| `bun test` | The full suite: 5717 tests in 306 files (5713 pass); the 3 live tests below are skipped without `RP_CORE_LIVE=1`, and the real-export check without `RP_CORE_RC_EXPORT`. Three timing tests can fail on a busy machine; run alone, they pass |
 | `bun test test/tui` | The full-screen TUI (279 tests in 17 files, about 12 seconds) on a headless OpenTUI renderer with a scripted model: the layout at several widths, typing and streaming, Ctrl+C, every slash command, hotkeys (also on a Russian layout), the mouse and copying, colours, signals and the lock, and the Compendium agents' blocks. The frame-time checks run only with `RP_CORE_PERF=1` |
 | `bun test test/demo-m4` | The M4 demos on a scripted model (5 tests, a few seconds): 30 turns with chapters, arcs, seeds and hidden arcs; swipe reuse, `/regen` and rollback; a broken plan on a small window; 300 verbose Russian turns under the state cap. They print what they did ([`docs/M4-DEMO.md`](docs/M4-DEMO.md)) |
 | `bun test test/demo-m5a` | The M5a demo on a scripted model (9 tests, about a second): the real CLI imports a RoleCall Compendium, writes an entry in an editor, sends its brief in the block, edits a book entry as an overlay, swipes, rewinds and forks, exports and imports again, and keeps the Director's request with `[COMPENDIUM CONTEXT]`. It prints the transcript ([`docs/M5A-DEMO.md`](docs/M5A-DEMO.md)) |
 | `bun test test/demo-m5b` | The M5b demo on a scripted model (16 tests in 3 files, about 7 seconds): the real CLI, with the background lane in auto mode, files answers once they are accepted (also from fenced or loosely shaped JSON), takes a swipe's entries off the path and brings them back, files an edited answer again, undoes and refiles a pass, runs the historian twice, shows the `{{recap}}` slot once trimming starts and keeps it while the cut holds, and after a `kill -9` during filing reopens with exactly one record per pass. It prints the transcript ([`docs/M5B-DEMO.md`](docs/M5B-DEMO.md)) |
 | `bun test test/{sched,lane,filing,historian,recap,fold,language,repl}-m5b` | M5b's own tests besides the demo (447 tests in 38 files, a few seconds), on scripted models and fake clocks: the scheduler (37) and the background lane (70: preemption without an attempt, the idle wait, retries, parking, recovery after a crash), the filing prompts against Bunraku's text, reading and staging (85), the historian (100), the `{{recap}}` slot (66), the fold with the agents' rows (38), the language names (3) and the REPL's commands and lines (48). 64 more sit beside older tests: `test/memory/fold-m5b*.test.ts`, `test/structured/{review-m5b,ruling-k}.test.ts`, `test/session/fork-recap.test.ts`, `test/cli/lane-m5b.test.ts` and `test/tui/lane-*.test.ts` |
+| `bun test test/rcimport` | The RoleCall story import (135 tests in 5 files, a few seconds) on a synthetic export built in memory by `test/rcimport/kit.ts` (every name and line in it invented): the ZIP reader on good and hostile archives, the converters, RoleCall's reasoning splitter (also in linear time on texts that made RoleCall's own regexes quadratic), the Director's state, and the CLI end to end, 1 200 messages in about a tenth of a second. `RP_CORE_RC_EXPORT=<file> bun test test/rcimport/zip.test.ts` adds one read-only check that your own export opens and matches its manifest; nothing of it is printed or kept. `test/engine-fit` and `test/repl/preview-imported.test.ts` (8 more) cover a turn that cannot fit and `/preview n` on an imported answer |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
@@ -2391,7 +2654,7 @@ run).
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
 | `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
-| `src/formats` | Cards, presets, world info, RoleCall Compendium files, library |
+| `src/formats` | Cards, presets, world info, RoleCall Compendium files, RoleCall story exports (with a small ZIP reader), library |
 | `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
 | `src/tools` | The narrator's tools, their arguments, prompted calls and leak recovery |
 | `src/text` | Word folding and light stemming for search and note keys |
@@ -2399,8 +2662,8 @@ run).
 | `src/config` | Config and keys |
 | `src/cli` | Commands and the chat; the full-screen TUI in `src/cli/tui` |
 
-The design and its decisions (D-1…D-184; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
-D-140…D-169, M5b's D-170…D-184) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
+The design and its decisions (D-1…D-195; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
+D-140…D-169, M5b's D-170…D-184, the RoleCall story import's D-185…D-195) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](docs/M1A-DEMO.md),
 [`docs/M1B-DEMO.md`](docs/M1B-DEMO.md), [`docs/M2-DEMO.md`](docs/M2-DEMO.md),
 [`docs/M3-DEMO.md`](docs/M3-DEMO.md), [`docs/M4-DEMO.md`](docs/M4-DEMO.md),

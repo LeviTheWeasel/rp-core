@@ -3,13 +3,14 @@
 //
 // The non-turn subcommands: `init` (M1b), `new`, `import`, `sessions`, `show` (ARCHITECTURE.md §12.3,
 // §13, §15 M1a/M1b/M2, D-72). M2: `import` takes presets and world info too, `new` takes --preset and
-// --lore. `sessions` and `show` never take the session lock: they read the journal
+// --lore. `import` of a RoleCall story export (.rolecall zip) goes to import-story.ts (D-185). `sessions` and `show` never take the session lock: they read the journal
 // with readSessionFile/listSessions and fold it themselves, so they work while another process runs a
 // turn. The price is that they never recover anything (recovery only runs on a locked open), so
 // `show` says so when the journal has turns without a closing line.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
+import { basename } from 'node:path';
 import { Engine } from '../engine/engine.ts';
 import type { EngineHandle, EngineOptions, SessionHandle } from '../engine/api.ts';
 import { CONFIG_TEMPLATE, configPath } from '../config/config.ts';
@@ -18,12 +19,14 @@ import { loadLibrary } from '../engine/request.ts';
 import { parseModelRef } from '../engine/route.ts';
 import { systemClock } from '../engine/system.ts';
 import { importCard, importFile, ImportError } from '../formats/import.ts';
+import { StoryImportError } from '../formats/rolecall-import.ts';
 import { loadFromLibrary } from '../formats/library.ts';
 import { validateCharacter, validatePersona, type Character, type ImportWarning, type Persona } from '../formats/native.ts';
 import type { DeepPartial, Entry, SessionConfig } from '../session/entries.ts';
 import { currentConfig, foldView, mergePatch } from '../session/fold.ts';
 import { DEFAULT_LOCK_TTL_MS, isLockStale, listSessions, readLock, readSessionFile, SessionNotFoundError } from '../session/log.ts';
 import { UsageError } from './args.ts';
+import { cmdImportStory, storyArchive } from './import-story.ts';
 import type { Io } from './io.ts';
 import { EXIT } from './oneshot.ts';
 import { addLoreId, RefError, resolveLoreRef, resolvePresetRef, type Resolved } from './refs.ts';
@@ -101,10 +104,63 @@ export interface ImportArgs {
   as?: string;
   json: boolean;
   io: Io;
+  /** RoleCall story exports only (D-185): --chat, --model, --compendium, --dry-run, --new, --keep-raw. */
+  story?: { chat?: string; model?: string; compendium?: string; dryRun?: boolean; fresh?: boolean; keepRaw?: boolean };
+  /** config.toml, loaded when a story is imported (its session defaults, the --model check). */
+  rt?: () => Runtime;
 }
 
-/** `rp-core import <file> [--as name]`: detect, convert, save to the library [D-72]. */
-export function cmdImport(a: ImportArgs): number {
+/** The story-only flags given, as the user typed them. */
+function storyFlags(story: ImportArgs['story']): string[] {
+  if (!story) return [];
+  return [
+    ...(story.chat !== undefined ? ['--chat'] : []),
+    ...(story.model !== undefined ? ['--model'] : []),
+    ...(story.compendium !== undefined ? ['--compendium'] : []),
+    ...(story.dryRun ? ['--dry-run'] : []),
+    ...(story.fresh ? ['--new'] : []),
+    ...(story.keepRaw ? ['--keep-raw'] : []),
+  ];
+}
+
+/**
+ * `rp-core import <file> [--as name]`: detect, convert, save to the library [D-72]. A RoleCall story
+ * export (a .rolecall zip) is routed to the story importer first: library items and sessions (D-185).
+ */
+export async function cmdImport(a: ImportArgs): Promise<number> {
+  let bytes: Uint8Array;
+  try {
+    bytes = readFileSync(a.file);
+  } catch (e) {
+    // Before the story flags are looked at: a path that cannot be read is the problem, not the flags.
+    throw new CliError(`import failed: cannot read ${a.file}: ${errMessage(e)}`);
+  }
+  const story = storyArchive(bytes);
+  if (story && 'error' in story) throw new CliError(`import failed: ${basename(a.file)}: ${story.error}`);
+  if (story) {
+    try {
+      return await cmdImportStory({
+        home: a.home,
+        file: a.file,
+        zip: story.zip,
+        ...(a.story?.chat !== undefined ? { chat: a.story.chat } : {}),
+        ...(a.story?.model !== undefined ? { model: a.story.model } : {}),
+        ...(a.story?.compendium !== undefined ? { compendium: a.story.compendium } : {}),
+        dryRun: a.story?.dryRun === true,
+        fresh: a.story?.fresh === true,
+        keepRaw: a.story?.keepRaw === true,
+        ...(a.as !== undefined ? { as: a.as } : {}),
+        json: a.json,
+        io: a.io,
+        ...(a.rt ? { rt: a.rt() } : {}),
+      });
+    } catch (e) {
+      if (e instanceof StoryImportError) throw new CliError(`import failed: ${e.message}`);
+      throw e;
+    }
+  }
+  const only = storyFlags(a.story);
+  if (only.length > 0) throw new UsageError(`${only.join(', ')}: only for a RoleCall story export (a .rolecall zip)`, 'import');
   let r: ReturnType<typeof importFile>;
   try {
     r = importFile(a.home, a.file, a.as !== undefined ? { as: a.as } : undefined);
