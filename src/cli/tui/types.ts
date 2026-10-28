@@ -78,6 +78,8 @@ export interface Theme {
   user: RGBA;
   /** The character's name in the transcript. */
   char: RGBA;
+  /** Direct speech in the character's replies. */
+  speech: RGBA;
   /** Box borders and titles, the scrollbar's thumb. */
   border: RGBA;
   focusedBorder: RGBA;

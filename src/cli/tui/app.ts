@@ -44,6 +44,8 @@ export function rendererConfig(useMouse = true): CliRendererConfig {
 
 /** The Ui of types.ts plus what only the host touches: the input's label. */
 export interface HostUi extends Ui {
+  /** Remove the startup logo once the session's transcript is ready. */
+  hideLoading(): void;
   /** The row under the status line: label + input box. */
   inputRow: BoxRenderable;
   /** The prompt label left of the input (`you › `, `edit › `: no padding, T-17). */
@@ -120,6 +122,26 @@ export function createUi(renderer: CliRenderer, theme: Theme): HostUi {
       arrowOptions: { foregroundColor: theme.border, backgroundColor: TRANSPARENT },
     },
   });
+  const loading = new TextRenderable(renderer, {
+    id: 'loading-logo',
+    flexShrink: 0,
+    wrapMode: 'none',
+    fg: theme.text,
+    content: new StyledText([
+      chunk('  ____  ____         ____ ___  ____  _____\n', theme, { fg: theme.char, bold: true }),
+      chunk(' |  _ \\|  _ \\       / ___/ _ \\|  _ \\| ____|\n', theme, { fg: theme.char, bold: true }),
+      chunk(' | |_) | |_) |_____| |  | | | | |_) |  _|\n', theme, { fg: theme.speech, bold: true }),
+      chunk(' |  _ <|  __/_____| |__| |_| |  _ <| |___\n', theme, { fg: theme.speech, bold: true }),
+      chunk(' |_| \\_\\_|         \\____\\___/|_| \\_\\_____|\n\n', theme, { fg: theme.char, bold: true }),
+      chunk('  loading story…', theme, { dim: true }),
+    ]),
+  });
+  transcript.add(loading);
+  const hideLoading = (): void => {
+    if (loading.isDestroyed) return;
+    transcript.remove(loading);
+    loading.destroy();
+  };
   const text = { fg: theme.text, ...selectionColours(theme) } as const;
   const status = new TextRenderable(renderer, { id: 'status', height: 1, flexShrink: 0, marginLeft: 1, marginRight: 1, wrapMode: 'none', content: '', ...text });
   const inputRow = new BoxRenderable(renderer, { id: 'input-row', flexDirection: 'row', flexShrink: 0 });
@@ -187,7 +209,7 @@ export function createUi(renderer: CliRenderer, theme: Theme): HostUi {
   };
   renderer.on('frame', fitInput);
   input.focus();
-  return { renderer, left, middle, right, transcript, status, input, inputRow, label, setLabel, setStatus, fitInput };
+  return { renderer, left, middle, right, transcript, status, input, inputRow, label, setLabel, setStatus, fitInput, hideLoading };
 }
 
 /**

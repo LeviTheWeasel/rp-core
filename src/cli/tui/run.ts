@@ -544,7 +544,10 @@ export function mountTui(o: MountOptions): MountedTui {
       v.echo(line);
     },
     message: (m, withStatus) => v.message(m, withStatus),
-    banner: (b) => v.banner(b),
+    banner: (b) => {
+      ui.hideLoading();
+      v.banner(b);
+    },
     turn(t): TurnView {
       unarm();
       const tv = v.turn(t);
