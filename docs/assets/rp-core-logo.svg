@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="450" height="124" viewBox="0 0 450 124" role="img" aria-labelledby="title">
+  <title id="title">RP-CORE terminal logo</title>
+  <rect width="450" height="124" rx="12" fill="#2b0a22"/>
+  <g font-family="DejaVu Sans Mono, Consolas, monospace" font-size="16" font-weight="700" xml:space="preserve">
+    <text x="17" y="30" fill="#906596">  ____  ____         ____ ___  ____  _____</text>
+    <text x="17" y="48" fill="#906596"> |  _ \|  _ \       / ___/ _ \|  _ \| ____|</text>
+    <text x="17" y="66" fill="#009d9a"> | |_) | |_) |_____| |  | | | | |_) |  _|</text>
+    <text x="17" y="84" fill="#009d9a"> |  _ &lt;|  __/_____| |__| |_| |  _ &lt;| |___</text>
+    <text x="17" y="102" fill="#906596"> |_| \_\_|         \____\___/|_| \_\_____|</text>
+  </g>
+</svg>

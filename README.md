@@ -2,6 +2,8 @@
 
 **English** · [Русский](README-ru.md)
 
+![RP-CORE terminal logo](docs/assets/rp-core-logo.svg)
+
 rp-core is a terminal chat for roleplay stories with local or remote models. It reads character cards, keeps message swipes and branches, supports SillyTavern presets and lorebooks, and can continue chats exported from SillyTavern or RoleCall.
 
 ## Install
