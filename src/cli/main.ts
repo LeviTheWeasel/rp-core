@@ -135,15 +135,17 @@ Exit 0 at /quit or the end of input; 3 under --provider script: or replay: when 
   },
   tui: {
     flags: { provider: 'string', 'keep-requests': 'bool' },
-    usage: `rp-core tui <session> [--keep-requests] [${PROVIDER_FLAG}]`,
-    summary: 'open a session full-screen: models, chat and agents side by side (needs a terminal)',
-    help: `The same chat as rp-core chat (every slash command, held lines, Ctrl+C rules), on one screen:
+    usage: `rp-core tui [session] [--keep-requests] [${PROVIDER_FLAG}]`,
+    summary: 'choose a story or open a session full-screen (needs a terminal)',
+    help: `Without a session id, opens the story browser first (F5 opens it again inside a session).
+The same chat as rp-core chat (every slash command, held lines, Ctrl+C rules), on one screen:
 the models and hotkeys on the left, the chat in the middle, the agents and their tool calls on the
 right (the side panes fold away on narrow terminals; F2 toggles them). Enter sends; Shift+Enter,
 Alt+Enter or Ctrl+J start a new line. Hotkeys: Ctrl+R swipe, Ctrl+G guided re-roll, Ctrl+O continue,
 Ctrl+E edit the last message in the input (Enter saves, Esc cancels), Alt+Left/Right versions,
 PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off,
-F4 choose the narrator model from the configured connections (↑/↓, Enter, Esc). Ctrl+C
+F4 choose the narrator model from the configured connections (↑/↓, Enter, Esc), F5 browse stories
+and branches. Ctrl+C
 stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
 Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes
 and scripts use rp-core chat.
@@ -457,7 +459,6 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
     case 'tui': {
       noPositionals(p, name, 1);
       const sessionId = p.positionals[0];
-      if (sessionId === undefined) throw new UsageError('which session? rp-core tui <session>', name);
       // Checked before OpenTUI loads: a pipe never needs the native library.
       if (deps.tty !== true) {
         io.err.write(`${NEEDS_TERMINAL}\n`);

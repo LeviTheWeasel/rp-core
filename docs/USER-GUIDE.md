@@ -157,7 +157,7 @@ rp-core new --card ~/cards/mira.png --model "ollama:hf.co/bartowski/MN-12B-Mag-M
 - **Write a message:** type and press Enter.
 - **Help:** `/help` lists the commands.
 - **Leave:** `/quit`.
-- **Come back later:** `rp-core chat <session>`, or `rp-core tui <session>` for the
+- **Come back later:** `rp-core chat <session>`, or `rp-core tui` to choose a story in the
   [full-screen TUI](#the-full-screen-tui). `rp-core sessions` lists the session ids.
 
 ## Connecting Ollama, in detail
@@ -387,7 +387,8 @@ slash command, held lines, refusals during an answer and the Ctrl+C rules work a
 ### Starting it
 
 ```bash
-rp-core tui <session>
+rp-core tui                 # choose a story
+rp-core tui <session>       # open it directly
 ```
 
 ```bash
@@ -396,6 +397,8 @@ rp-core new --card ~/cards/mira.png --model "ollama:magmell-16k:latest" --tui
 
 - **It needs a real terminal** on stdin and stdout. Without one it exits with code 64 and says
   `rp-core tui needs a terminal; use rp-core chat`.
+- **Without a session id**, the story browser opens first. Choose a story with ↑/↓ and Enter, or
+  search by typing its name. Esc exits. If there are no stories, create one with `rp-core new --card`.
 - **The line chat stays.** `rp-core chat` is unchanged and is still what `new` opens by default.
   Pipes, scripts and `--provider script:` runs use it. Both open the same session files, so you can
   switch between them (not at the same time: the session is locked while one has it open).
@@ -2614,7 +2617,7 @@ redacted.
 | `init [--json]` | Writes the starter `config.toml` unless one exists; prints its path |
 | `new --card <file\|library id> [--model conn:model] [--preset <id\|file>] [--lore <id\|file>]… [--max-tokens n] [--persona <json>] [--title t] [--tui \| --no-chat] [--json] [--keep-requests] [--provider …]` | Imports the card (and the preset and lorebook files) and creates a session; opens the chat on a terminal (`--tui`: the full-screen TUI), else prints the id (`--json`: `{sessionId, title, greetings}`) |
 | `chat <session> [--keep-requests] [--provider …]` | The chat on a session (lock and crash recovery first) |
-| `tui <session> [--keep-requests] [--provider …]` | The same chat full-screen: models, chat and agents side by side ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
+| `tui [session] [--keep-requests] [--provider …]` | Choose a story or open one directly in the full-screen chat ([details](#the-full-screen-tui)). Needs a terminal on stdin and stdout, else exit 64 |
 | `import <file> [--as name] [--json]` | Imports a card, a SillyTavern preset, world info, a character_book or a RoleCall Compendium export into the library; prints its id |
 | `import <chat.jsonl> --card <library id> [--persona <file>] [--model conn:model] [--as title] [--dry-run] [--new] [--json]` | Imports a SillyTavern solo chat as a session, with its swipes and selected version ([details](#importing-a-sillytavern-chat)) |
 | `import <story.rolecall> [--chat main\|all\|<prefix>[,…]] [--model conn:model] [--compendium on\|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]` | Imports a RoleCall story export: its library items, then one session per chosen chat (the main one by default); prints a line per item and session, the warnings and the hints ([details](#continuing-a-rolecall-story)) |

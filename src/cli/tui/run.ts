@@ -159,12 +159,58 @@ export interface TuiArgs extends ChatArgs {
   splashMs?: number;
 }
 
-/** `rp-core tui <session>`: needs a terminal (else 64); refusals at open print as CLI errors (5). */
-export async function cmdTui(a: TuiArgs & { sessionId: string; tty?: boolean }): Promise<number> {
+/** Pick a story before the REPL owns a session. The launcher holds no session lock. */
+export async function chooseTuiSession(a: TuiArgs): Promise<{ id?: string; leaf?: string; code: number }> {
+  const renderer = await (a.createRenderer ?? (() => createCliRenderer(rendererConfig())))();
+  const theme = (a.env ?? process.env).NO_COLOR ? MONO_THEME : THEME;
+  const ui = createUi(renderer, theme, 0);
+  ui.left.visible = false;
+  ui.right.visible = false;
+  ui.inputRow.visible = false;
+  ui.hideLoading();
+  ui.setStatus('Choose a story · Esc quits · create one with rp-core new --card <file>');
+  let finish!: (result: { id?: string; leaf?: string; code: number }) => void;
+  const selected = new Promise<{ id?: string; leaf?: string; code: number }>((resolve) => { finish = resolve; });
+  const picker = createStoryPicker(ui, theme, a.rt.home, () => null, (id, leaf) => finish({ id, ...(leaf ? { leaf } : {}), code: 0 }), true);
+  const onKey = (k: KeyEvent): void => {
+    if (k.eventType === 'release') return;
+    if (k.name === 'escape' || isInterruptKey(k)) { k.preventDefault(); finish({ code: k.name === 'escape' ? 0 : EXIT_SIGINT }); return; }
+    picker.handle(k);
+  };
+  const onDestroy = (): void => finish({ code: 0 });
+  renderer.keyInput.on('keypress', onKey);
+  renderer.on('destroy', onDestroy);
+  const signals = a.signals ?? process;
+  const onSigint = (): void => finish({ code: EXIT_SIGINT });
+  signals.on('SIGINT', onSigint);
+  const exitHandlers = EXIT_SIGNALS.map((sig) => {
+    const handler = (): void => finish({ code: signalExitCode(sig) });
+    signals.on(sig, handler);
+    return () => signals.removeListener(sig, handler);
+  });
+  picker.open();
+  try { return await selected; }
+  finally {
+    picker.dispose();
+    renderer.keyInput.off('keypress', onKey);
+    renderer.off('destroy', onDestroy);
+    signals.removeListener('SIGINT', onSigint);
+    exitHandlers.forEach((off) => off());
+    renderer.destroy();
+    await settle(renderer.closed, CLOSE_WAIT_MS);
+  }
+}
+
+/** `rp-core tui [session]`: needs a terminal (else 64); refusals at open print as CLI errors (5). */
+export async function cmdTui(a: TuiArgs & { sessionId?: string; initialLeaf?: string; tty?: boolean }): Promise<number> {
   const tty = a.tty ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
   if (!tty) {
     a.io.err.write(`${NEEDS_TERMINAL}\n`);
     return EXIT.usage;
+  }
+  if (a.sessionId === undefined) {
+    const picked = await chooseTuiSession(a);
+    return picked.id ? cmdTui({ ...a, sessionId: picked.id, ...(picked.leaf ? { initialLeaf: picked.leaf } : {}) }) : picked.code;
   }
   const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt) });
   // Before the open: the lane's notices at open are on the bus only (ChatArgs.events).
@@ -172,6 +218,9 @@ export async function cmdTui(a: TuiArgs & { sessionId: string; tty?: boolean }):
   let session: SessionHandle;
   try {
     session = engine.session(a.sessionId);
+    if (a.initialLeaf && session.view().head !== a.initialLeaf) {
+      session.select({ messageId: a.initialLeaf, expectedVersion: session.version() });
+    }
   } catch (e) {
     await engine.close();
     if (e instanceof Refusal) return reportRefusal(a.io, e, false, a.rt);

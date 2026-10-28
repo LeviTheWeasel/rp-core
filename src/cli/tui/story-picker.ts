@@ -55,7 +55,7 @@ export function branchRows(home: string, id: string): BranchRow[] {
 }
 
 /** A full-pane browser. All writes still go through the REPL's /open and /goto commands. */
-export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: () => string | null, choose: (id: string, leaf?: string) => void) {
+export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: () => string | null, choose: (id: string, leaf?: string) => void, standalone = false) {
   const box = new BoxRenderable(ui.renderer, {
     id: 'story-picker', position: 'absolute', top: 1, left: 1, right: 1, bottom: 2,
     zIndex: 101, border: true, title: ' Stories and branches ', borderColor: theme.focusedBorder,
@@ -92,13 +92,13 @@ export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: (
     const rows: { text: string; tone: 'text' | 'accent' | 'dim' | 'yellow'; bold?: boolean }[] = [];
     if (tab === 'stories') {
       rows.push({ text: `Stories  › branches  ·  search: ${query || 'type to filter'}`, tone: 'accent', bold: true });
-      rows.push({ text: '↑/↓ select · Enter open · → branches · Esc close · F5 refresh', tone: 'dim' });
+      rows.push({ text: `↑/↓ select · Enter open · → branches · Esc ${standalone ? 'quit' : 'close'} · F5 refresh`, tone: 'dim' });
       if (!stories.length) rows.push({ text: query ? 'No matching stories' : 'No stories yet', tone: 'yellow' });
       stories.forEach((s, i) => rows.push({ text: `${i === storyIndex ? '›' : ' '} ${'  '.repeat(Math.min(5, s.depth))}${s.depth ? '↳ ' : ''}${s.title} · ${s.character} · ${s.id}${s.id === current() ? '  (current)' : ''} · ${s.updated.slice(0, 10)}`, tone: i === storyIndex ? 'accent' : 'text', bold: i === storyIndex }));
     } else {
       const story = selectedStory();
       rows.push({ text: `Stories  ›  ${story?.title ?? 'branches'}`, tone: 'accent', bold: true });
-      rows.push({ text: '↑/↓ select · Enter go to branch · ← stories · Esc close', tone: 'dim' });
+      rows.push({ text: `↑/↓ select · Enter go to branch · ← stories · Esc ${standalone ? 'quit' : 'close'}`, tone: 'dim' });
       if (error) rows.push({ text: error, tone: 'yellow' });
       else if (!branches.length) rows.push({ text: 'No messages in this story yet', tone: 'yellow' });
       branches.forEach((b, i) => rows.push({ text: `${i === branchIndex ? '›' : ' '} ${b.active ? '● current' : '○ branch'} · ${b.role === 'user' ? 'you' : 'character'} · ${b.words || b.id} · ${b.id}`, tone: i === branchIndex ? 'accent' : 'text', bold: i === branchIndex }));

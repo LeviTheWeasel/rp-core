@@ -3,6 +3,7 @@
 // lock, the file log, and the `tui` command in main.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
+import { createTestRenderer, type TestRendererSetup } from '@opentui/core/testing';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Engine } from '../../src/engine/engine.ts';
@@ -12,6 +13,8 @@ import { loadRuntime } from '../../src/cli/runtime.ts';
 import { TERMINATED_LINE } from '../../src/cli/chat.ts';
 import { readLock } from '../../src/session/log.ts';
 import { cmdTui, NEEDS_TERMINAL } from '../../src/cli/tui/run.ts';
+import { rendererConfig } from '../../src/cli/tui/app.ts';
+import { branchRows } from '../../src/cli/tui/story-picker.ts';
 import { tuiLogPath } from '../../src/cli/tui/io.ts';
 import { fakeClock, tmpHome } from '../helpers.ts';
 import { calls, LEVI, MIRA, tuiRig, type TuiRig } from './kit.ts';
@@ -30,6 +33,16 @@ async function waitFor(ok: () => boolean, what: string): Promise<void> {
     if (waited > 5000) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+async function waitForFrame(setup: TestRendererSetup, text: string): Promise<string> {
+  for (let waited = 0; waited <= 5000; waited += 5) {
+    await setup.renderOnce();
+    const frame = setup.captureCharFrame();
+    if (frame.includes(text)) return frame;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${text}`);
 }
 
 describe('cmdTui before the renderer', () => {
@@ -83,6 +96,59 @@ describe('cmdTui before the renderer', () => {
     expect(r.made.n).toBe(1);
     expect(readLock(home, id)).toBeNull();
     expect(readFileSync(tuiLogPath(home), 'utf8')).toContain('startup: Error: no renderer in this test');
+  });
+});
+
+describe('tui without a session id', () => {
+  test('opens the story browser and Esc exits when there are no stories', async () => {
+    const home = tmpHome('rp-core-tui-');
+    const setup = await createTestRenderer({ width: 90, height: 24, kittyKeyboard: true, ...rendererConfig() });
+    const done = cmdTui({ rt: loadRuntime(home, {}), io: { out: memoryChannel(), err: memoryChannel() }, exitNow: () => {}, tty: true, createRenderer: async () => setup.renderer });
+    expect(await waitForFrame(setup, 'No stories yet')).toContain('Stories and branches');
+    setup.mockInput.pressEscape();
+    expect(await done).toBe(0);
+    expect(setup.renderer.isDestroyed).toBe(true);
+    await setup.dispose();
+  });
+
+  test('selects a story and starts its chat', async () => {
+    const home = tmpHome('rp-core-tui-');
+    const engine = await Engine.open({ home, clock: fakeClock() });
+    const session = engine.createSession({ character: MIRA, persona: LEVI, title: 'Selected story' });
+    const id = session.id;
+    const greeting = session.view().path[0]!.id;
+    const first = session.send({ text: 'first branch', expectedVersion: session.version() });
+    session.select({ messageId: greeting, expectedVersion: session.version(), exact: true });
+    session.send({ text: 'second branch', expectedVersion: session.version() });
+    await engine.close();
+    const branchIndex = branchRows(home, id).findIndex((row) => row.id === first.messageId);
+    expect(branchIndex).toBeGreaterThan(0);
+    const setups: TestRendererSetup[] = [];
+    const done = cmdTui({
+      rt: loadRuntime(home, {}), io: { out: memoryChannel(), err: memoryChannel() }, exitNow: () => {}, tty: true,
+      createRenderer: async () => {
+        const setup = await createTestRenderer({ width: 90, height: 24, kittyKeyboard: true, ...rendererConfig() });
+        setups.push(setup);
+        return setup.renderer;
+      },
+      splashMs: 0,
+    });
+    await waitFor(() => setups.length === 1, 'story browser');
+    expect(await waitForFrame(setups[0]!, 'Selected story')).toContain('Stories and branches');
+    setups[0]!.mockInput.pressArrow('right');
+    await waitForFrame(setups[0]!, 'first branch');
+    for (let i = 0; i < branchIndex; i++) setups[0]!.mockInput.pressArrow('down');
+    setups[0]!.mockInput.pressEnter();
+    await waitFor(() => setups.length === 2, 'chat renderer');
+    expect(await waitForFrame(setups[1]!, 'first branch')).toContain('Chat');
+    await setups[1]!.mockInput.pressKeys(['/','q','u','i','t']);
+    setups[1]!.mockInput.pressEnter();
+    expect(await done).toBe(0);
+    expect(readLock(home, id)).toBeNull();
+    const reopened = await Engine.open({ home, clock: fakeClock() });
+    expect(reopened.session(id).view().head).toBe(first.messageId);
+    await reopened.close();
+    for (const setup of setups) await setup.dispose();
   });
 });
 
@@ -293,20 +359,20 @@ describe('main: the tui command', () => {
     expect(c.err.text()).toBe(`${NEEDS_TERMINAL}\n`);
   });
 
-  test('tui without a session: usage error', async () => {
+  test('tui without a session still requires a terminal', async () => {
     const c = io();
-    const code = await main(['tui', '--home', tmpHome('rp-core-tui-')], { io: c.io, env: {}, exit: () => {}, tty: true });
+    const code = await main(['tui', '--home', tmpHome('rp-core-tui-')], { io: c.io, env: {}, exit: () => {}, tty: false });
     expect(code).toBe(64);
-    expect(c.err.text()).toContain('which session? rp-core tui <session>');
+    expect(c.err.text()).toBe(`${NEEDS_TERMINAL}\n`);
   });
 
   test('help lists tui; help tui explains it', async () => {
     const a = io();
     expect(await main(['--help'], { io: a.io, env: {}, exit: () => {} })).toBe(0);
-    expect(a.out.text()).toMatch(/\n {2}tui +open a session full-screen/);
+    expect(a.out.text()).toMatch(/\n {2}tui +choose a story or open a session full-screen/);
     const b = io();
     expect(await main(['help', 'tui'], { io: b.io, env: {}, exit: () => {} })).toBe(0);
-    expect(b.out.text()).toContain('Usage: rp-core tui <session>');
+    expect(b.out.text()).toContain('Usage: rp-core tui [session]');
     expect(b.out.text()).toContain('Ctrl+R swipe');
   });
 
