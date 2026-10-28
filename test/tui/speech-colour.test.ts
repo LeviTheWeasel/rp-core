@@ -4,6 +4,7 @@ import { createUi } from '../../src/cli/tui/app.ts';
 import { MONO_THEME, THEME } from '../../src/cli/tui/theme.ts';
 import { proseChunks } from '../../src/cli/tui/turn-view.ts';
 import { chatRig, ev, msg, NAMES, textEvents, type ChatRig } from './chat-kit.ts';
+import { calls, tuiRig } from './kit.ts';
 
 let rig: ChatRig | null = null;
 afterEach(async () => {
@@ -48,15 +49,30 @@ test('NO_COLOR keeps speech in the default foreground', () => {
 test('startup logo is shown during loading and removed for the session', async () => {
   const setup = await createTestRenderer({ width: 100, height: 25 });
   try {
-    const ui = createUi(setup.renderer, THEME);
+    const ui = createUi(setup.renderer, THEME, 30);
+    // The Repl can announce readiness before the renderer draws even one frame.
+    ui.hideLoading();
     await setup.renderOnce();
     expect(setup.captureCharFrame()).toContain('loading story');
     expect(setup.captureCharFrame()).toContain('____');
-    ui.hideLoading();
-    ui.hideLoading();
+    await new Promise((resolve) => setTimeout(resolve, 45));
     await setup.renderOnce();
     expect(setup.captureCharFrame()).not.toContain('loading story');
+    ui.hideLoading();
   } finally {
     await setup.dispose();
+  }
+});
+
+test('a fast session still shows the loading screen before its first chat frame', async () => {
+  const tui = await tuiRig(calls([], []), { splashMs: 80 });
+  try {
+    const first = await tui.until('loading story');
+    expect(first).toContain('loading story');
+    expect(first).not.toContain('Hello, Levi');
+    const ready = await tui.until('Hello, Levi');
+    expect(ready).not.toContain('loading story');
+  } finally {
+    if (!tui.setup.renderer.isDestroyed) await tui.close();
   }
 });

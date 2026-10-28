@@ -88,7 +88,7 @@ function backdrop(theme: Theme): (this: Renderable, buffer: OptimizedBuffer) => 
 }
 
 /** Build the three columns under `renderer.root` and focus the input. */
-export function createUi(renderer: CliRenderer, theme: Theme): HostUi {
+export function createUi(renderer: CliRenderer, theme: Theme, splashMs = 650): HostUi {
   const root = new BoxRenderable(renderer, { id: 'root', flexDirection: 'row', width: '100%', height: '100%', renderBefore: backdrop(theme) });
   renderer.root.add(root);
   const side = { flexShrink: 0, border: true, flexDirection: 'column' as const, paddingX: 1, ...boxColours(theme) };
@@ -122,6 +122,19 @@ export function createUi(renderer: CliRenderer, theme: Theme): HostUi {
       arrowOptions: { foregroundColor: theme.border, backgroundColor: TRANSPARENT },
     },
   });
+  // The session can finish opening before OpenTUI draws its first frame. Keep a full-screen layer
+  // through that frame and briefly afterwards, so the logo is actually visible on a fast machine.
+  const loadingScreen = new BoxRenderable(renderer, {
+    id: 'loading-screen',
+    position: 'absolute',
+    zIndex: 10,
+    width: '100%',
+    height: '100%',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    renderBefore: backdrop(theme),
+  });
   const loading = new TextRenderable(renderer, {
     id: 'loading-logo',
     flexShrink: 0,
@@ -136,11 +149,34 @@ export function createUi(renderer: CliRenderer, theme: Theme): HostUi {
       chunk('  loading story…', theme, { dim: true }),
     ]),
   });
-  transcript.add(loading);
+  loadingScreen.add(loading);
+  renderer.root.add(loadingScreen);
+  let firstFrame = false;
+  let ready = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const removeLoading = (): void => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    renderer.off('frame', onLoadingFrame);
+    if (loadingScreen.isDestroyed || renderer.isDestroyed) return;
+    renderer.root.remove(loadingScreen);
+    loadingScreen.destroy();
+  };
+  const scheduleRemoval = (): void => {
+    if (!ready || !firstFrame || timer !== null || loadingScreen.isDestroyed) return;
+    if (splashMs <= 0) return removeLoading();
+    timer = setTimeout(removeLoading, splashMs);
+    (timer as { unref?: () => void }).unref?.();
+  };
+  const onLoadingFrame = (): void => {
+    firstFrame = true;
+    renderer.off('frame', onLoadingFrame);
+    scheduleRemoval();
+  };
+  renderer.on('frame', onLoadingFrame);
   const hideLoading = (): void => {
-    if (loading.isDestroyed) return;
-    transcript.remove(loading);
-    loading.destroy();
+    ready = true;
+    scheduleRemoval();
   };
   const text = { fg: theme.text, ...selectionColours(theme) } as const;
   const status = new TextRenderable(renderer, { id: 'status', height: 1, flexShrink: 0, marginLeft: 1, marginRight: 1, wrapMode: 'none', content: '', ...text });

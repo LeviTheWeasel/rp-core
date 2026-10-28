@@ -152,6 +152,8 @@ export interface TuiArgs extends ChatArgs {
   pasteIdleMs?: number;
   /** "working…" shows when a command still runs after this long (default WORKING_AFTER_MS). */
   workingAfterMs?: number;
+  /** Minimum time to show the first rendered loading screen (tests may pass 0). */
+  splashMs?: number;
 }
 
 /** `rp-core tui <session>`: needs a terminal (else 64); refusals at open print as CLI errors (5). */
@@ -326,7 +328,7 @@ export interface MountOptions {
   renderer: CliRenderer;
   engine: EngineHandle;
   session: SessionHandle;
-  a: Pick<TuiArgs, 'rt' | 'fetch' | 'clock' | 'env' | 'exitWindowMs' | 'pasteIdleMs' | 'workingAfterMs' | 'events'>;
+  a: Pick<TuiArgs, 'rt' | 'fetch' | 'clock' | 'env' | 'exitWindowMs' | 'pasteIdleMs' | 'workingAfterMs' | 'splashMs' | 'events'>;
   io: TuiIo;
   log: FileLog;
   parts: TuiParts;
@@ -341,7 +343,7 @@ export function mountTui(o: MountOptions): MountedTui {
   const env = a.env ?? process.env;
   const clock = a.clock ?? systemClock;
   const theme = env.NO_COLOR ? MONO_THEME : THEME;
-  const ui = createUi(renderer, theme);
+  const ui = createUi(renderer, theme, a.splashMs);
   let view: TuiView | null = null;
   const warp = env.TERM_PROGRAM === 'WarpTerminal';
   const noOsc52 = ignoresOsc52(env);

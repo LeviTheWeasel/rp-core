@@ -33,6 +33,7 @@ export interface TuiRigOptions {
   rpConfig?: RpConfig;
   parts?: Partial<TuiParts>;
   exitWindowMs?: number;
+  splashMs?: number;
   /** Where runTui listens for uncaught errors (default the process, as `rp-core tui`). */
   errors?: ErrorEventSource;
 }
@@ -102,6 +103,7 @@ export async function tuiRig(script: ScriptCall[], o: TuiRigOptions = {}): Promi
     env: o.env ?? { HOME: home },
     createRenderer: async () => setup.renderer,
     clock: fakeClock(),
+    splashMs: o.splashMs ?? 0,
     ...(o.parts ? { parts: o.parts } : {}),
     ...(o.exitWindowMs !== undefined ? { exitWindowMs: o.exitWindowMs } : {}),
     ...(o.errors ? { errors: o.errors } : {}),
