@@ -218,8 +218,8 @@ function importedChatOf(path: string): string | undefined {
       if (nl >= 0) break;
       pos += n;
     }
-    const header = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { imported?: { chat?: unknown } };
-    return typeof header.imported?.chat === 'string' ? header.imported.chat : undefined;
+    const header = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { imported?: { from?: unknown; chat?: unknown } };
+    return header.imported?.from === 'rolecall' && typeof header.imported.chat === 'string' ? header.imported.chat : undefined;
   } catch {
     return undefined;
   } finally {

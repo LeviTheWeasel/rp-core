@@ -27,6 +27,8 @@ import { currentConfig, foldView, mergePatch } from '../session/fold.ts';
 import { DEFAULT_LOCK_TTL_MS, isLockStale, listSessions, readLock, readSessionFile, SessionNotFoundError } from '../session/log.ts';
 import { UsageError } from './args.ts';
 import { cmdImportStory, storyArchive } from './import-story.ts';
+import { cmdImportStChat } from './import-st-chat.ts';
+import { parseStChat, StChatError } from '../formats/st-chat.ts';
 import type { Io } from './io.ts';
 import { EXIT } from './oneshot.ts';
 import { addLoreId, RefError, resolveLoreRef, resolvePresetRef, type Resolved } from './refs.ts';
@@ -106,6 +108,8 @@ export interface ImportArgs {
   io: Io;
   /** RoleCall story exports only (D-185): --chat, --model, --compendium, --dry-run, --new, --keep-raw. */
   story?: { chat?: string; model?: string; compendium?: string; dryRun?: boolean; fresh?: boolean; keepRaw?: boolean };
+  /** SillyTavern .jsonl: the already imported card, and an optional persona file. */
+  st?: { card?: string; persona?: string };
   /** config.toml, loaded when a story is imported (its session defaults, the --model check). */
   rt?: () => Runtime;
 }
@@ -138,6 +142,7 @@ export async function cmdImport(a: ImportArgs): Promise<number> {
   const story = storyArchive(bytes);
   if (story && 'error' in story) throw new CliError(`import failed: ${basename(a.file)}: ${story.error}`);
   if (story) {
+    if (a.st?.card !== undefined || a.st?.persona !== undefined) throw new UsageError('--card and --persona are only for a SillyTavern chat export (.jsonl)', 'import');
     try {
       return await cmdImportStory({
         home: a.home,
@@ -159,6 +164,20 @@ export async function cmdImport(a: ImportArgs): Promise<number> {
       throw e;
     }
   }
+  if (a.file.toLowerCase().endsWith('.jsonl')) {
+    if (a.story?.chat !== undefined || a.story?.compendium !== undefined || a.story?.keepRaw) {
+      throw new UsageError('--chat, --compendium and --keep-raw are only for a RoleCall story export (.rolecall zip)', 'import');
+    }
+    try {
+      const chat = parseStChat(bytes);
+      if (!a.st?.card) throw new UsageError('--card <library id> is required for a SillyTavern chat export', 'import');
+      return cmdImportStChat({ home: a.home, file: a.file, chat, card: a.st.card, ...(a.st.persona ? { persona: a.st.persona } : {}), ...(a.story?.model ? { model: a.story.model } : {}), ...(a.as ? { as: a.as } : {}), dryRun: a.story?.dryRun === true, fresh: a.story?.fresh === true, json: a.json, io: a.io, ...(a.rt ? { rt: a.rt() } : {}) });
+    } catch (e) {
+      if (e instanceof StChatError) throw new CliError(`import failed: ${e.message}`);
+      throw e;
+    }
+  }
+  if (a.st?.card !== undefined || a.st?.persona !== undefined) throw new UsageError('--card and --persona are only for a SillyTavern chat export (.jsonl)', 'import');
   const only = storyFlags(a.story);
   if (only.length > 0) throw new UsageError(`${only.join(', ')}: only for a RoleCall story export (a .rolecall zip)`, 'import');
   let r: ReturnType<typeof importFile>;
