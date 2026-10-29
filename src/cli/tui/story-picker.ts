@@ -16,7 +16,7 @@ export function storyRows(home: string, query = ''): StoryRow[] {
   const raw = listSessions(home).flatMap((s) => {
     try {
       const h = readSessionHeader(home, s.id);
-      return [{ id: s.id, title: h.title || h.cast.character.name || s.id, character: h.cast.character.name, forkFrom: h.fork?.from, updated: s.updated }];
+      return [{ id: s.id, title: s.title || h.cast.character.name || s.id, character: h.cast.character.name, forkFrom: h.fork?.from, updated: s.updated }];
     } catch { return []; }
   });
   const byId = new Map(raw.map((r) => [r.id, r]));
@@ -41,7 +41,7 @@ export function storyRows(home: string, query = ''): StoryRow[] {
   return needle ? result.filter((r) => `${r.id} ${r.title} ${r.character}`.toLocaleLowerCase().includes(needle)) : result;
 }
 
-interface BranchRow extends TailRow { active: boolean }
+interface BranchRow extends TailRow { active: boolean; title?: string }
 
 /** The active leaf plus alternative leaves of a selected story. */
 export function branchRows(home: string, id: string): BranchRow[] {
@@ -51,11 +51,20 @@ export function branchRows(home: string, id: string): BranchRow[] {
   const pathSet = new Set<string>();
   for (let cur = head; cur !== null; cur = j.tree.msgs.get(cur)?.parent ?? null) pathSet.add(cur);
   const ids = [...(head ? [head] : []), ...tails(j.tree, pathSet)];
-  return tailRows(j, ids).map((r) => ({ ...r, active: r.id === head }));
+  const names = new Map<string, string>();
+  for (const e of entries) if (e.t === 'name' && e.leaf) names.set(e.leaf, e.title);
+  return tailRows(j, ids).map((r) => {
+    let title: string | undefined;
+    for (let cur: string | null = r.id; cur !== null; cur = j.tree.msgs.get(cur)?.parent ?? null) {
+      title = names.get(cur);
+      if (title !== undefined) break;
+    }
+    return { ...r, active: r.id === head, ...(title ? { title } : {}) };
+  });
 }
 
 /** A full-pane browser. All writes still go through the REPL's /open and /goto commands. */
-export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: () => string | null, choose: (id: string, leaf?: string) => void, standalone = false, onNew?: () => void) {
+export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: () => string | null, choose: (id: string, leaf?: string) => void, standalone = false, onNew?: () => void, onRename?: (id: string, title: string, leaf?: string) => Promise<void>) {
   const box = new BoxRenderable(ui.renderer, {
     id: 'story-picker', position: 'absolute', top: 1, left: 1, right: 1, bottom: 2,
     zIndex: 101, border: true, title: ' Stories and branches ', borderColor: theme.focusedBorder,
@@ -71,6 +80,9 @@ export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: (
   let branches: BranchRow[] = [];
   let branchIndex = 0;
   let error = '';
+  let rename: { id: string; leaf?: string; value: string } | null = null;
+  let renameError = '';
+  let saving = false;
   let drawnWidth = -1;
   let drawnHeight = -1;
   const selectedStory = (): StoryRow | undefined => stories[storyIndex];
@@ -90,18 +102,30 @@ export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: (
     const width = Math.max(12, box.width - 4);
     const height = Math.max(1, box.height - 3);
     const rows: { text: string; tone: 'text' | 'accent' | 'dim' | 'yellow'; bold?: boolean }[] = [];
+    if (rename) {
+      rows.push({ text: `Rename ${rename.leaf ? 'branch' : 'story'}`, tone: 'accent', bold: true });
+      rows.push({ text: 'Type a name · Ctrl+U clear · Enter save · Esc cancel', tone: 'dim' });
+      rows.push({ text: `Name: ${rename.value}▏`, tone: 'text' });
+      if (renameError) rows.push({ text: renameError, tone: 'yellow' });
+      if (saving) rows.push({ text: 'Saving…', tone: 'dim' });
+      body.content = new StyledText(rows.map((row, i) => [
+        chunk(fitLine([{ text: flatText(row.text), tone: 'text' }], width).map((s) => s.text).join(''), theme, { fg: row.tone === 'dim' ? theme.text : theme[row.tone], dim: row.tone === 'dim', bold: row.bold }),
+        ...(i < rows.length - 1 ? [chunk('\n', theme)] : []),
+      ]).flat());
+      return;
+    }
     if (tab === 'stories') {
       rows.push({ text: `Stories  › branches  ·  search: ${query || 'type to filter'}`, tone: 'accent', bold: true });
-      rows.push({ text: `↑/↓ select · Enter open · → branches · F6 new · Esc ${standalone ? 'quit' : 'close'}`, tone: 'dim' });
+      rows.push({ text: `↑/↓ select · Enter open · → branches · F2 rename · F6 new · Esc ${standalone ? 'quit' : 'close'}`, tone: 'dim' });
       if (!stories.length) rows.push({ text: query ? 'No matching stories' : 'No stories yet', tone: 'yellow' });
       stories.forEach((s, i) => rows.push({ text: `${i === storyIndex ? '›' : ' '} ${'  '.repeat(Math.min(5, s.depth))}${s.depth ? '↳ ' : ''}${s.title} · ${s.character} · ${s.id}${s.id === current() ? '  (current)' : ''} · ${s.updated.slice(0, 10)}`, tone: i === storyIndex ? 'accent' : 'text', bold: i === storyIndex }));
     } else {
       const story = selectedStory();
       rows.push({ text: `Stories  ›  ${story?.title ?? 'branches'}`, tone: 'accent', bold: true });
-      rows.push({ text: `↑/↓ select · Enter go to branch · ← stories · Esc ${standalone ? 'quit' : 'close'}`, tone: 'dim' });
+      rows.push({ text: `↑/↓ select · Enter go to branch · F2 rename · ← stories · Esc ${standalone ? 'quit' : 'close'}`, tone: 'dim' });
       if (error) rows.push({ text: error, tone: 'yellow' });
       else if (!branches.length) rows.push({ text: 'No messages in this story yet', tone: 'yellow' });
-      branches.forEach((b, i) => rows.push({ text: `${i === branchIndex ? '›' : ' '} ${b.active ? '● current' : '○ branch'} · ${b.role === 'user' ? 'you' : 'character'} · ${b.words || b.id} · ${b.id}`, tone: i === branchIndex ? 'accent' : 'text', bold: i === branchIndex }));
+      branches.forEach((b, i) => rows.push({ text: `${i === branchIndex ? '›' : ' '} ${b.active ? '● current' : '○ branch'} · ${b.title ? `${b.title} · ` : ''}${b.role === 'user' ? 'you' : 'character'} · ${b.words || b.id} · ${b.id}`, tone: i === branchIndex ? 'accent' : 'text', bold: i === branchIndex }));
     }
     const marker = 2 + (tab === 'stories' ? storyIndex : branchIndex);
     const start = Math.max(0, Math.min(Math.max(0, rows.length - height), marker - Math.floor(height / 2)));
@@ -118,10 +142,48 @@ export function createStoryPicker(ui: Ui, theme: Theme, home: string, current: (
     tab = 'stories'; query = ''; stories = []; storyIndex = 0; refreshStories();
     box.visible = true; draw();
   };
+  const saveName = (): void => {
+    if (!rename || !onRename || saving) return;
+    const title = rename.value.trim();
+    if (!title) { renameError = 'Name cannot be empty'; draw(); return; }
+    const target = rename;
+    saving = true; renameError = ''; draw();
+    void onRename(target.id, title, target.leaf).then(() => {
+      if (!box.visible) return;
+      rename = null; saving = false;
+      const branchId = target.leaf;
+      query = '';
+      refreshStories();
+      if (tab === 'branches') {
+        refreshBranches();
+        if (branchId) branchIndex = Math.max(0, branches.findIndex((b) => b.id === branchId));
+      }
+      draw();
+    }).catch((e: unknown) => {
+      saving = false; renameError = e instanceof Error ? e.message : String(e); draw();
+    });
+  };
   const handle = (key: KeyEvent): boolean => {
     if (!box.visible) return false;
     key.preventDefault();
+    if (rename) {
+      if (saving) return true;
+      if (key.name === 'escape') { rename = null; renameError = ''; draw(); }
+      else if (key.name === 'return' || key.name === 'kpenter') saveName();
+      else if (key.name === 'backspace') { rename.value = [...rename.value].slice(0, -1).join(''); renameError = ''; draw(); }
+      else if (key.ctrl && key.name === 'u') { rename.value = ''; renameError = ''; draw(); }
+      else if (key.name === 'space' || (!key.ctrl && !key.meta && [...key.name].length === 1)) { rename.value += key.name === 'space' ? ' ' : key.name; renameError = ''; draw(); }
+      return true;
+    }
     if (key.name === 'escape') close();
+    else if (key.name === 'f2' && onRename) {
+      const story = selectedStory();
+      const branch = tab === 'branches' ? branches[branchIndex] : undefined;
+      if (story && (tab === 'stories' || branch)) {
+        rename = { id: story.id, ...(branch ? { leaf: branch.id } : {}), value: branch ? branch.title ?? branch.words : story.title };
+        renameError = ''; draw();
+      }
+    }
     else if (key.name === 'f6' && onNew) { close(); onNew(); }
     else if (key.name === 'f5') { refreshStories(); if (tab === 'branches') refreshBranches(); draw(); }
     else if (key.name === 'up') { if (tab === 'stories') storyIndex = Math.max(0, storyIndex - 1); else branchIndex = Math.max(0, branchIndex - 1); draw(); }

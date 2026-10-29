@@ -767,6 +767,16 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     this.lane.poke();
   }
 
+  name(title: string, leaf?: string): void {
+    this.assertOpen();
+    if (this.running) throw new Refusal('session_busy', 'a turn is running');
+    const trimmed = title.trim();
+    if (!trimmed || trimmed.length > 120 || /[\r\n\x00-\x1f\x7f]/u.test(trimmed)) throw new Refusal('invalid_params', 'name must be 1–120 characters on one line');
+    if (leaf !== undefined && !this.tree().msgs.has(leaf)) throw new Refusal('invalid_params', `unknown branch message: ${leaf}`);
+    this.verbAppend({ t: 'name', ts: this.now(), title: trimmed, ...(leaf ? { leaf } : {}) });
+    if (leaf === undefined) this.effectiveHeader = { ...this.header(), title: trimmed };
+  }
+
   version(): number {
     return this.ver;
   }

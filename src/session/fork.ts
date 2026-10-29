@@ -9,7 +9,7 @@
 
 import { parseEntry } from './entries.ts';
 import type { Entry, SessionHeader } from './entries.ts';
-import { currentConfig } from './fold.ts';
+import { currentConfig, currentHeader } from './fold.ts';
 import type { LogOptions, SessionLog } from './log.ts';
 import { checkHeaderForCreate, isValidSessionId, openSessionLog, publishNewJournal } from './log.ts';
 import { buildTree, pathTo } from './tree.ts';
@@ -24,6 +24,8 @@ function belongsToPath(e: Entry, pathSet: ReadonlySet<string>): boolean {
       return pathSet.has(e.target);
     case 'mem':
       return e.on === null || pathSet.has(e.on);
+    case 'name':
+      return e.leaf !== undefined && pathSet.has(e.leaf);
     default:
       return false; // config is folded into the header; turn/prep/chk/held/end/job stay behind
   }
@@ -43,7 +45,7 @@ export function planFork(
   // vars0 stays the source's: the copied path messages carry their own diffs, so the fork's head
   // folds to the same vars as the source at `at`, and a rewind inside the fork to an earlier
   // message does not see keys first set later on the path (a fork-point snapshot would leak them).
-  const { title, vars0 } = source.header;
+  const { title, vars0 } = currentHeader(source.header, source.entries);
   const header: SessionHeader = {
     t: 'session',
     v: 1,
@@ -91,7 +93,8 @@ export function planFork(
 
 /**
  * New header: fork {from, at}, current config, same cast, `created` = now. Copies msg/edit/hide/mem
- * entries that belong to messages on the path up to `at` (inclusive) and mem with on:null,
+ * entries that belong to messages on the path up to `at` (inclusive), branch names on that path,
+ * and mem with on:null,
  * renumbers seq, keeps message ids, and ends with a `head` on `at` if needed. Returns the new log
  * (locked). Throws if `at` is not a message of the source.
  */

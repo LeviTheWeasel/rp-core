@@ -176,6 +176,12 @@ export function currentConfig(header: SessionHeader, entries: readonly Entry[]):
 /** The current cast after session-level persona changes. The journal's first line is never rewritten. */
 export function currentHeader(header: SessionHeader, entries: readonly Entry[]): SessionHeader {
   let latest = header.cast.persona;
-  for (const e of entries) if (e.t === 'persona') latest = e.persona;
-  return latest === header.cast.persona ? header : { ...header, cast: { ...header.cast, ...(latest ? { persona: latest } : {}) } };
+  let title = header.title;
+  for (const e of entries) {
+    if (e.t === 'persona') latest = e.persona;
+    else if (e.t === 'name' && e.leaf === undefined) title = e.title;
+  }
+  return latest === header.cast.persona && title === header.title ? header : {
+    ...header, title, cast: latest === header.cast.persona ? header.cast : { ...header.cast, ...(latest ? { persona: latest } : {}) },
+  };
 }

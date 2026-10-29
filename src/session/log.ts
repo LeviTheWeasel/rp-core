@@ -1166,7 +1166,9 @@ export function listSessions(home: string): { id: string; title?: string; update
       if (line === null) continue;
       const h = parseHeader(line);
       if (!h.ok) continue;
-      rows.push(h.value.title !== undefined ? { id, title: h.value.title, mtimeMs: st.mtimeMs } : { id, mtimeMs: st.mtimeMs });
+      const { header } = readSessionFile(home, id);
+      const title = header.title;
+      rows.push(title !== undefined ? { id, title, mtimeMs: st.mtimeMs } : { id, mtimeMs: st.mtimeMs });
     } catch {
       /* unreadable: skipped */
     }

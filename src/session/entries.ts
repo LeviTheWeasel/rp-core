@@ -306,6 +306,15 @@ export interface SessionHeader {
   vars0?: VarsDiff;
 }
 
+/** A story title, or a name attached to a branch at one of its messages. */
+export interface NameEntry {
+  t: 'name';
+  seq: number;
+  ts: string;
+  title: string;
+  leaf?: string;
+}
+
 export interface MsgEntry extends Partial<CommitBody> {
   t: 'msg';
   seq: number;
@@ -486,6 +495,7 @@ export interface ToolTraceRow {
 export type Entry =
   | ConfigEntry
   | PersonaEntry
+  | NameEntry
   | MsgEntry
   | EditEntry
   | HideEntry
@@ -741,6 +751,7 @@ const header = obj(
 const ENTRY_CHECKS: Record<EntryKind, Check> = {
   config: obj({ seq: seqNum, ts: str, patch: anyObj }),
   persona: obj({ seq: seqNum, ts: str, persona }),
+  name: obj({ seq: seqNum, ts: str, title: nonEmpty }, { leaf: nonEmpty }),
   msg: obj(
     { seq: seqNum, ts: str, id: nonEmpty, parent: nullable(nonEmpty), role: oneOf('user', 'assistant') },
     { speaker: str, turn: str, tail: oneOf(true), ...commitFields },

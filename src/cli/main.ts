@@ -145,7 +145,7 @@ Alt+Enter or Ctrl+J start a new line. Hotkeys: Ctrl+R swipe, Ctrl+G guided re-ro
 Ctrl+E edit the last message in the input (Enter saves, Esc cancels), Alt+Left/Right versions,
 PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off,
 F4 choose the narrator model from the configured connections (↑/↓, Enter, Esc), F5 browse stories
-and branches, F6 create a story from a library card with persona, preset and lorebook choices,
+and branches (F2 names the selected one), F6 create a story from a library card with persona, preset and lorebook choices,
 F7 choose or edit the current session's persona, F8 change its preset and lorebooks. Ctrl+C
 stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
 Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes

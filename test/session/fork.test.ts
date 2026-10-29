@@ -100,6 +100,20 @@ describe('forkSession', () => {
     expect(plan.entries.some((e) => e.t === 'edit')).toBe(false);
   });
 
+  test('a fork keeps names on its path and the current story title', () => {
+    const home = tmpHome();
+    const source = seedSource(home);
+    const entries = [
+      ...source.entries,
+      { t: 'name' as const, seq: source.entries.at(-1)!.seq + 1, ts: TS, title: 'renamed story' },
+      { t: 'name' as const, seq: source.entries.at(-1)!.seq + 2, ts: TS, title: 'chosen route', leaf: 'a0000001' },
+      { t: 'name' as const, seq: source.entries.at(-1)!.seq + 3, ts: TS, title: 'other route', leaf: 'a000001b' },
+    ];
+    const plan = planFork({ header: source.header, entries }, 'a0000001', { newId: NEW, now: NOW });
+    expect(plan.header.title).toBe('renamed story');
+    expect(plan.entries.filter((e) => e.t === 'name').map((e) => e.title)).toEqual(['chosen route']);
+  });
+
   test('a fork of a fork: lineage in the header, vars0 and config carried along', () => {
     const home = tmpHome();
     const source = seedSource(home);

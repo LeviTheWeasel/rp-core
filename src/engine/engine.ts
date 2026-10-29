@@ -155,6 +155,15 @@ class EngineImpl implements EngineHandle {
     return s;
   }
 
+  async nameSession(id: string, title: string, leaf?: string): Promise<void> {
+    this.assertOpen();
+    const active = this.open.get(id);
+    if (active) { active.name(title, leaf); return; }
+    const session = this.session(id);
+    try { session.name(title, leaf); }
+    finally { await session.close(); }
+  }
+
   listSessions(): { id: string; title?: string; updated: string }[] {
     return listSessions(this.ctx.home);
   }

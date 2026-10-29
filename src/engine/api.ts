@@ -337,6 +337,8 @@ export interface SessionHandle {
   header(): SessionHeader;
   /** Replace this session's persona for future turns; preserves the journal's past. */
   setPersona(persona: Persona): void;
+  /** Name this story, or the branch through `leaf`. Names survive reopening. */
+  name(title: string, leaf?: string): void;
   /** version(session) (§5.3). */
   version(): number;
   /**
@@ -528,6 +530,8 @@ export interface EngineHandle {
   createSession(input: CreateSessionInput): SessionHandle;
   /** Open (lock + recover). Throws Refusal('session_locked' | 'session_not_found'). */
   session(id: string): SessionHandle;
+  /** Name a story or branch, opening and closing an inactive session when needed. */
+  nameSession(id: string, title: string, leaf?: string): Promise<void>;
   listSessions(): { id: string; title?: string; updated: string }[];
   /** All events of all open sessions (live tail; starts empty). */
   events(): AsyncIterable<Event>;

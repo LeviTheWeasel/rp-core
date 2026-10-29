@@ -361,6 +361,7 @@ describe('REPL: Ctrl+C, held lines, EOF', () => {
       },
       header: () => s.header(),
       setPersona: (persona) => s.setPersona(persona),
+      name: (title, leaf) => s.name(title, leaf),
       version: () => s.version(),
       view: () => s.view(),
       busy: () => false,

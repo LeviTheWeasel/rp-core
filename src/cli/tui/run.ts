@@ -179,12 +179,16 @@ export async function chooseTuiSession(a: TuiArgs): Promise<{ id?: string; leaf?
     const id = await createLibraryStory(a.rt, choice);
     finish({ id, code: 0 });
   });
-  const picker = createStoryPicker(ui, theme, a.rt.home, () => null, (id, leaf) => finish({ id, ...(leaf ? { leaf } : {}), code: 0 }), true, () => newStory.open());
+  const picker = createStoryPicker(ui, theme, a.rt.home, () => null, (id, leaf) => finish({ id, ...(leaf ? { leaf } : {}), code: 0 }), true, () => newStory.open(), async (id, title, leaf) => {
+    const engine = await Engine.open({ ...a.engine, ...engineOptions(a.rt) });
+    try { await engine.nameSession(id, title, leaf); }
+    finally { await engine.close(); }
+  });
   const onKey = (k: KeyEvent): void => {
     if (k.eventType === 'release') return;
     if (newStory.handle(k)) { if (!newStory.visible) picker.open(); return; }
-    if (k.name === 'escape' || isInterruptKey(k)) { k.preventDefault(); finish({ code: k.name === 'escape' ? 0 : EXIT_SIGINT }); return; }
-    if (picker.handle(k)) return;
+    if (isInterruptKey(k)) { k.preventDefault(); finish({ code: EXIT_SIGINT }); return; }
+    if (picker.handle(k)) { if (k.name === 'escape' && !picker.visible) finish({ code: 0 }); return; }
     if (k.name === 'f6') { k.preventDefault(); newStory.open(); }
   };
   const onDestroy = (): void => finish({ code: 0 });
@@ -500,7 +504,10 @@ export function mountTui(o: MountOptions): MountedTui {
       const line = `/goto ${leaf}`;
       sent(line); source.inject(line); transcript.scroll('bottom');
     }
-  }, false, () => newStory.open());
+  }, false, () => newStory.open(), async (id, title, leaf) => {
+    await engine.nameSession(id, title, leaf);
+    if (id === currentSessionId && !leaf) view?.refresh();
+  });
 
   ui.input.onSubmit = () => {
     sent(ui.input.plainText);
