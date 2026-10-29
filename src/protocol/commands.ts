@@ -7,7 +7,12 @@ export const RPC_METHODS = [
   'session/configure', 'session/fork', 'session/preview',
   'message/send', 'message/edit', 'message/hide',
   'history/select', 'history/tails', 'history/search',
-  'turn/run', 'turn/submit', 'turn/stop', 'shutdown',
+  'memory/list', 'memory/get', 'memory/tree', 'memory/status', 'memory/wait', 'memory/recall',
+  'memory/file', 'memory/add', 'memory/edit', 'memory/retire', 'memory/restore',
+  'memory/undo', 'memory/refile', 'memory/retry', 'memory/export',
+  'lore/test', 'director/show',
+  'models/list', 'caps/get', 'caps/probe',
+  'turn/run', 'turn/submit', 'turn/stop', 'turn/commitAnyway', 'turn/discard', 'shutdown',
 ] as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[number];
@@ -49,4 +54,11 @@ export function objectParam(p: Record<string, unknown>, key: string, optional = 
   if (value === undefined && optional) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InvalidParams(`${key} must be an object`);
   return value as Record<string, unknown>;
+}
+
+export function stringArrayParam(p: Record<string, unknown>, key: string, optional = false): string[] | undefined {
+  const value = p[key];
+  if (value === undefined && optional) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) throw new InvalidParams(`${key} must be an array of strings`);
+  return value;
 }

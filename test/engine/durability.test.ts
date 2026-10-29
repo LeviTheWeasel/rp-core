@@ -228,12 +228,12 @@ describe('the turn sees the state and request it really has', () => {
     const g1 = msgs(entriesOf(home, s.id)).filter((m) => m.parent === null)[1]!.id;
     const turn = s.runTurn({ kind: 'reply', expectedVersion: version });
     await until(() => provider.requests.length === 1);
-    // M1a refuses select while busy; the head moves the way M6 will allow (a raw head line).
-    (s as unknown as { append(e: unknown): unknown }).append({ t: 'head', ts: '2026-10-26T12:00:00.000Z', leaf: g1 });
+    s.select({ messageId: g1, exact: true, expectedVersion: version });
     provider.release('p');
     const evs = await drain(turn);
-    expectDone(await turn.result);
-    expect(evs.some((e) => e.type === 'notice' && e.code === 'committed_as_tail')).toBe(true);
+    expect((await turn.result).type).toBe('conflict');
+    expect(evs.some((e) => e.type === 'conflict')).toBe(true);
+    expect(s.commitAnyway(turn.turnId).outcome).toBe('committed');
     const last = entriesOf(home, s.id).at(-1)!;
     expect(last).toMatchObject({ t: 'msg', id: turn.messageId, tail: true });
     expect(s.view().head).toBe(g1);

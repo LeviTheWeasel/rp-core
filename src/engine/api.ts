@@ -359,6 +359,10 @@ export interface SessionHandle {
   submit(input: { text: string; expectedVersion: number; onError?: 'drop' | 'keep' }): TurnHandle;
   /** Stop the running turn (or the given one). No-op when nothing runs. */
   stop(turnId?: string): void;
+  /** Resolve a completed answer held because the history changed during its turn. */
+  commitAnyway(turnId: string): { outcome: 'committed' | 'dropped' | 'discarded'; version: number; message?: MessageView };
+  /** Throw away a held answer. */
+  discard(turnId: string): { discarded: string };
 
   /** M1a refuses these with session_busy while a turn runs (conflict handling is M6). */
   edit(input: { messageId: string; text: string; expectedVersion: number }): { version: number };

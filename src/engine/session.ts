@@ -84,7 +84,7 @@ import type {
   TurnHandle,
 } from './api.ts';
 import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.ts';
-import { effectiveText } from './commit.ts';
+import { effectiveText, messageViewOf, placeCommit } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
 import { Lane, taskOn, type LaneHost } from './lane.ts';
 import { firstRoundLast, modelRequest, roundFields } from './narrate.ts';
@@ -732,6 +732,10 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     this.lane.touch();
   }
 
+  turnHeld(turnId: string): void {
+    this.held.add(turnId);
+  }
+
   /** M5b: after the turn's terminal event, the lane looks again (a committed answer may be accepted, D-171). */
   turnSettled(): void {
     this.lane.poke();
@@ -900,8 +904,42 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     run.stop('user_stop');
   }
 
+  commitAnyway(turnId: string): { outcome: 'committed' | 'dropped' | 'discarded'; version: number; message?: MessageView } {
+    this.assertOpen();
+    if (this.running) throw new Refusal('session_busy', 'a turn is running');
+    if (!this.held.has(turnId)) throw new Refusal('not_found', `no held turn ${turnId}`);
+    const entries = this.log.entries();
+    const turn = entries.find((entry): entry is Extract<Entry, { t: 'turn' }> => entry.t === 'turn' && entry.turn === turnId);
+    const held = [...entries].reverse().find((entry): entry is Extract<Entry, { t: 'held' }> => entry.t === 'held' && entry.turn === turnId);
+    if (!turn || !held) throw new Refusal('not_found', `no held answer ${turnId}`);
+    const { blocks, addition, cont, ...body } = held.body;
+    const placed = placeCommit(this, {
+      turn, blocks, addition: addition ?? blocks.filter((block) => block.k === 'text').map((block) => block.text).join(''),
+      ...(cont ? { cont } : {}), body, continueConflict: 'discarded',
+    });
+    this.held.delete(turnId);
+    if (placed.kind === 'end') return { outcome: placed.entry.outcome === 'dropped' ? 'dropped' : 'discarded', version: this.ver };
+    if (placed.kind === 'held') throw new Error('resolving a held turn created another held turn');
+    const id = placed.kind === 'msg' ? placed.entry.id : placed.entry.target;
+    const message = messageViewOf(this.tree(), id);
+    this.publish({ type: 'changed', version: this.ver, change: placed.kind === 'msg' ? 'msg' : 'edit', id });
+    if (placed.kind === 'msg' && placed.tail) this.publish({ type: 'notice', level: 'warn', code: 'committed_as_tail', message: `The answer ${id} was saved as a side branch: the conversation had moved on.` });
+    this.laneActivity();
+    return { outcome: 'committed', version: this.ver, message };
+  }
+
+  discard(turnId: string): { discarded: string } {
+    this.assertOpen();
+    if (this.running) throw new Refusal('session_busy', 'a turn is running');
+    if (!this.held.has(turnId)) throw new Refusal('not_found', `no held turn ${turnId}`);
+    this.verbAppend({ t: 'end', ts: this.now(), turn: turnId, outcome: 'discarded' });
+    this.held.delete(turnId);
+    this.lane.poke();
+    return { discarded: turnId };
+  }
+
   edit(input: { messageId: string; text: string; expectedVersion: number }): { version: number } {
-    this.guardWrite(input?.expectedVersion);
+    this.guardWrite(input?.expectedVersion, { busy: false });
     if (typeof input.text !== 'string') throw new Refusal('invalid_params', 'text must be a string');
     const idx = this.tree();
     this.mustExist(idx, input.messageId);
@@ -914,7 +952,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   }
 
   hide(input: { messageId: string; hidden: boolean; expectedVersion: number }): { version: number } {
-    this.guardWrite(input?.expectedVersion);
+    this.guardWrite(input?.expectedVersion, { busy: false });
     if (typeof input.hidden !== 'boolean') throw new Refusal('invalid_params', 'hidden must be a boolean');
     this.mustExist(this.tree(), input.messageId);
     this.verbAppend({ t: 'hide', ts: this.now(), target: input.messageId, hidden: input.hidden });
@@ -924,7 +962,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   }
 
   select(input: { messageId: string; expectedVersion: number; exact?: boolean }): { version: number } {
-    this.guardWrite(input?.expectedVersion);
+    this.guardWrite(input?.expectedVersion, { busy: false });
     if (input.exact !== undefined && typeof input.exact !== 'boolean') throw new Refusal('invalid_params', 'exact must be a boolean');
     const idx = this.tree();
     this.mustExist(idx, input.messageId);
@@ -1228,9 +1266,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   }
 
   /** busy → held → version, the shared preconditions of every write verb. */
-  private guardWrite(expectedVersion: unknown, opts: { held?: boolean } = {}): void {
+  private guardWrite(expectedVersion: unknown, opts: { held?: boolean; busy?: boolean } = {}): void {
     this.assertOpen();
-    if (this.running) throw new Refusal('session_busy', 'a turn is running');
+    if (this.running && opts.busy !== false) throw new Refusal('session_busy', 'a turn is running');
     if (opts.held && this.held.size > 0) throw new Refusal('held_pending', 'an answer held by a conflict must be decided first');
     if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion)) {
       throw new Refusal('invalid_params', 'expectedVersion must be an integer');

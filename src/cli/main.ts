@@ -19,16 +19,18 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigError } from '../config/config.ts';
 import { Engine } from '../engine/engine.ts';
+import { Refusal } from '../engine/api.ts';
 import { systemClock } from '../engine/system.ts';
 import { runRpc } from '../protocol/rpc.ts';
+import { listModels } from '../providers/probe.ts';
 import { redactEvent } from './render.ts';
 import { bool, list, parseArgs, str, UsageError, type FlagKind, type Parsed } from './args.ts';
-import { cmdModels, cmdProbe } from './catalog.ts';
+import { cmdModels, cmdProbe, runProbe } from './catalog.ts';
 import { cmdChat, runChat } from './chat.ts';
 import { cmdCompact } from './compact.ts';
 import { cmdImport, cmdInit, cmdNew, cmdSessions, cmdShow, CliError } from './commands.ts';
 import { resolveHome, type Home } from './home.ts';
-import { processIo, type Io } from './io.ts';
+import { memoryChannel, processIo, type Io } from './io.ts';
 import { EXIT, runSend } from './oneshot.ts';
 import { cmdPreview } from './preview.ts';
 import { prepareProvider, ScriptFileError, type PreparedProvider } from './provider.ts';
@@ -76,8 +78,8 @@ const COMMANDS: Record<string, Command> = {
     summary: 'JSON-RPC 2.0 over JSONL for external UIs (M6 in progress)',
     help: `Reads one JSON-RPC 2.0 request per UTF-8 line from stdin. Writes responses and live event
 notifications to stdout, one JSON object per line. Send initialize with protocol:1 first.
-shutdown or EOF closes every open session. This first M6 slice supports session lifecycle, message
-edits and selection, turn/run, turn/submit, turn/stop, and basic history methods.
+shutdown or EOF closes every open session. Methods cover sessions, turns, conflict decisions,
+history, memory, lore, the Director, models and capabilities. See docs/STDIO.md for details.
 ${PROVIDER_HELP}`,
   },
   init: {
@@ -431,7 +433,30 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const rt = runtimeOf(home, deps, p, providerOf(p, name));
       const engine = await Engine.open(engineOptions(rt));
       const redact = redactor(rt);
-      await runRpc(deps.input ?? process.stdin, (line) => io.out.write(line), engine, home.dir, (event) => redactEvent(event, redact));
+      const connection = (id: string) => {
+        const c = rt.connections[id];
+        if (!c) throw new Refusal('no_connection', `connection ${id} is not configured`);
+        return c;
+      };
+      await runRpc(deps.input ?? process.stdin, (line) => io.out.write(line), engine, home.dir, (event) => redactEvent(event, redact), {
+        modelsList: async (conn) => {
+          const c = connection(conn);
+          if (!c.baseUrl) throw new Refusal('no_connection', `connection ${conn} has no model catalog URL`);
+          let key: string | null = null;
+          try { key = c.resolveKey ? await c.resolveKey() : (c.key ?? null); } catch { /* public catalogs may work without a key */ }
+          return listModels(c.baseUrl, { fetch: deps.fetch ?? fetch, key, signal: new AbortController().signal });
+        },
+        capsGet: (conn, model) => {
+          const c = connection(conn);
+          return c.capsFor?.(model) ?? c.caps;
+        },
+        capsProbe: async (conn, model, active) => {
+          connection(conn);
+          const quiet: Io = { out: memoryChannel(), err: memoryChannel() };
+          const report = await runProbe({ rt, io: quiet, json: true, target: conn, model, write: false, active, fetch: deps.fetch, clock: deps.clock ?? systemClock });
+          return report.results[0];
+        },
+      });
       return EXIT.done;
     }
     case 'init':
