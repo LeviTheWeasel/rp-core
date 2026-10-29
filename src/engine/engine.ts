@@ -146,6 +146,11 @@ class EngineImpl implements EngineHandle {
     return s;
   }
 
+  addConnection(connection: Connection): void {
+    this.assertOpen();
+    this.ctx.connections[connection.id] = connection;
+  }
+
   session(id: string): SessionHandle {
     this.assertOpen();
     // Already open here: the lock file would say the same, without touching the disk.

@@ -51,6 +51,18 @@ describe('key_env', () => {
     env.K = 'now-it-is-set';
     expect(await r.resolve({ conn: 'a', keyEnv: 'K' })).toBe('now-it-is-set');
   });
+
+  test('a TUI-supplied key replaces a cached key and remains available only in memory', async () => {
+    const env = { OR_KEY: 'old-key' };
+    const r = createSecretResolver({ env });
+    const spec = { conn: 'openrouter', keyEnv: 'OR_KEY' };
+    expect(await r.resolve(spec)).toBe('old-key');
+    r.provide!(spec, 'new-key');
+    expect(await r.resolve(spec)).toBe('new-key');
+    expect(env.OR_KEY).toBe('old-key');
+    expect(scrub('new-key and old-key', r.known())).toBe('[redacted] and [redacted]');
+    expect(() => r.provide!(spec, 'bad\nkey')).toThrow(ProviderError);
+  });
 });
 
 describe('key_cmd (real processes, no shell of our own)', () => {

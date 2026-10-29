@@ -39,6 +39,8 @@ export interface SecretResolver {
    * buildConnections, D-53) so scrub() covers it too. Optional: hosts may bring their own resolver.
    */
   remember?(secret: string): void;
+  /** Supply a key for this process without putting it in config.toml or the environment. */
+  provide?(spec: SecretSpec, key: string): void;
 }
 
 /** What the injected runner reports. `exitCode` is null when the process died from a signal. */
@@ -120,6 +122,11 @@ export function createSecretResolver(deps: {
   };
 
   return {
+    provide(spec: SecretSpec, key: string): void {
+      if (!isHeaderSafeKey(key)) throw unavailable(spec.conn, UNSAFE_KEY);
+      secrets.add(key);
+      memo.set(JSON.stringify([spec.conn, spec.keyEnv ?? null, spec.keyCmd ?? null]), Promise.resolve(key));
+    },
     resolve(spec: SecretSpec): Promise<string | null> {
       const id = JSON.stringify([spec.conn, spec.keyEnv ?? null, spec.keyCmd ?? null]);
       const hit = memo.get(id);

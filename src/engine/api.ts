@@ -528,6 +528,8 @@ export interface SessionHandle {
 
 export interface EngineHandle {
   createSession(input: CreateSessionInput): SessionHandle;
+  /** Add a connection configured while this engine is already running. */
+  addConnection(connection: Connection): void;
   /** Open (lock + recover). Throws Refusal('session_locked' | 'session_not_found'). */
   session(id: string): SessionHandle;
   /** Name a story or branch, opening and closing an inactive session when needed. */

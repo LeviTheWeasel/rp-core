@@ -39,6 +39,7 @@ import { applyWidth, createUi, rendererConfig, type HostUi } from './app.ts';
 import { fileLog, tuiIo, tuiLogPath, type FileLog, type TuiIo } from './io.ts';
 import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
 import { createModelPicker } from './model-picker.ts';
+import { connectOpenRouter } from './openrouter.ts';
 import { createLibraryStory, createNewStoryPicker } from './new-story.ts';
 import { createPersonaPicker } from './persona-picker.ts';
 import { createSettingsPicker } from './settings-picker.ts';
@@ -478,7 +479,7 @@ export function mountTui(o: MountOptions): MountedTui {
     sent(line);
     source.inject(line);
     transcript.scroll('bottom');
-  });
+  }, (key) => connectOpenRouter(a.rt, engine, key));
   const newStory = createNewStoryPicker(ui, theme, a.rt.home, async (choice) => {
     const id = await createLibraryStory(a.rt, choice);
     const line = `/open ${id}`;
