@@ -124,6 +124,7 @@ const KEYS = [
       'F5         stories',
       'F6         new story',
       'F7         persona',
+      'F8         settings',
   'Esc        cancel/clear',
 ];
 

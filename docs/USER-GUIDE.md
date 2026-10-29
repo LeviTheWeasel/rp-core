@@ -492,6 +492,7 @@ The labels are those of the left pane.
 | F5 | stories | Opens the story browser. Type to search by title, character or id; ↑/↓ selects, Enter opens a story. → shows its current leaf and alternative branches; Enter switches to the selected branch, even in another story. ← returns to stories, Esc closes, F5 refreshes. Forked stories appear under their parent. Your unfinished input stays in the chat box |
 | F6 | new story | Creates and opens a session from a character card in the library. Pick an optional library persona and preset, then select any number of library lorebooks with Space. Enter creates the session on the last step; Esc cancels |
 | F7 | persona | Shows library personas and the current persona. Enter on a library row switches this session; Edit name and Edit description put an editable command in the chat input. Changes affect future answers and survive reopening the session |
+| F8 | settings | Shows the current story's preset and lorebooks. Use ←/→ to switch sections, type to filter, and ↑/↓ to select. Enter chooses a preset; for lorebooks, Space toggles a book and Enter applies the selection. Esc closes without applying pending lorebook changes. Changes affect future answers |
 
 Changing a persona leaves earlier messages, including greetings that already contain the old name,
 as they were written. The next prompt uses the new persona.

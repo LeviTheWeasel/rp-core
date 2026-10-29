@@ -41,6 +41,7 @@ import { hotkeyAction, isInterruptKey, newlineKey } from './keys.ts';
 import { createModelPicker } from './model-picker.ts';
 import { createLibraryStory, createNewStoryPicker } from './new-story.ts';
 import { createPersonaPicker } from './persona-picker.ts';
+import { createSettingsPicker } from './settings-picker.ts';
 import type { Persona } from '../../formats/native.ts';
 import { createStoryPicker } from './story-picker.ts';
 import { interruptHub, pasteGuard, TextareaSource, type InterruptHub } from './source.ts';
@@ -487,6 +488,9 @@ export function mountTui(o: MountOptions): MountedTui {
     ui.input.setText(`/persona ${field} ${field === 'name' ? currentPersona?.name ?? 'User' : currentPersona?.description ?? ''}`);
     ui.input.gotoBufferEnd();
   });
+  const settingsPicker = createSettingsPicker(ui, theme, a.rt.home, () => currentSessionId, (line) => {
+    sent(line); source.inject(line); transcript.scroll('bottom');
+  });
   const storyPicker = createStoryPicker(ui, theme, a.rt.home, () => currentSessionId, (id, leaf) => {
     if (id !== currentSessionId) {
       pendingBranch = leaf ? { sessionId: id, leaf } : null;
@@ -550,6 +554,9 @@ export function mountTui(o: MountOptions): MountedTui {
           case 'personaPicker':
             if (editing() || view?.turning) return;
             return personaPicker.open();
+          case 'settingsPicker':
+            if (editing() || view?.turning) return;
+            return settingsPicker.open();
           case 'escape':
             // Esc cancels an in-place edit exactly as Ctrl+C does (the Repl says "edit cancelled").
             if (editing()) return o.interrupts.fire();
@@ -576,6 +583,7 @@ export function mountTui(o: MountOptions): MountedTui {
     if (picker.handle(k)) return;
     if (newStory.handle(k)) return;
     if (personaPicker.handle(k)) return;
+    if (settingsPicker.handle(k)) return;
     if (storyPicker.handle(k)) return;
     // T-17: ↑ / ↓ scroll the chat while the input is empty; with text in it they stay the input's.
     const lines = arrowScroll(k);
@@ -751,6 +759,7 @@ export function mountTui(o: MountOptions): MountedTui {
       picker.dispose();
       newStory.dispose();
       personaPicker.dispose();
+      settingsPicker.dispose();
       storyPicker.dispose();
       context.dispose();
       // The Repl winds down if it still runs (a signal): its input ends, it closes the session.

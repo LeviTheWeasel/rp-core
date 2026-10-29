@@ -47,7 +47,7 @@ Set `context_length` to the context window the server **actually** uses. With Ol
 rp-core new --card ./character.png --model "ollama:model-name"
 ```
 
-The card may be PNG or JSON (CCv1/V2/V3). In a terminal, the chat opens immediately. Type a message and press Enter; `/help` lists commands and `/quit` exits. Run `rp-core sessions` to find a session ID, then `rp-core chat <id>` to return to it. Run `rp-core tui` to pick a story in the full-screen UI, or `rp-core tui <id>` to open one directly. You can also add `--tui` to `rp-core new`. In the TUI, press **F4** to choose a narrator model, **F5** to browse stories, **F6** to start one from a library card, or **F7** to choose or edit the current persona. The right pane shows the context window and the last prompt's size.
+The card may be PNG or JSON (CCv1/V2/V3). In a terminal, the chat opens immediately. Type a message and press Enter; `/help` lists commands and `/quit` exits. Run `rp-core sessions` to find a session ID, then `rp-core chat <id>` to return to it. Run `rp-core tui` to pick a story in the full-screen UI, or `rp-core tui <id>` to open one directly. You can also add `--tui` to `rp-core new`. In the TUI, press **F4** to choose a narrator model, **F5** to browse stories, **F6** to start one from a library card, **F7** to choose or edit the current persona, or **F8** to change this story's preset and lorebooks. The right pane shows the context window and the last prompt's size.
 
 ## Import files
 
