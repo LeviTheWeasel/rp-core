@@ -414,7 +414,7 @@ export interface HeldEntry {
   t: 'held';
   seq: number;
   turn: string;
-  body: CommitBody;
+  body: CommitBody & { addition?: string; cont?: { mode: 'prefill' | 'cue'; base: string } };
 }
 export interface EndEntry {
   t: 'end';
@@ -664,7 +664,8 @@ const commitFields: Record<string, Check> = {
   vars: varsDiff,
 };
 
-const commitBody = obj({ blocks: arr(block) }, { gen: generation, trace, dir: anyObj, recall: anyObj, vars: varsDiff });
+const commitBody = obj({ blocks: arr(block) }, { gen: generation, trace, dir: anyObj, recall: anyObj, vars: varsDiff,
+  addition: str, cont: obj({ mode: oneOf('prefill', 'cue'), base: str }) });
 
 // ---- header -----------------------------------------------------------------------------------------
 

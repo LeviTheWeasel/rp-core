@@ -78,7 +78,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Milestone | Arrives |
 |---|---|
 | M5c | Recall: a model picks the Compendium entries before each answer (or ahead of it, between turns, on a local server); `/memory recall`, `profile`, `mode`; slot pinning on llama.cpp and latency measurements ([details](#not-in-m5b-yet)) |
-| M6 | `--stdio` for other UIs |
+| M6 | `--stdio` for other UIs: the first JSON-RPC methods work on the M6 branch; the full protocol is still in progress ([current methods](STDIO.md)) |
 | M7, M8 | Native Anthropic, then native Gemini |
 
 ## Install

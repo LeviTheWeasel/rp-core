@@ -30,22 +30,26 @@ describe('runTurn refusals', () => {
     await engine.close();
   });
 
-  test('session_busy while a turn runs (and on every write verb)', async () => {
+  test('session_busy while a turn runs, except history edits that can create a conflict', async () => {
     const { engine, home, provider } = await rig(calls([{ pause: 'p' }, { text: 'ok' }]));
     const { s, version, userId } = withUserMessage(engine);
     const turn = s.runTurn({ kind: 'reply', expectedVersion: version });
     expect(refusal(() => s.runTurn({ kind: 'reply', expectedVersion: version }))).toBe('session_busy');
     expect(refusal(() => s.send({ text: 'x', expectedVersion: version }))).toBe('session_busy');
     expect(refusal(() => s.submit({ text: 'x', expectedVersion: version }))).toBe('session_busy');
-    expect(refusal(() => s.edit({ messageId: userId, text: 'x', expectedVersion: version }))).toBe('session_busy');
-    expect(refusal(() => s.hide({ messageId: userId, hidden: true, expectedVersion: version }))).toBe('session_busy');
-    expect(refusal(() => s.select({ messageId: userId, expectedVersion: version }))).toBe('session_busy');
+    expect(s.edit({ messageId: userId, text: 'x', expectedVersion: version }).version).toBeGreaterThan(version);
+    const afterEdit = s.version();
+    expect(s.hide({ messageId: userId, hidden: true, expectedVersion: afterEdit }).version).toBeGreaterThan(afterEdit);
+    const greeting = s.view().path[0]!.id;
+    expect(s.select({ messageId: greeting, exact: true, expectedVersion: s.version() }).version).toBeGreaterThan(afterEdit);
     expect(refusal(() => s.fork({ at: userId }))).toBe('session_busy');
     expect(refusal(() => s.configure({ reasoningShown: true }))).toBe('session_busy');
     expect(refusal(() => s.setPersona({ name: 'Alex', description: '' }))).toBe('session_busy');
     provider.release('p');
+    expect((await turn.result).type).toBe('conflict');
     await drain(turn);
     expect(s.busy()).toBe(false);
+    expect(s.discard(turn.turnId).discarded).toBe(turn.turnId);
     void home;
     await engine.close();
   });

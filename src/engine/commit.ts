@@ -12,7 +12,7 @@
 //   otherwise it ends `abandoned` (recovery) or `discarded` (live, §6.6).
 
 import { continuationResult } from '../prompt/shape.ts';
-import type { Block, EditEntry, EndEntry, EntryInput, MsgEntry, TurnEntry, CommitBody } from '../session/entries.ts';
+import type { Block, EditEntry, EndEntry, EntryInput, MsgEntry, TurnEntry, CommitBody, HeldEntry } from '../session/entries.ts';
 import { effectiveMessage, type TreeIndex } from '../session/tree.ts';
 import type { MessageView } from '../session/view.ts';
 
@@ -40,6 +40,7 @@ export interface CommitPlan {
 export type Placed =
   | { kind: 'msg'; entry: MsgEntry; tail: boolean }
   | { kind: 'edit'; entry: EditEntry }
+  | { kind: 'held'; entry: HeldEntry }
   | { kind: 'end'; entry: EndEntry };
 
 /** The text a model reads from a message: its effective text blocks, joined. */

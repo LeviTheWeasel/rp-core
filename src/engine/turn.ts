@@ -169,6 +169,8 @@ export interface TurnHost extends Journal {
   firstNotice(code: string): boolean;
   /** The turn is over: the session stops being busy. Called before the terminal event. */
   turnEnded(run: TurnRun): void;
+  /** Keep a conflicted answer pending for an explicit client decision. */
+  turnHeld(turnId: string): void;
   /**
    * M5b: called after the terminal event (the turn's stream has ended), for what follows a turn without
    * being part of it: the background lane's next look at its work (D-171).
@@ -1139,6 +1141,7 @@ export class TurnRun {
   private async onStopped(n: Narrated): Promise<Ending> {
     if (!this.hasAnswerText(n)) return this.stoppedEmpty();
     const placed = await this.commit(n, this.answerBlocks(), 'stopped');
+    if (placed.kind === 'held') return this.conflicted();
     if (placed.kind === 'end') return this.lostToConflict(placed);
     const message = this.messageView(placed);
     return { outcome: { type: 'stopped', message }, terminal: { type: 'stopped', turnId: this.entry.turn, message } };
@@ -1149,6 +1152,7 @@ export class TurnRun {
     const draft = this.answerText;
     if (n.res.output && this.plan.onError === 'keep' && this.hasAnswerText(n)) {
       const placed = await this.commit(n, this.answerBlocks(), 'interrupted');
+      if (placed.kind === 'held') return this.conflicted();
       if (placed.kind === 'end') return this.lostToConflict(placed);
     } else {
       this.host.append({ t: 'end', ts: isoNow(this.ctx), turn: this.entry.turn, outcome: 'failed', code: err.code });
@@ -1238,7 +1242,7 @@ export class TurnRun {
         : {}),
     };
     this.committing = true;
-    const placed = placeCommit(this.host, {
+    const commitPlan = {
       turn: this.entry,
       blocks,
       addition: this.answerText,
@@ -1253,8 +1257,17 @@ export class TurnRun {
         ...(Object.keys(asm.varsDiff).length > 0 ? { vars: asm.varsDiff } : {}),
       },
       // Live, a continue on a changed target is discarded (§6.6); recovery says abandoned.
-      continueConflict: 'discarded',
-    });
+      continueConflict: 'discarded' as const,
+    };
+    const placed: Placed = this.host.version() !== this.entry.base
+      ? (() => {
+          const entry = this.host.append({ t: 'held', turn: this.entry.turn, body: {
+            blocks, ...commitPlan.body, addition: commitPlan.addition, ...(commitPlan.cont ? { cont: commitPlan.cont } : {}),
+          } });
+          this.host.turnHeld(this.entry.turn);
+          return { kind: 'held' as const, entry };
+        })()
+      : placeCommit(this.host, commitPlan);
     this.committing = false;
     if (placed.kind === 'msg') {
       this.emit({ type: 'changed', version: placed.entry.seq, change: 'msg', id: placed.entry.id });
@@ -1274,9 +1287,14 @@ export class TurnRun {
   }
 
   private done(placed: Placed): Ending {
+    if (placed.kind === 'held') return this.conflicted();
     if (placed.kind === 'end') return this.lostToConflict(placed);
     const message = this.messageView(placed);
     return { outcome: { type: 'done', message }, terminal: { type: 'done', turnId: this.entry.turn, message } };
+  }
+
+  private conflicted(): Ending {
+    return { outcome: { type: 'conflict', draft: this.answerText }, terminal: { type: 'conflict', turnId: this.entry.turn, draft: this.answerText } };
   }
 
   /** The unconditional-commit rule ended the turn (U hidden, continue target changed). */

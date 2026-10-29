@@ -10,7 +10,7 @@
 // in send's text mode. M4.5: tui and new --tui
 // (the full-screen host; OpenTUI is imported dynamically on that path only). M5a: --keep-requests on
 // chat, tui and new (D-164). The RoleCall story import: `import <file.rolecall>` (D-185, import-story.ts).
-// `--stdio` comes in M6.
+// M6 adds `--stdio` (JSON-RPC 2.0 over JSONL) for external UIs.
 //
 // main() returns the exit code instead of exiting, so the entry point at the bottom can wait for
 // stdout/stderr to drain first (see io.ts).
@@ -18,19 +18,24 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigError } from '../config/config.ts';
+import { Engine } from '../engine/engine.ts';
+import { Refusal } from '../engine/api.ts';
 import { systemClock } from '../engine/system.ts';
+import { runRpc } from '../protocol/rpc.ts';
+import { listModels } from '../providers/probe.ts';
+import { redactEvent } from './render.ts';
 import { bool, list, parseArgs, str, UsageError, type FlagKind, type Parsed } from './args.ts';
-import { cmdModels, cmdProbe } from './catalog.ts';
+import { cmdModels, cmdProbe, runProbe } from './catalog.ts';
 import { cmdChat, runChat } from './chat.ts';
 import { cmdCompact } from './compact.ts';
 import { cmdImport, cmdInit, cmdNew, cmdSessions, cmdShow, CliError } from './commands.ts';
 import { resolveHome, type Home } from './home.ts';
-import { processIo, type Io } from './io.ts';
+import { memoryChannel, processIo, type Io } from './io.ts';
 import { EXIT, runSend } from './oneshot.ts';
 import { cmdPreview } from './preview.ts';
 import { prepareProvider, ScriptFileError, type PreparedProvider } from './provider.ts';
-import { loadRuntime, type Runtime } from './runtime.ts';
-import type { SignalSource } from './signals.ts';
+import { engineOptions, loadRuntime, redactor, type Runtime } from './runtime.ts';
+import { EXIT_SIGINT, EXIT_SIGTERM, type SignalSource } from './signals.ts';
 import type { TurnKind } from '../session/entries.ts';
 
 const GLOBAL_FLAGS: Record<string, FlagKind> = {
@@ -39,6 +44,7 @@ const GLOBAL_FLAGS: Record<string, FlagKind> = {
   debug: 'bool',
   help: 'bool',
   version: 'bool',
+  stdio: 'bool',
 };
 const SHORT = { h: 'help' } as const;
 
@@ -66,6 +72,16 @@ const KEEP_HELP = `  --keep-requests           keep every provider request of a 
 const NEEDS_TERMINAL = 'rp-core tui needs a terminal; use rp-core chat';
 
 const COMMANDS: Record<string, Command> = {
+  stdio: {
+    flags: { provider: 'string' },
+    usage: `rp-core --stdio [--home <dir>] [${PROVIDER_FLAG}]`,
+    summary: 'JSON-RPC 2.0 over JSONL for external UIs (M6 in progress)',
+    help: `Reads one JSON-RPC 2.0 request per UTF-8 line from stdin. Writes responses and live event
+notifications to stdout, one JSON object per line. Send initialize with protocol:1 first.
+shutdown or EOF closes every open session. Methods cover sessions, turns, conflict decisions,
+history, memory, lore, the Director, models and capabilities. See docs/STDIO.md for details.
+${PROVIDER_HELP}`,
+  },
   init: {
     flags: { json: 'bool' },
     usage: 'rp-core init [--json]',
@@ -351,6 +367,8 @@ export interface MainDeps {
   signals?: SignalSource;
   /** Read all of stdin (for `send <session> -`). */
   readStdin?: () => Promise<string>;
+  /** Byte stream for --stdio; defaults to process.stdin. */
+  input?: AsyncIterable<Uint8Array>;
   /** stdin and stdout are a terminal: `new` then opens the chat right away. Default false. */
   tty?: boolean;
   /** For probe / models (default globalThis.fetch). */
@@ -410,6 +428,59 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
     deps.exit(code);
   };
   switch (name) {
+    case 'stdio': {
+      noPositionals(p, name, 0);
+      const rt = runtimeOf(home, deps, p, providerOf(p, name));
+      const engine = await Engine.open(engineOptions(rt));
+      const redact = redactor(rt);
+      const abort = new AbortController();
+      let stopTurns = (): void => {};
+      let interrupted = false;
+      let terminated = false;
+      const signals = deps.signals ?? process;
+      const onInt = (): void => {
+        if (interrupted || terminated) return exitNow(EXIT_SIGINT);
+        interrupted = true;
+        stopTurns();
+      };
+      const onTerm = (): void => {
+        if (terminated) return exitNow(EXIT_SIGTERM);
+        terminated = true;
+        abort.abort();
+        if (!deps.input) process.stdin.destroy();
+      };
+      signals.on('SIGINT', onInt);
+      signals.on('SIGTERM', onTerm);
+      const connection = (id: string) => {
+        const c = rt.connections[id];
+        if (!c) throw new Refusal('no_connection', `connection ${id} is not configured`);
+        return c;
+      };
+      try { await runRpc(deps.input ?? process.stdin, (line) => io.out.write(line), engine, home.dir, (event) => redactEvent(event, redact), {
+        modelsList: async (conn) => {
+          const c = connection(conn);
+          if (!c.baseUrl) throw new Refusal('no_connection', `connection ${conn} has no model catalog URL`);
+          let key: string | null = null;
+          try { key = c.resolveKey ? await c.resolveKey() : (c.key ?? null); } catch { /* public catalogs may work without a key */ }
+          return listModels(c.baseUrl, { fetch: deps.fetch ?? fetch, key, signal: abort.signal });
+        },
+        capsGet: (conn, model) => {
+          const c = connection(conn);
+          return c.capsFor?.(model) ?? c.caps;
+        },
+        capsProbe: async (conn, model, active) => {
+          connection(conn);
+          const quiet: Io = { out: memoryChannel(), err: memoryChannel() };
+          const report = await runProbe({ rt, io: quiet, json: true, target: conn, model, write: false, active, fetch: deps.fetch, clock: deps.clock ?? systemClock, signal: abort.signal });
+          return report.results[0];
+        },
+      }, { signal: abort.signal, sessionDefaults: rt.config.sessionDefaults, onReady: (control) => { stopTurns = control.stopTurns; } });
+      } finally {
+        signals.removeListener('SIGINT', onInt);
+        signals.removeListener('SIGTERM', onTerm);
+      }
+      return terminated ? EXIT_SIGTERM : EXIT.done;
+    }
     case 'init':
       noPositionals(p, name, 0);
       return cmdInit({ home: home.dir, json, io });
@@ -591,8 +662,11 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
   let home: Home | null = null;
   try {
     // Global flags may come before the command; the command's own parse accepts them anywhere.
-    const head = parseArgs(argv, { flags: GLOBAL_FLAGS, short: SHORT }, { stopAtPositional: true });
-    const [name, ...rest] = head.positionals;
+    const headFlags = argv.includes('--stdio') ? { ...GLOBAL_FLAGS, ...COMMANDS.stdio!.flags } : GLOBAL_FLAGS;
+    const head = parseArgs(argv, { flags: headFlags, short: SHORT }, { stopAtPositional: true });
+    const [givenName, ...rest] = head.positionals;
+    if (bool(head, 'stdio') && givenName !== undefined) throw new UsageError('--stdio takes no command');
+    const name = bool(head, 'stdio') ? 'stdio' : givenName;
     if (name === 'help') {
       const topic = rest[0];
       if (topic !== undefined && !Object.hasOwn(COMMANDS, topic)) throw new UsageError(`unknown command ${JSON.stringify(topic)}`);
