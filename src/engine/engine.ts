@@ -117,6 +117,8 @@ export class Engine {
       ...(opts.prices ? { prices: { ...opts.prices } } : {}),
       ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
       ...(opts.keepRequests === true ? { keepRequests: true } : {}),
+      ...(opts.hooks ? { hooks: opts.hooks } : {}),
+      ...(opts.hookTimeoutMs !== undefined ? { hookTimeoutMs: opts.hookTimeoutMs } : {}),
       lane: opts.lane ?? laneFromEnv(),
       ...(opts.toolSets ? { toolSets: opts.toolSets } : {}),
       ...(recallDefault !== undefined ? { recallDefault } : {}),

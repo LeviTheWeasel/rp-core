@@ -96,7 +96,7 @@ import { checkRecord } from '../agents/director/state.ts';
 import type { DirectorRecord } from '../agents/director/types.ts';
 import { STRUCTURED_REFUSED_KEY, structuredRefusedMessage, type AgentCallEnv, type TraceCall } from '../agents/structured.ts';
 import { abortableDelay, abortWith, childController, type AbortReason } from './abort.ts';
-import type { TurnOutcome } from './api.ts';
+import type { GateAnswer, TurnOutcome } from './api.ts';
 import { resolveDirector, type AdmittedTurn, type Route } from './admit.ts';
 import type { Connection } from './api.ts';
 import { EventQueue, singleConsumer } from './bus.ts';
@@ -105,7 +105,7 @@ import { messageViewOf, placeCommit, type Journal, type Placed } from './commit.
 import { isoNow, type EngineCtx } from './context.ts';
 import { priceFor, usageCost } from './cost.ts';
 import { truncatedByServer } from './ema.ts';
-import { hookBeforeAssemble, hookTransformReply, hookTransformRequest, type HookCtx } from './hooks.ts';
+import { HostHookError, hookBeforeAssemble, hookTransformReply, hookTransformRequest, type HookCtx } from './hooks.ts';
 import { narrateRounds, storedSeparator, sumUsage, timeoutsFor, type RoundCall, type RoundsResult, type TurnTools } from './narrate.ts';
 import {
   buildRequest,
@@ -151,7 +151,7 @@ import { continuationResult } from '../prompt/shape.ts';
 import type { DepthInsert } from '../prompt/depth.ts';
 import type { Event, EventBody, Notice } from '../protocol/events.ts';
 import { stripToolCallLeaks } from '../tools/leaks.ts';
-import type { FinishReason, ModelRequest, ProviderError, Usage } from '../providers/types.ts';
+import type { FinishReason, ModelRequest, PromptMsg, ProviderError, Usage } from '../providers/types.ts';
 import type { Block, Generation, RecallRecord, SessionHeader, Trace, TurnEntry } from '../session/entries.ts';
 import { SessionLockedError, sessionsDir } from '../session/log.ts';
 import type { MessageView, PathView } from '../session/view.ts';
@@ -306,6 +306,7 @@ export class TurnRun {
   private resolveResult!: (o: TurnOutcome) => void;
   private readonly chk: Checkpointer;
   private readonly hookCtx: HookCtx;
+  private readonly hookTrace: NonNullable<Trace['hooks']> = [];
   private readonly t0: number;
   /** Everything streamed this turn (a retry only happens before any output, so attempts never mix). */
   private text = '';
@@ -344,12 +345,15 @@ export class TurnRun {
   private recallInput: RecallInput | undefined;
   /** D-164: keeps each provider request when EngineOptions.keepRequests is on. */
   private readonly keep: ((req: ModelRequest) => void) | undefined;
+  private waitingGate: { id: string; resolve: (answer: GateAnswer) => void } | null = null;
 
   constructor(
     private readonly host: TurnHost,
     private readonly ctx: EngineCtx,
     readonly plan: AdmittedTurn,
     entry: TurnEntry,
+    private readonly inspect = false,
+    private readonly transformGate = false,
   ) {
     this.entry = entry;
     this.t0 = ctx.clock().getTime();
@@ -394,6 +398,31 @@ export class TurnRun {
   /** Stop (§6.5). Shutdown is a stop too: text already streamed is kept as 'stopped'. */
   stop(reason: Extract<AbortReason, 'user_stop' | 'shutdown'> = 'user_stop'): void {
     abortWith(this.ctrl, reason);
+    this.waitingGate?.resolve({ action: 'cancel' });
+  }
+
+  answerGate(gateId: string, answer: GateAnswer): boolean {
+    const gate = this.waitingGate;
+    if (!gate || gate.id !== gateId || !answer || (answer.action !== 'send' && answer.action !== 'cancel')) return false;
+    this.waitingGate = null;
+    gate.resolve(answer);
+    return true;
+  }
+
+  private async requestGate(kind: 'review' | 'transform', messages: PromptMsg[]): Promise<GateAnswer> {
+    const id = `${this.entry.turn}:${kind}`;
+    const answer = new Promise<GateAnswer>((resolve) => { this.waitingGate = { id, resolve }; });
+    this.emit({ type: 'gate', turnId: this.entry.turn, gateId: id, kind, payload: { messages } });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = this.ctx.hookTimeoutMs === undefined ? undefined : new Promise<GateAnswer>((resolve) => {
+        timer = setTimeout(() => resolve({ action: 'cancel' }), this.ctx.hookTimeoutMs);
+      });
+      return await (deadline ? Promise.race([answer, deadline]) : answer);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      this.waitingGate = null;
+    }
   }
 
   /** Stamp and deliver an event: to this turn's stream and to engine.events(). */
@@ -418,7 +447,16 @@ export class TurnRun {
 
   private async body(): Promise<Ending> {
     const { plan } = this;
-    const hooked = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx);
+    let hooked: DepthInsert[] = [];
+    if (this.ctx.hooks?.beforeAssemble) {
+      try {
+        hooked = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx, this.ctx.hookTimeoutMs);
+        this.hookTrace.push({ name: 'beforeAssemble', ok: true });
+      } catch (error) {
+        this.hookTrace.push({ name: 'beforeAssemble', ok: false });
+        this.notice({ level: 'warn', code: 'host_before_assemble_failed', message: error instanceof Error ? error.message : String(error) });
+      }
+    }
     if (this.ctrl.signal.aborted) return this.stoppedEmpty();
     // M5c (D-201…D-203): recall's part, decided before any call (nothing is told or written yet).
     this.recallPlan = this.decideRecall();
@@ -481,7 +519,32 @@ export class TurnRun {
     }
 
     // Step 7: the host's transformRequest gate, after `prep` (M9; a pass-through now).
-    shaped.messages = await hookTransformRequest(this.ctx.hooks, shaped.messages, this.hookCtx);
+    try {
+      shaped.messages = await hookTransformRequest(this.ctx.hooks, shaped.messages, this.hookCtx, this.ctx.hookTimeoutMs);
+      if (this.ctx.hooks?.transformRequest) this.hookTrace.push({ name: 'transformRequest', ok: true });
+    } catch (error) {
+      this.hookTrace.push({ name: 'transformRequest', ok: false });
+      throw error;
+    }
+    if (this.transformGate) {
+      const answer = await this.requestGate('transform', shaped.messages);
+      if (this.ctrl.signal.aborted) return this.stoppedEmpty();
+      if (answer.action === 'cancel') return this.endFailed('host', 'host_transform_failed', 'The host did not transform the request.', '');
+      try {
+        if (answer.edits?.length) shaped.messages = await hookTransformRequest({ transformRequest: async () => ({ edits: answer.edits! }) }, shaped.messages, this.hookCtx);
+        this.hookTrace.push({ name: 'transformGate', ok: true });
+      } catch (error) {
+        this.hookTrace.push({ name: 'transformGate', ok: false });
+        throw error;
+      }
+    }
+    if (this.inspect) {
+      const answer = await this.requestGate('review', shaped.messages);
+      if (answer.action === 'cancel' || this.ctrl.signal.aborted) return this.stoppedEmpty();
+      if (answer.edits?.length) {
+        shaped.messages = await hookTransformRequest({ transformRequest: async () => ({ edits: answer.edits! }) }, shaped.messages, this.hookCtx);
+      }
+    }
 
     // Step 8: narrate — the tool loop (§7.1), with one retry and one fallback around it.
     const narrated = await this.narrate(request, built);
@@ -855,9 +918,10 @@ export class TurnRun {
    * their trace.agents rows (as is while both are off). Generalises M4's withDirector.
    */
   private withAgents(trace: Trace): Trace {
-    if (this.dirAgent === undefined && this.recallAgent === undefined) return trace;
+    if (this.dirAgent === undefined && this.recallAgent === undefined && this.hookTrace.length === 0) return trace;
     return {
       ...trace,
+      ...(this.hookTrace.length ? { hooks: [...this.hookTrace] } : {}),
       calls: [...this.dirCalls, ...this.recallCalls, ...trace.calls],
       agents: {
         ...trace.agents,
@@ -1008,7 +1072,7 @@ export class TurnRun {
       }
       leg = next;
       // Through the same gate as the primary's request.
-      leg.shaped.messages = await hookTransformRequest(this.ctx.hooks, leg.shaped.messages, this.hookCtx);
+      leg.shaped.messages = await hookTransformRequest(this.ctx.hooks, leg.shaped.messages, this.hookCtx, this.ctx.hookTimeoutMs);
       res = await run(leg);
     }
 
@@ -1194,7 +1258,14 @@ export class TurnRun {
       }
       return this.done(await this.commit(n, [{ k: 'reasoning', text: reasoning }, { k: 'text', text: '' }], finish));
     }
-    const reply = await hookTransformReply(this.ctx.hooks, text, this.hookCtx);
+    let reply: { text: string };
+    try {
+      reply = await hookTransformReply(this.ctx.hooks, text, this.hookCtx, this.ctx.hookTimeoutMs);
+      if (this.ctx.hooks?.transformReply) this.hookTrace.push({ name: 'transformReply', ok: true });
+    } catch (error) {
+      this.hookTrace.push({ name: 'transformReply', ok: false });
+      throw error;
+    }
     if (this.roundBlocks === null || text !== this.answerText) return this.done(await this.commit(n, answerBlocks(reply.text, reasoning), finish));
     // M9 may rewrite the reply; a rewritten multi-round answer keeps its tool blocks, text last.
     const blocks = reply.text === text ? this.roundBlocks : [...this.roundBlocks.filter((b) => b.k !== 'text'), { k: 'text' as const, text: reply.text }];
@@ -1331,6 +1402,9 @@ export class TurnRun {
   /** An exception escaped the steps (a bug, or the journal refused a write). */
   private crashed(e: unknown): Ending {
     const message = errMessage(e);
+    if (e instanceof HostHookError) {
+      return this.endFailed('host', e.code, message, this.answerText);
+    }
     if (e instanceof SessionLockedError) {
       // Another process took the session over (this one was suspended past the lock's TTL). The
       // journal can no longer be written from here: what was checkpointed is recovered by an open

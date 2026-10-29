@@ -841,6 +841,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
 
   runTurn(opts: RunTurnOptions): TurnHandle {
     this.assertOpen();
+    if (opts.inspect !== undefined && typeof opts.inspect !== 'boolean') throw new Refusal('invalid_params', 'inspect must be a boolean');
+    if (opts.transformGate !== undefined && typeof opts.transformGate !== 'boolean') throw new Refusal('invalid_params', 'transformGate must be a boolean');
     const plan = admitTurn(
       this.ctx,
       { busy: this.running !== null, heldOpen: this.held.size > 0, version: this.ver, view: this.view(), config: this.config },
@@ -864,7 +866,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       base: this.ver,
     });
     this.nextSeed = null;
-    const run = new TurnRun(this, this.ctx, plan, entry);
+    const run = new TurnRun(this, this.ctx, plan, entry, opts.inspect === true, opts.transformGate === true);
     this.running = run;
     run.emit({ type: 'start', turnId, kind: plan.kind, messageId: msgId, parentId: plan.parent });
     // D-172: a swipe or a continue is activity on the session's origins (the idle gate).
@@ -879,7 +881,11 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     };
   }
 
-  submit(input: { text: string; expectedVersion: number; onError?: 'drop' | 'keep' }): TurnHandle {
+  answerGate(turnId: string, gateId: string, answer: import('./api.ts').GateAnswer): boolean {
+    return this.running?.turnId === turnId ? this.running.answerGate(gateId, answer) : false;
+  }
+
+  submit(input: { text: string; expectedVersion: number; onError?: 'drop' | 'keep'; transformGate?: boolean }): TurnHandle {
     // Everything that does not depend on the new message is checked first, so a refusal writes
     // nothing at all (not even the user's line).
     this.guardWrite(input?.expectedVersion, { held: true });
@@ -891,7 +897,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     const sent = this.sendLine({ text: input.text, expectedVersion: input.expectedVersion });
     // The lane looks once the turn is registered: it starts nothing before the turn settles.
     try {
-      return this.runTurn({ kind: 'reply', expectedVersion: sent.version, onError });
+      return this.runTurn({ kind: 'reply', expectedVersion: sent.version, onError, ...(input.transformGate ? { transformGate: true } : {}) });
     } finally {
       this.lane.poke();
     }
@@ -1007,6 +1013,44 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       if (e instanceof Refusal) return { ok: false, code: e.code, message: e.message };
       throw e;
     }
+  }
+
+  async draft(input: { kind: 'impersonate' } | { kind: 'quiet'; prompt: string }, signal: AbortSignal = new AbortController().signal): Promise<{ text: string; usage?: import('../providers/types.ts').Usage }> {
+    this.assertOpen();
+    if (!input || (input.kind !== 'impersonate' && input.kind !== 'quiet') || (input.kind === 'quiet' && (typeof input.prompt !== 'string' || input.prompt.trim() === ''))) {
+      throw new Refusal('invalid_params', 'draft needs impersonate or quiet with a prompt');
+    }
+    if (this.busy()) throw new Refusal('session_busy');
+    const instruction = input.kind === 'impersonate'
+      ? `Write the next message as ${this.header().cast.persona?.name ?? 'the user'}. Return only that message, without a role label.`
+      : input.prompt;
+    const preview = this.preview({ draft: instruction });
+    if (!preview.ok) throw new Refusal('invalid_params', preview.message);
+    const route = resolvePrimary(this.ctx, this.config);
+    const key = await route.conn.resolveKey?.() ?? route.conn.key ?? null;
+    const messages = [...preview.messages];
+    const request = {
+      model: { connection: route.conn.id, model: route.model },
+      caps: route.caps,
+      messages,
+      maxTokens: Math.min(preview.maxTokens, 1024),
+      samplers: preview.samplers,
+      signal,
+      callKey: `draft:${this.id}:${this.ctx.clock().getTime()}`,
+      agent: 'narrator' as const,
+    };
+    let text = '';
+    let usage: import('../providers/types.ts').Usage | undefined;
+    let finished = false;
+    for await (const event of route.conn.provider.stream(request, { fetch: this.ctx.fetch, key })) {
+      if (signal.aborted) throw new Error('draft stopped');
+      if (event.t === 'text') text += event.d;
+      else if (event.t === 'usage') usage = { ...usage, ...event.u };
+      else if (event.t === 'error') throw event.err;
+      else if (event.t === 'finish') finished = true;
+    }
+    if (!finished) throw new Error('draft stream ended without finish');
+    return { text, ...(usage ? { usage } : {}) };
   }
 
   /**

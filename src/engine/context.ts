@@ -35,6 +35,7 @@ export interface EngineCtx {
   prices?: EngineOptions['prices'];
   /** M9. Always undefined in M1a. */
   hooks?: HostHooks;
+  hookTimeoutMs?: number;
   /** EngineOptions.onProviderError: the host's debug tap for raw provider failures (§13). */
   onProviderError?: EngineOptions['onProviderError'];
   /** EngineOptions.keepRequests (M5a, D-164): turns and the lane keep every provider request as JSON. */

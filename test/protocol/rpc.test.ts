@@ -63,6 +63,27 @@ test('JSON-RPC handshake, session lifecycle, streamed turn and shutdown', async 
   expect(frames.every((f) => f.jsonrpc === '2.0')).toBe(true);
 });
 
+test('declared transform gate edits the request through gate/request', async () => {
+  const { engine, home, provider } = await rig(calls([{ text: 'Result' }]));
+  const source = byteInput();
+  const frames: Record<string, any>[] = [];
+  const running = runRpc(source.input, (line) => frames.push(JSON.parse(line)), engine, home);
+  source.push({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocol: 1, client: { name: 'gate-test', version: '1' }, capabilities: { gates: ['transform'] } } });
+  await waitFor(frames, (f) => f.id === 1);
+  source.push({ jsonrpc: '2.0', id: 2, method: 'session/new', params: { character: MIRA } });
+  const created = (await waitFor(frames, (f) => f.id === 2)).result;
+  source.push({ jsonrpc: '2.0', id: 3, method: 'turn/submit', params: { sessionId: created.sessionId, text: 'Hi', expectedVersion: created.snapshot.version } });
+  await waitFor(frames, (f) => f.id === 3);
+  const gate = await waitFor(frames, (f) => f.method === 'gate/request' && f.params.kind === 'transform');
+  expect(provider.requests).toHaveLength(0);
+  const last = gate.params.payload.messages.length - 1;
+  source.push({ jsonrpc: '2.0', id: gate.id, result: { action: 'send', edits: [{ index: last, text: 'Host edit' }] } });
+  await waitFor(frames, (f) => f.method === 'event' && f.params.type === 'done');
+  expect(provider.requests[0]?.messages.at(-1)?.blocks).toEqual([{ k: 'text', text: 'Host edit' }]);
+  source.end();
+  await running;
+});
+
 test('turn/stop is dispatched while a model call is paused', async () => {
   const { engine, home } = await rig(calls([{ pause: 'slow' }, { text: 'too late' }]));
   const source = byteInput();

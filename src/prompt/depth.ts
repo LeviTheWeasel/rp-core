@@ -20,7 +20,7 @@
 import type { PromptMsg } from '../providers/types.ts';
 import type { ChatRole } from '../formats/native.ts';
 
-export type InsertSource = 'preset' | 'lore' | 'compendium' | 'card_depth' | 'author_note' | 'director' | 'guidance';
+export type InsertSource = 'preset' | 'lore' | 'compendium' | 'card_depth' | 'author_note' | 'director' | 'guidance' | 'host';
 
 export interface DepthInsert {
   depth: number;
@@ -46,7 +46,8 @@ export const SOURCE_RANK: Readonly<Record<InsertSource, number>> = {
   lore: 3,
   compendium: 4,
   director: 5,
-  guidance: 6,
+  host: 6,
+  guidance: 7,
 };
 
 /** The PromptMsg.src an insert carries into the trace: 'preset:<id>' when it names one, else the bare source. */

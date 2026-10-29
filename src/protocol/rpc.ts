@@ -35,6 +35,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function gateEdits(value: unknown): { index: number; text: string }[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => !isRecord(item) || !Number.isInteger(item.index) || typeof item.text !== 'string')) {
+    throw new InvalidParams('edits must be {index, text}[]');
+  }
+  return value as { index: number; text: string }[];
+}
+
 function requestOf(value: unknown): RpcRequest | null {
   if (!isRecord(value) || value.jsonrpc !== '2.0' || typeof value.method !== 'string') return null;
   if (Object.hasOwn(value, 'id') && value.id !== null && typeof value.id !== 'string' && typeof value.id !== 'number') return null;
@@ -89,10 +97,17 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
   const send = (frame: Frame): void => write(`${JSON.stringify(frame)}\n`);
   const coalescer = createCoalescer((event) => send({ jsonrpc: '2.0', method: 'event', params: filterEvent(event) }));
   let initialized = false;
+  let reviewGate = false;
+  let transformGate = false;
   let shutdown = false;
   let openedEvents: Event[] = [];
   const stream = (async (): Promise<void> => {
-    for await (const event of engine.events()) coalescer.push(event);
+    for await (const event of engine.events()) {
+      coalescer.push(event);
+      if (event.type === 'gate' && ((event.kind === 'review' && reviewGate) || (event.kind === 'transform' && transformGate))) {
+        send({ jsonrpc: '2.0', id: event.gateId, method: 'gate/request', params: { turnId: event.turnId, gateId: event.gateId, kind: event.kind, payload: event.payload } });
+      }
+    }
   })();
   options.onReady?.({ stopTurns: () => { for (const turn of turns.values()) turn.handle.stop(); } });
   const sessionOf = (p: Record<string, unknown>): SessionHandle => {
@@ -121,8 +136,17 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       if (numberParam(p, 'protocol') !== 1) throw new InvalidParams('protocol 1 is required');
       const client = objectParam(p, 'client')!;
       stringParam(client, 'name'); stringParam(client, 'version');
+      if (p.capabilities !== undefined) {
+        const capabilities = objectParam(p, 'capabilities')!;
+        if (capabilities.gates !== undefined) {
+          const gates = stringArrayParam(capabilities, 'gates')!;
+          if (gates.some((gate) => gate !== 'review' && gate !== 'transform')) throw new InvalidParams('unknown gate capability');
+          reviewGate = gates.includes('review');
+          transformGate = gates.includes('transform');
+        }
+      }
       initialized = true;
-      return { protocol: 1, core: { version: '0.1.0' }, features: ['swipes', 'events', 'models', 'memory', 'conflicts'] };
+      return { protocol: 1, core: { version: '0.1.0' }, features: ['swipes', 'events', 'models', 'memory', 'conflicts', 'draft', 'review-gate'] };
     }
     if (!initialized) throw new InvalidParams('initialize must be called first');
     switch (method) {
@@ -175,6 +199,13 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       case 'session/preview': {
         const s = sessionOf(p);
         return s.preview({ ...(stringParam(p, 'draft', true) !== undefined ? { draft: p.draft as string } : {}), ...(stringParam(p, 'turnId', true) !== undefined ? { turn: p.turnId as string } : {}) });
+      }
+      case 'session/draft': {
+        const s = sessionOf(p);
+        const kind = stringParam(p, 'kind');
+        if (kind === 'impersonate') return s.draft({ kind });
+        if (kind === 'quiet') return s.draft({ kind, prompt: stringParam(p, 'prompt')! });
+        throw new InvalidParams('kind must be impersonate or quiet');
       }
       case 'message/send': {
         const s = sessionOf(p);
@@ -256,7 +287,8 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       }
       case 'turn/run': {
         const s = sessionOf(p);
-        if (p.inspect !== undefined) throw new Refusal('gate_unsupported', 'turn inspection is not available through protocol 1');
+        const inspect = p.inspect === undefined ? false : booleanParam(p, 'inspect')!;
+        if (inspect && !reviewGate) throw new Refusal('gate_unsupported', 'client did not declare the review gate');
         const kind = stringParam(p, 'kind');
         if (kind !== 'reply' && kind !== 'swipe' && kind !== 'continue') throw new InvalidParams('kind must be reply, swipe or continue');
         const onError = stringParam(p, 'onError', true);
@@ -264,13 +296,13 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
         const emptyReply = stringParam(p, 'emptyReply', true);
         if (emptyReply !== undefined && emptyReply !== 'fail' && emptyReply !== 'keep') throw new InvalidParams('emptyReply must be fail or keep');
         const fallback = stringParam(p, 'fallback', true);
-        const turn = s.runTurn({ kind, expectedVersion: numberParam(p, 'expectedVersion'), ...(stringParam(p, 'guidance', true) !== undefined ? { guidance: p.guidance as string } : {}), ...(onError ? { onError } : {}), ...(emptyReply ? { emptyReply } : {}), ...(fallback ? { fallback } : {}) });
+        const turn = s.runTurn({ kind, expectedVersion: numberParam(p, 'expectedVersion'), ...(stringParam(p, 'guidance', true) !== undefined ? { guidance: p.guidance as string } : {}), ...(onError ? { onError } : {}), ...(emptyReply ? { emptyReply } : {}), ...(fallback ? { fallback } : {}), ...(inspect ? { inspect: true } : {}), ...(transformGate ? { transformGate: true } : {}) });
         watch(s.id, kind, turn);
         return { turnId: turn.turnId, messageId: turn.messageId };
       }
       case 'turn/submit': {
         const s = sessionOf(p);
-        const turn = s.submit({ text: stringParam(p, 'text')!, expectedVersion: numberParam(p, 'expectedVersion'), onError: 'drop' });
+        const turn = s.submit({ text: stringParam(p, 'text')!, expectedVersion: numberParam(p, 'expectedVersion'), onError: 'drop', ...(transformGate ? { transformGate: true } : {}) });
         watch(s.id, 'reply', turn);
         return { turnId: turn.turnId, messageId: turn.messageId };
       }
@@ -281,6 +313,17 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
         if (!turn || turn.sessionId !== s.id) throw new Refusal('not_found', `turn ${id} is not running in this session`);
         s.stop(id);
         return { stopped: id };
+      }
+      case 'turn/answerGate': {
+        const s = sessionOf(p);
+        const turnId = stringParam(p, 'turnId')!;
+        const gateId = stringParam(p, 'gateId')!;
+        const answer = objectParam(p, 'answer')!;
+        const action = stringParam(answer, 'action');
+        if (action !== 'send' && action !== 'cancel') throw new InvalidParams('action must be send or cancel');
+        const edits = gateEdits(answer.edits);
+        if (!s.answerGate(turnId, gateId, { action, ...(edits ? { edits } : {}) })) throw new Refusal('not_found', 'gate_not_waiting');
+        return { accepted: true };
       }
       case 'turn/commitAnyway': return sessionOf(p).commitAnyway(stringParam(p, 'turnId')!);
       case 'turn/discard': return sessionOf(p).discard(stringParam(p, 'turnId')!);
@@ -301,6 +344,18 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       let value: unknown;
       try { value = JSON.parse(line); }
       catch { send(error(null, -32700, 'Parse error')); continue; }
+      if (isRecord(value) && typeof value.id === 'string' && !Object.hasOwn(value, 'method') && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'))) {
+        const turnId = value.id.slice(0, value.id.lastIndexOf(':'));
+        const turn = turns.get(turnId);
+        const session = turn ? sessions.get(turn.sessionId) : undefined;
+        const result = isRecord(value.result) ? value.result : {};
+        const action = result.action === 'send' ? 'send' : 'cancel';
+        let edits: { index: number; text: string }[] | undefined;
+        try { if (!Object.hasOwn(value, 'error')) edits = gateEdits(result.edits); }
+        catch { /* A malformed answer cancels the gate. */ }
+        session?.answerGate(turnId, value.id, { action: edits === undefined && result.edits !== undefined ? 'cancel' : action, ...(edits ? { edits } : {}) });
+        continue;
+      }
       const request = requestOf(value);
       if (!request) { send(error(isRecord(value) && (typeof value.id === 'string' || typeof value.id === 'number') ? value.id : null, -32600, 'Invalid Request')); continue; }
       const task = (async (): Promise<void> => {
