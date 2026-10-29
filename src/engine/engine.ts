@@ -28,7 +28,11 @@ import { SessionImpl } from './session.ts';
 import { systemClock, systemRandom, systemTimeZone } from './system.ts';
 import { defaultCounter, type TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
-import { listSessions, sessionsDir } from '../session/log.ts';
+import { sessionsDir } from '../session/log.ts';
+import { FileSessionStore } from '../session/backend.ts';
+import { RecordSessionStore } from '../session/record-backend.ts';
+import { RecordEngine, type AsyncEngineHandle } from './record-engine.ts';
+import type { RecordStore } from '../session/port.ts';
 
 /**
  * The tuning knobs of EngineOptions (call timeouts, timers). They began outside the contract and
@@ -87,6 +91,14 @@ function recallDefaultOf(seam: EngineSeams['recall'], override: Connection | und
 }
 
 export class Engine {
+  /** Open the engine on an asynchronous record store without changing the synchronous API. */
+  static async openWithRecordStore(opts: Omit<EngineOptions & EngineSeams, 'sessionStore'> & { recordStore: RecordStore }): Promise<AsyncEngineHandle> {
+    const { recordStore, ...rest } = opts;
+    const backend = new RecordSessionStore(recordStore);
+    const raw = await Engine.open({ ...rest, sessionStore: backend });
+    return new RecordEngine(raw, backend);
+  }
+
   static async open(opts: EngineOptions & EngineSeams): Promise<EngineHandle> {
     if (!opts || typeof opts.home !== 'string' || opts.home === '') throw new Error('Engine.open needs a home directory');
     const home = resolve(opts.home);
@@ -94,8 +106,11 @@ export class Engine {
     const connections = { ...(opts.connections ?? {}) };
     const override = opts.providerOverride;
     const recallDefault = recallDefaultOf(opts.recall, override);
+    const recordBackend = opts.sessionStore instanceof RecordSessionStore ? opts.sessionStore : undefined;
     const ctx: EngineCtx = {
       home,
+      sessionStore: opts.sessionStore ?? new FileSessionStore(home),
+      ...(recordBackend ? { journalFlush: (id: string) => recordBackend.flush(id) } : {}),
       clock: opts.clock ?? systemClock,
       random: opts.random ?? systemRandom,
       timeZone: opts.timeZone ?? systemTimeZone(),
@@ -117,6 +132,8 @@ export class Engine {
       ...(opts.prices ? { prices: { ...opts.prices } } : {}),
       ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
       ...(opts.keepRequests === true ? { keepRequests: true } : {}),
+      ...(opts.hooks ? { hooks: opts.hooks } : {}),
+      ...(opts.hookTimeoutMs !== undefined ? { hookTimeoutMs: opts.hookTimeoutMs } : {}),
       lane: opts.lane ?? laneFromEnv(),
       ...(opts.toolSets ? { toolSets: opts.toolSets } : {}),
       ...(recallDefault !== undefined ? { recallDefault } : {}),
@@ -170,7 +187,7 @@ class EngineImpl implements EngineHandle {
   }
 
   listSessions(): { id: string; title?: string; updated: string }[] {
-    return listSessions(this.ctx.home);
+    return this.ctx.sessionStore.list();
   }
 
   events(): AsyncIterable<Event> {

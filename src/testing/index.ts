@@ -5,3 +5,5 @@
 
 export { createScriptedProvider, parseScript, parseScriptFile, scriptCapsWith, hashRequest, SCRIPT_CAPS } from '../providers/scripted.ts';
 export type { ScriptCall, ScriptStep, ScriptedProvider } from '../providers/scripted.ts';
+export { checkRecordStoreConformance, MemoryRecordStore, FileRecordStore } from '../session/port.ts';
+export type { RecordStore, Lease } from '../session/port.ts';

@@ -48,7 +48,7 @@ export type EventBody =
   | { type: 'conflict'; turnId: string; draft: string }
   | {
       type: 'agent';
-      agent: 'recall' | 'filing' | 'historian';
+      agent: 'recall' | 'filing' | 'historian' | 'host';
       turnId?: string;
       job?: string;
       status:

@@ -43,6 +43,7 @@ export type Command =
   | { name: 'sessions' }
   | { name: 'open'; id: string }
   | { name: 'usage' }
+  | { name: 'impersonate' }
   | { name: 'trace' }
   /** /preset alone shows the preset and the library; with a ref (library id, 'builtin' or a file) switches. */
   | { name: 'preset'; ref?: string }
@@ -183,9 +184,7 @@ export function commandClass(c: Command): CommandClass {
 }
 
 /** §12.4 commands that arrive with later milestones (§15). */
-const LATER: Readonly<Record<string, string>> = {
-  impersonate: 'M9 (draft)',
-};
+const LATER: Readonly<Record<string, string>> = {};
 
 /** §7.4.9 /memory subcommands of a later milestone: none since M5c (recall, profile and mode arrived; D-206). */
 const MEMORY_LATER: Readonly<Record<string, string>> = {};
@@ -266,6 +265,8 @@ export function parseLine(raw: string): ParsedLine {
       return cmd({ name: 'open', id: rest });
     case 'usage':
       return noArgs({ name: 'usage' });
+    case 'impersonate':
+      return noArgs({ name: 'impersonate' });
     case 'trace':
       return noArgs({ name: 'trace' });
     case 'preset':
@@ -776,6 +777,7 @@ export function helpText(): string {
     '  /lore              the lorebooks of this session; /lore add <id|file> (a world info file is imported), /lore rm <id>',
     '  /lore test <text>  which lore entries a message would wake, and why (nothing is sent)',
     '  /preview [n] [--wire] [--verdicts]   the exact request of the next turn (or of answer n), without sending it;',
+    '  /impersonate                    draft your next line without saving it;',
     '                     --wire: the HTTP body; --verdicts: every lore entry\'s verdict, as /lore test prints them',
     '  /sessions, /open <id>   list sessions, switch to one',
     '  /help, /quit       (Ctrl+C stops an answer; twice at an empty prompt quits)',

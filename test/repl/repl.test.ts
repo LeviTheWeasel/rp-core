@@ -360,6 +360,8 @@ describe('REPL: Ctrl+C, held lines, EOF', () => {
         return s.id;
       },
       header: () => s.header(),
+      draft: (input, signal) => s.draft(input, signal),
+      answerGate: (turnId, gateId, answer) => s.answerGate(turnId, gateId, answer),
       setPersona: (persona) => s.setPersona(persona),
       name: (title, leaf) => s.name(title, leaf),
       version: () => s.version(),

@@ -1369,6 +1369,10 @@ class Repl {
         const ids = this.session.view().path.map((m) => m.id);
         return this.say(renderUsage(pathUsage(this.journal(), ids, this.deps.config.prices)));
       }
+      case 'impersonate': {
+        const result = await this.session.draft({ kind: 'impersonate' });
+        return this.say(result.text);
+      }
       case 'trace':
         return this.trace();
       case 'preset':

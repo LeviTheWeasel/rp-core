@@ -17,7 +17,15 @@ export type {
   SessionHandle,
   TurnHandle,
   TurnOutcome,
+  GateAnswer,
 } from './engine/api.ts';
+export type { HostHooks, HookCtx, Placement } from './engine/hooks.ts';
+export { HostHookError } from './engine/hooks.ts';
+export type { RecordStore, Lease } from './session/port.ts';
+export { FileRecordStore, MemoryRecordStore } from './session/port.ts';
+export type { SessionStore } from './session/backend.ts';
+export { FileSessionStore, MemorySessionStore } from './session/backend.ts';
+export type { AsyncEngineHandle, AsyncSessionHandle } from './engine/record-engine.ts';
 export type { Event, EventBody, EventType, Notice } from './protocol/events.ts';
 export { TERMINAL_EVENTS } from './protocol/events.ts';
 export type { MessageView, PathView } from './session/view.ts';

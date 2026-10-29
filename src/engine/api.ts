@@ -11,11 +11,14 @@ import type { TreeNode } from '../agents/compendium/tree.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import type { LoreVerdict } from '../lore/engine.ts';
 import type { ModelCaps, PromptMsg, Provider, ProviderError, ToolSpec } from '../providers/types.ts';
+import type { Usage } from '../providers/types.ts';
 import type { DeepPartial, RecallRecord, SessionConfig, SessionHeader, Trace, TurnKind } from '../session/entries.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import type { Event, Notice } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
 import type { DelayTimers } from './abort.ts';
+import type { HostHooks } from './hooks.ts';
+import type { SessionStore } from '../session/backend.ts';
 
 /** A configured model endpoint. M1a only has scripted connections; openai-chat arrives in M1b. */
 export interface Connection {
@@ -47,6 +50,11 @@ export interface Connection {
 export interface EngineOptions {
   /** ~/.rp-core by default (CLI resolves --home / RP_CORE_HOME). */
   home: string;
+  /** Synchronous journal backend for an in-process host. Defaults to the file journal under home. */
+  sessionStore?: SessionStore;
+  /** Hooks supplied by an embedding host. A deadline applies to each invocation. */
+  hooks?: HostHooks;
+  hookTimeoutMs?: number;
   connections?: Record<string, Connection>;
   /**
    * CLI `--provider script:<file>`: every role resolves to this connection for this process,
@@ -252,7 +260,15 @@ export interface RunTurnOptions {
   onError?: 'drop' | 'keep';
   /** Reasoning-only answer: 'fail' (default) or 'keep' [D-31]. */
   emptyReply?: 'fail' | 'keep';
+  /** Pause before the provider call and ask the host to review the shaped request. */
+  inspect?: boolean;
+  /** Ask a protocol client to transform the shaped request before sending it. */
+  transformGate?: boolean;
+  /** Leaving the UI cancels a waiting gate without stopping an already running model call. */
+  consumerSignal?: AbortSignal;
 }
+
+export interface GateAnswer { action: 'send' | 'cancel'; edits?: { index: number; text: string }[] }
 
 export type TurnOutcome =
   | { type: 'done'; message: MessageView }
@@ -358,9 +374,11 @@ export interface SessionHandle {
   /** Admission is synchronous: throws Refusal before writing anything. */
   runTurn(opts: RunTurnOptions): TurnHandle;
   /** send + runTurn('reply'). */
-  submit(input: { text: string; expectedVersion: number; onError?: 'drop' | 'keep' }): TurnHandle;
+  submit(input: { text: string; expectedVersion: number; onError?: 'drop' | 'keep'; transformGate?: boolean }): TurnHandle;
   /** Stop the running turn (or the given one). No-op when nothing runs. */
   stop(turnId?: string): void;
+  /** Returns false for an expired, unknown or already answered gate. */
+  answerGate(turnId: string, gateId: string, answer: GateAnswer): boolean;
   /** Resolve a completed answer held because the history changed during its turn. */
   commitAnyway(turnId: string): { outcome: 'committed' | 'dropped' | 'discarded'; version: number; message?: MessageView };
   /** Throw away a held answer. */
@@ -393,6 +411,8 @@ export interface SessionHandle {
    * stub; a past answer's preview (`turn`) re-renders that answer's stored directive.
    */
   preview(opts?: PreviewOptions): PreviewResult;
+  /** One model call over the current context. Never writes a journal row. */
+  draft(input: { kind: 'impersonate' } | { kind: 'quiet'; prompt: string }, signal?: AbortSignal): Promise<{ text: string; usage?: Usage }>;
 
   /**
    * M3 (§7.5, /search, history/search): search the active path's visible messages (the same search

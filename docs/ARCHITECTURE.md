@@ -1053,15 +1053,15 @@ interface PathView {
 
 ```ts
 interface RecordStore {
-  create(header: Extract<Entry, { t: 'session' }>): Promise<void>;
+  create(header: SessionHeader, initial?: readonly Entry[]): Promise<void>; // header + first rows atomically
   acquire(session: string): Promise<Lease>;                   // эксклюзивно; Lease.renew() / release()
-  read(session: string): AsyncIterable<Entry>;                // по seq; рваный хвост уже отброшен
+  read(session: string): AsyncIterable<SessionHeader | Entry>; // заголовок, затем по seq; рваный хвост уже отброшен
   append(lease: Lease, entries: Entry[], durable: boolean): Promise<void>;  // каждая запись атомарна
   list(): Promise<{ id: string; title?: string; updated: string }[]>;
 }
 ```
 
-`describeRecordStoreConformance(make)` проверяет:
+`checkRecordStoreConformance(make, header, entries, reopen?)` проверяет:
 
 - монотонный `seq`;
 - атомарность записи;
@@ -1070,6 +1070,8 @@ interface RecordStore {
 - порядок чтения.
 
 Тесты гоняются на файловой реализации и на второй, in-memory, написанной по этой спецификации. Это доказывает, что порт не завязан на файлы.
+
+*Примечание реализации M9.* Синхронный `Engine.open` принимает `SessionStore` (`create/open/fork/list`, возвращает `SessionLog`) для существующих клиентов. `Engine.openWithRecordStore` принимает асинхронный `RecordStore` и возвращает асинхронный фасад сессии. Он ждёт долговечной записи `turn` до вызовов агентов, `prep` до вызова рассказчика и ответа до итогового события. Так прежний синхронный API не ломается, а асинхронный хост получает тот же движок. Подробности — `docs/M9-HOST.md`.
 
 ---
 

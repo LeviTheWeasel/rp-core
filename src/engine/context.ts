@@ -15,9 +15,13 @@ import type { Scheduler } from './sched.ts';
 import type { TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
+import type { SessionStore } from '../session/backend.ts';
 
 export interface EngineCtx {
   home: string;
+  sessionStore: SessionStore;
+  /** Async RecordStore mode: flush this session's ordered writes before a durability boundary. */
+  journalFlush?: (id: string) => Promise<void>;
   clock: () => Date;
   random: RandomBytes;
   timeZone: string;
@@ -35,6 +39,7 @@ export interface EngineCtx {
   prices?: EngineOptions['prices'];
   /** M9. Always undefined in M1a. */
   hooks?: HostHooks;
+  hookTimeoutMs?: number;
   /** EngineOptions.onProviderError: the host's debug tap for raw provider failures (§13). */
   onProviderError?: EngineOptions['onProviderError'];
   /** EngineOptions.keepRequests (M5a, D-164): turns and the lane keep every provider request as JSON. */
