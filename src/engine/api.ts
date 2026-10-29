@@ -18,6 +18,7 @@ import type { Event, Notice } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
 import type { DelayTimers } from './abort.ts';
 import type { HostHooks } from './hooks.ts';
+import type { SessionStore } from '../session/backend.ts';
 
 /** A configured model endpoint. M1a only has scripted connections; openai-chat arrives in M1b. */
 export interface Connection {
@@ -49,6 +50,8 @@ export interface Connection {
 export interface EngineOptions {
   /** ~/.rp-core by default (CLI resolves --home / RP_CORE_HOME). */
   home: string;
+  /** Synchronous journal backend for an in-process host. Defaults to the file journal under home. */
+  sessionStore?: SessionStore;
   /** Hooks supplied by an embedding host. A deadline applies to each invocation. */
   hooks?: HostHooks;
   hookTimeoutMs?: number;
@@ -261,6 +264,8 @@ export interface RunTurnOptions {
   inspect?: boolean;
   /** Ask a protocol client to transform the shaped request before sending it. */
   transformGate?: boolean;
+  /** Leaving the UI cancels a waiting gate without stopping an already running model call. */
+  consumerSignal?: AbortSignal;
 }
 
 export interface GateAnswer { action: 'send' | 'cancel'; edits?: { index: number; text: string }[] }

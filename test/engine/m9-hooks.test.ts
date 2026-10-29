@@ -3,6 +3,19 @@ import { calls, drain, entriesOf, rig, withUserMessage } from './kit.ts';
 import type { HostHooks } from '../../src/engine/hooks.ts';
 
 describe('M9 host transforms', () => {
+  test('beforeAssemble places host text and reports its status', async () => {
+    const { engine, provider } = await rig(calls([{ text: 'Reply' }]), {
+      extra: { hooks: { beforeAssemble: async () => [{ src: 'host', role: 'system', depth: 0, text: 'Host context' }] } },
+    });
+    const { s, version } = withUserMessage(engine, 'Hello');
+    const turn = s.runTurn({ kind: 'reply', expectedVersion: version });
+    const events = await drain(turn);
+    expect(await turn.result).toMatchObject({ type: 'done' });
+    expect(events.flatMap((event) => event.type === 'agent' && event.agent === 'host' ? [event.status] : [])).toEqual(['started', 'done']);
+    expect(provider.requests[0]?.messages.some((message) => message.src === 'host' && message.blocks.some((block) => block.k === 'text' && block.text === 'Host context'))).toBe(true);
+    await engine.close();
+  });
+
   test('request edit reaches the provider and reply edit reaches the journal', async () => {
     const hooks: HostHooks = {
       transformRequest: async ({ messages }) => ({ edits: [{ index: messages.length - 1, text: 'Changed by host' }] }),

@@ -15,9 +15,11 @@ import type { Scheduler } from './sched.ts';
 import type { TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
+import type { SessionStore } from '../session/backend.ts';
 
 export interface EngineCtx {
   home: string;
+  sessionStore: SessionStore;
   clock: () => Date;
   random: RandomBytes;
   timeZone: string;

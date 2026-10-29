@@ -354,6 +354,7 @@ export class TurnRun {
     entry: TurnEntry,
     private readonly inspect = false,
     private readonly transformGate = false,
+    private readonly consumerSignal?: AbortSignal,
   ) {
     this.entry = entry;
     this.t0 = ctx.clock().getTime();
@@ -410,10 +411,18 @@ export class TurnRun {
   }
 
   private async requestGate(kind: 'review' | 'transform', messages: PromptMsg[]): Promise<GateAnswer> {
+    if (this.consumerSignal?.aborted) return { action: 'cancel' };
     const id = `${this.entry.turn}:${kind}`;
     const answer = new Promise<GateAnswer>((resolve) => { this.waitingGate = { id, resolve }; });
     this.emit({ type: 'gate', turnId: this.entry.turn, gateId: id, kind, payload: { messages } });
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const onLeave = (): void => {
+      const gate = this.waitingGate;
+      this.waitingGate = null;
+      gate?.resolve({ action: 'cancel' });
+    };
+    this.consumerSignal?.addEventListener('abort', onLeave, { once: true });
+    if (this.consumerSignal?.aborted) onLeave();
     try {
       const deadline = this.ctx.hookTimeoutMs === undefined ? undefined : new Promise<GateAnswer>((resolve) => {
         timer = setTimeout(() => resolve({ action: 'cancel' }), this.ctx.hookTimeoutMs);
@@ -421,6 +430,7 @@ export class TurnRun {
       return await (deadline ? Promise.race([answer, deadline]) : answer);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
+      this.consumerSignal?.removeEventListener('abort', onLeave);
       this.waitingGate = null;
     }
   }
@@ -449,11 +459,14 @@ export class TurnRun {
     const { plan } = this;
     let hooked: DepthInsert[] = [];
     if (this.ctx.hooks?.beforeAssemble) {
+      this.emit({ type: 'agent', agent: 'host', turnId: this.entry.turn, status: 'started' });
       try {
         hooked = await hookBeforeAssemble(this.ctx.hooks, this.hookCtx, this.ctx.hookTimeoutMs);
         this.hookTrace.push({ name: 'beforeAssemble', ok: true });
+        this.emit({ type: 'agent', agent: 'host', turnId: this.entry.turn, status: 'done', count: hooked.length });
       } catch (error) {
         this.hookTrace.push({ name: 'beforeAssemble', ok: false });
+        this.emit({ type: 'agent', agent: 'host', turnId: this.entry.turn, status: 'failed', code: 'host_before_assemble_failed' });
         this.notice({ level: 'warn', code: 'host_before_assemble_failed', message: error instanceof Error ? error.message : String(error) });
       }
     }
@@ -1072,7 +1085,20 @@ export class TurnRun {
       }
       leg = next;
       // Through the same gate as the primary's request.
-      leg.shaped.messages = await hookTransformRequest(this.ctx.hooks, leg.shaped.messages, this.hookCtx, this.ctx.hookTimeoutMs);
+      try {
+        leg.shaped.messages = await hookTransformRequest(this.ctx.hooks, leg.shaped.messages, this.hookCtx, this.ctx.hookTimeoutMs);
+        if (this.ctx.hooks?.transformRequest) this.hookTrace.push({ name: 'transformRequest:fallback', ok: true });
+      } catch (error) {
+        this.hookTrace.push({ name: 'transformRequest:fallback', ok: false });
+        throw error;
+      }
+      if (this.transformGate) {
+        const answer = await this.requestGate('transform', leg.shaped.messages);
+        if (this.ctrl.signal.aborted) return { res: stoppedRounds(), active: leg.route, asm: leg.asm, shaped: leg.shaped, tools: leg.tools, route, calls };
+        if (answer.action === 'cancel') throw new HostHookError('host_transform_failed', 'The host did not transform the fallback request.');
+        if (answer.edits?.length) leg.shaped.messages = await hookTransformRequest({ transformRequest: async () => ({ edits: answer.edits! }) }, leg.shaped.messages, this.hookCtx);
+        this.hookTrace.push({ name: 'transformGate:fallback', ok: true });
+      }
       res = await run(leg);
     }
 

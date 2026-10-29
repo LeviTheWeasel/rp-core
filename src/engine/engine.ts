@@ -28,7 +28,8 @@ import { SessionImpl } from './session.ts';
 import { systemClock, systemRandom, systemTimeZone } from './system.ts';
 import { defaultCounter, type TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
-import { listSessions, sessionsDir } from '../session/log.ts';
+import { sessionsDir } from '../session/log.ts';
+import { FileSessionStore } from '../session/backend.ts';
 
 /**
  * The tuning knobs of EngineOptions (call timeouts, timers). They began outside the contract and
@@ -96,6 +97,7 @@ export class Engine {
     const recallDefault = recallDefaultOf(opts.recall, override);
     const ctx: EngineCtx = {
       home,
+      sessionStore: opts.sessionStore ?? new FileSessionStore(home),
       clock: opts.clock ?? systemClock,
       random: opts.random ?? systemRandom,
       timeZone: opts.timeZone ?? systemTimeZone(),
@@ -172,7 +174,7 @@ class EngineImpl implements EngineHandle {
   }
 
   listSessions(): { id: string; title?: string; updated: string }[] {
-    return listSessions(this.ctx.home);
+    return this.ctx.sessionStore.list();
   }
 
   events(): AsyncIterable<Event> {

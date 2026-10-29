@@ -87,7 +87,7 @@ import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.
 import { effectiveText, messageViewOf, placeCommit } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
 import { Lane, taskOn, type LaneHost } from './lane.ts';
-import { firstRoundLast, modelRequest, roundFields } from './narrate.ts';
+import { firstRoundLast, modelRequest, roundFields, streamCall, timeoutsFor } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
 import { buildRequest, compendiumConfigOf, compendiumNotices, liveTyped, loadLibrary, maxTokensFor, type RecallInput, type SessionLibrary } from './request.ts';
 import { basisHead, prefetchBasis, recallSetup, wantsPrefetch } from './recall.ts';
@@ -116,11 +116,8 @@ import {
   type TurnKind,
 } from '../session/entries.ts';
 import { currentConfig, currentHeader, foldView, foldViewAt, mergePatch } from '../session/fold.ts';
-import { forkSession } from '../session/fork.ts';
 import { newMessageId, newSeed, newSessionId, newTurnId } from '../session/ids.ts';
 import {
-  createSessionLogWith,
-  openSessionLog,
   SessionLockedError,
   SessionNotFoundError,
   type SessionLog,
@@ -615,7 +612,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       const checked = checkHeader(JSON.parse(JSON.stringify(header)) as unknown);
       if (!checked.ok) throw new Refusal('invalid_params', `invalid session: ${checked.why}`);
       try {
-        log = createSessionLogWith(ctx.home, header, greetingEntries(ctx, header, created));
+        log = ctx.sessionStore.create(header, greetingEntries(ctx, header, created));
       } catch (e) {
         // Only an id collision is worth another draw; anything else is real trouble.
         if (!(e instanceof Error) || !e.message.startsWith('session already exists')) throw e;
@@ -629,9 +626,9 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
 
   /** Open an existing session: lock, read, recover (§6.7). */
   static open(ctx: EngineCtx, id: string, onClose: (s: SessionImpl) => void): SessionImpl {
-    let opened: ReturnType<typeof openSessionLog>;
+    let opened: ReturnType<EngineCtx['sessionStore']['open']>;
     try {
-      opened = openSessionLog(ctx.home, id);
+      opened = ctx.sessionStore.open(id);
     } catch (e) {
       if (e instanceof SessionLockedError) throw new Refusal('session_locked', e.message);
       if (e instanceof SessionNotFoundError) throw new Refusal('session_not_found', e.message);
@@ -866,7 +863,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       base: this.ver,
     });
     this.nextSeed = null;
-    const run = new TurnRun(this, this.ctx, plan, entry, opts.inspect === true, opts.transformGate === true);
+    const run = new TurnRun(this, this.ctx, plan, entry, opts.inspect === true, opts.transformGate === true, opts.consumerSignal);
     this.running = run;
     run.emit({ type: 'start', turnId, kind: plan.kind, messageId: msgId, parentId: plan.parent });
     // D-172: a swipe or a continue is activity on the session's origins (the idle gate).
@@ -989,7 +986,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     for (let i = 0; i < ID_ATTEMPTS; i++) {
       const newId = newSessionId(this.ctx.random);
       try {
-        const log = forkSession(this.ctx.home, { header: this.header(), entries: this.log.entries() }, input.at, { newId, now: this.now() });
+        const log = this.ctx.sessionStore.fork({ header: this.header(), entries: this.log.entries() }, input.at, { newId, now: this.now() });
         log.close(); // not opened: the caller opens it with engine.session(id)
         return newId;
       } catch (e) {
@@ -1027,30 +1024,27 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     const preview = this.preview({ draft: instruction });
     if (!preview.ok) throw new Refusal('invalid_params', preview.message);
     const route = resolvePrimary(this.ctx, this.config);
-    const key = await route.conn.resolveKey?.() ?? route.conn.key ?? null;
-    const messages = [...preview.messages];
-    const request = {
-      model: { connection: route.conn.id, model: route.model },
+    const result = await streamCall({
+      conn: route.conn,
+      model: route.model,
       caps: route.caps,
-      messages,
+      messages: [...preview.messages],
       maxTokens: Math.min(preview.maxTokens, 1024),
       samplers: preview.samplers,
-      signal,
-      callKey: `draft:${this.id}:${this.ctx.clock().getTime()}`,
-      agent: 'narrator' as const,
-    };
-    let text = '';
-    let usage: import('../providers/types.ts').Usage | undefined;
-    let finished = false;
-    for await (const event of route.conn.provider.stream(request, { fetch: this.ctx.fetch, key })) {
-      if (signal.aborted) throw new Error('draft stopped');
-      if (event.t === 'text') text += event.d;
-      else if (event.t === 'usage') usage = { ...usage, ...event.u };
-      else if (event.t === 'error') throw event.err;
-      else if (event.t === 'finish') finished = true;
-    }
-    if (!finished) throw new Error('draft stream ended without finish');
-    return { text, ...(usage ? { usage } : {}) };
+      callKey: `draft:${this.id}:${newTurnId(this.ctx.random)}`,
+      turnSignal: signal,
+      sched: this.ctx.sched,
+      fetch: this.ctx.fetch,
+      timeouts: timeoutsFor(route.conn, this.ctx.timeouts),
+      timers: this.ctx.timers,
+      clock: this.ctx.clock,
+      onText: () => undefined,
+      onReasoning: () => undefined,
+    });
+    if (result.stopped) throw new Error('draft stopped');
+    if (result.error) throw result.error;
+    if (!result.finish) throw new Error('draft stream ended without finish');
+    return { text: result.text, ...(result.usage ? { usage: result.usage } : {}) };
   }
 
   /**

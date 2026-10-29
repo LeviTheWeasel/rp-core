@@ -1,6 +1,6 @@
 # M9 host API (in progress)
 
-This branch adds the first host-facing pieces of M9. It does not yet connect `RecordStore` to the engine's session lifecycle; `Engine.open` still uses the filesystem journal under `home/sessions`.
+This branch adds the host-facing pieces of M9. `Engine.open` accepts a synchronous `SessionStore` for its journal; without one it uses the filesystem journal under `home/sessions`.
 
 ## Hooks
 
@@ -24,6 +24,8 @@ const engine = await Engine.open({
 
 `session.runTurn({ kind: 'reply', expectedVersion, inspect: true })` emits a `gate` event before the model call. Reply with `session.answerGate(turnId, gateId, { action: 'send', edits? })`; it returns `false` if no matching gate waits. `cancel` stops the inspected turn. `transformGate: true` asks for a `transform` gate; cancellation or timeout fails with `host_transform_failed` before the provider sees a request.
 
+`consumerSignal` records when the UI leaves. It does not stop a model call already underway; a gate waiting for that UI is cancelled. An unanswered transform gate then fails closed.
+
 In stdio, declare `capabilities.gates: ['review', 'transform']` at `initialize`. The server sends a JSON-RPC `gate/request` using `gateId` as its request id. Reply with `{ action: 'send' | 'cancel', edits?: [{ index, text }] }` as the result. `turn/answerGate` is also available. `inspect` is refused if the client has not declared `review`.
 
 ## One-shot generation
@@ -34,4 +36,11 @@ In stdio, declare `capabilities.gates: ['review', 'transform']` at `initialize`.
 
 `rp-core/testing` exports `MemoryRecordStore`, `FileRecordStore`, and `checkRecordStoreConformance`. The port transports the session header and ordered `Entry` rows, and takes an exclusive `Lease` for appends. The file implementation wraps the existing durable JSONL journal; the memory implementation clones rows at its boundary. The contract checks ordering, sequence monotonicity, exclusivity, and optional reopening of durable rows.
 
-The remaining M9 work is to let `Engine` use a supplied `RecordStore` for all session reads and writes, and to complete host cancellation behavior around gates and draft calls. Until then, the port is useful for adapter development and tests, but not yet an alternative engine backend.
+For the current synchronous `SessionHandle` API, a host supplies `SessionStore` instead. It has `create`, `open`, `fork` and `list`; each opened `SessionLog` appends entries synchronously and durably before the operation continues. The in-memory reference implementation supports a full turn, fork and reopening through the engine:
+
+```ts
+const sessionStore = new MemorySessionStore();
+const engine = await Engine.open({ home, connections, sessionStore });
+```
+
+This synchronous boundary matches Bunraku's in-process `bun:sqlite` storage. The asynchronous `RecordStore` contract remains separately available for host adapters and conformance testing. Bridging a genuinely asynchronous store into `SessionHandle` would require asynchronous journal writes throughout the engine; a write-behind adapter would break the turn durability rules.

@@ -39,3 +39,26 @@ test('transform gate timeout fails closed before the provider sees a request', a
   expect(provider.requests).toHaveLength(0);
   await engine.close();
 });
+
+test('consumer departure does not abort a model call without a gate', async () => {
+  const { engine, provider } = await rig(calls([{ text: 'The reply remains.' }]));
+  const { s, version } = withUserMessage(engine, 'Hello');
+  const consumer = new AbortController();
+  const turn = s.runTurn({ kind: 'reply', expectedVersion: version, consumerSignal: consumer.signal });
+  consumer.abort();
+  await drain(turn);
+  expect(await turn.result).toMatchObject({ type: 'done' });
+  expect(provider.requests).toHaveLength(1);
+  await engine.close();
+});
+
+test('consumer departure closes a waiting transform gate before sending', async () => {
+  const { engine, provider } = await rig(calls([{ text: 'Unreachable' }]));
+  const { s, version } = withUserMessage(engine, 'Hello');
+  const consumer = new AbortController();
+  const turn = s.runTurn({ kind: 'reply', expectedVersion: version, transformGate: true, consumerSignal: consumer.signal });
+  for await (const event of turn.events) if (event.type === 'gate') consumer.abort();
+  expect(await turn.result).toMatchObject({ type: 'failed', code: 'host_transform_failed' });
+  expect(provider.requests).toHaveLength(0);
+  await engine.close();
+});

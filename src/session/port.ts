@@ -8,7 +8,7 @@ import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parseEntry, parseHeader } from './entries.ts';
 import type { Entry, SessionHeader } from './entries.ts';
-import { createSessionLog, listSessions, openSessionLog, sessionsDir, SessionLockedError } from './log.ts';
+import { createSessionLog, FileSessionLog, listSessions, openSessionLog, sessionsDir, SessionLockedError } from './log.ts';
 import type { SessionLog } from './log.ts';
 
 export interface Lease {
@@ -114,7 +114,14 @@ export class MemoryRecordStore implements RecordStore {
 class FileLease implements Lease {
   released = false;
   constructor(readonly session: string, readonly log: SessionLog, private readonly owner: FileRecordStore) {}
-  async renew(): Promise<void> { this.owner.assert(this); }
+  async renew(): Promise<void> {
+    this.owner.assert(this);
+    if (!(this.log instanceof FileSessionLog) || !this.log.renewLock()) {
+      throw new SessionLockedError(this.log instanceof FileSessionLog && this.log.lockLost
+        ? this.log.lockLost
+        : { pid: 0, host: 'unknown', started: '', renewed: '' });
+    }
+  }
   async release(): Promise<void> {
     if (this.released) return;
     this.owner.assert(this);
@@ -187,6 +194,7 @@ export async function checkRecordStoreConformance(
   await store.create(header);
   const lease = await store.acquire(header.id);
   try {
+    await lease.renew();
     let excluded = false;
     try { await store.acquire(header.id); } catch { excluded = true; }
     if (!excluded) throw new Error('acquire was not exclusive');
@@ -197,6 +205,14 @@ export async function checkRecordStoreConformance(
     let rejected = false;
     try { await store.append(lease, [entries[0]!], true); } catch { rejected = true; }
     if (!rejected) throw new Error('non-monotonic seq accepted');
+    const next = { ...entries[0]!, seq: entries.at(-1)!.seq + 1 } as Entry;
+    const skipped = { ...entries[1]!, seq: next.seq + 2 } as Entry;
+    rejected = false;
+    try { await store.append(lease, [next, skipped], true); } catch { rejected = true; }
+    if (!rejected) throw new Error('gapped batch accepted');
+    const after: (SessionHeader | Entry)[] = [];
+    for await (const row of store.read(header.id)) after.push(row);
+    if (!isDeepStrictEqual(after, [header, ...entries])) throw new Error('failed batch wrote a prefix');
   } finally { await lease.release(); }
   const reopened = await store.acquire(header.id);
   await reopened.release();
