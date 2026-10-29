@@ -82,6 +82,7 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
   const sessions = new Map<string, SessionHandle>();
   const turns = new Map<string, { sessionId: string; kind: string; handle: TurnHandle }>();
   const pumps = new Set<Promise<void>>();
+  const pendingRequests = new Set<Promise<void>>();
   const send = (frame: Frame): void => write(`${JSON.stringify(frame)}\n`);
   const coalescer = createCoalescer((event) => send({ jsonrpc: '2.0', method: 'event', params: filterEvent(event) }));
   let initialized = false;
@@ -288,22 +289,31 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       catch { send(error(null, -32700, 'Parse error')); continue; }
       const request = requestOf(value);
       if (!request) { send(error(isRecord(value) && (typeof value.id === 'string' || typeof value.id === 'number') ? value.id : null, -32600, 'Invalid Request')); continue; }
-      try {
-        const result = await dispatch(request.method, paramsOf(request.params));
-        if (Object.hasOwn(request, 'id')) send({ jsonrpc: '2.0', id: request.id, result });
-        for (const event of openedEvents.splice(0)) coalescer.push(event);
-      } catch (e) {
-        if (!Object.hasOwn(request, 'id')) continue;
-        if (e instanceof Refusal) send(error(request.id ?? null, -32000, e.message, { code: e.code }));
-        else if (e instanceof ProviderError) send(error(request.id ?? null, -32000, e.message, { code: e.code }));
-        else if (e instanceof InvalidParams) send(error(request.id ?? null, -32602, e.message));
-        else if (e instanceof Error && e.message.startsWith('method not found:')) send(error(request.id ?? null, -32601, e.message));
-        else send(error(request.id ?? null, -32603, 'Internal error'));
-      }
+      const task = (async (): Promise<void> => {
+        try {
+          // dispatch starts synchronously. Capture this open's recovery notices before another
+          // request can open a different session while a slow method awaits the network.
+          const resultPromise = dispatch(request.method, paramsOf(request.params));
+          const recovery = openedEvents.splice(0);
+          const result = await resultPromise;
+          if (Object.hasOwn(request, 'id')) send({ jsonrpc: '2.0', id: request.id, result });
+          for (const event of recovery) coalescer.push(event);
+        } catch (e) {
+          if (!Object.hasOwn(request, 'id')) return;
+          if (e instanceof Refusal) send(error(request.id ?? null, -32000, e.message, { code: e.code }));
+          else if (e instanceof ProviderError) send(error(request.id ?? null, -32000, e.message, { code: e.code }));
+          else if (e instanceof InvalidParams) send(error(request.id ?? null, -32602, e.message));
+          else if (e instanceof Error && e.message.startsWith('method not found:')) send(error(request.id ?? null, -32601, e.message));
+          else send(error(request.id ?? null, -32603, 'Internal error'));
+        }
+      })();
+      pendingRequests.add(task);
+      void task.then(() => pendingRequests.delete(task));
       if (shutdown) break;
     }
   } finally {
     await engine.close();
+    await Promise.allSettled([...pendingRequests]);
     await Promise.allSettled([...pumps]);
     await stream;
     coalescer.close();

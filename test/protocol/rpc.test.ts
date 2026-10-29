@@ -158,3 +158,26 @@ test('editing during a turn holds the reply until commitAnyway', async () => {
   await ask(10, 'shutdown');
   await running;
 });
+
+test('a slow catalog request does not block another JSON-RPC request', async () => {
+  const { engine, home } = await rig([]);
+  const source = byteInput();
+  const frames: Record<string, any>[] = [];
+  let release!: (value: unknown) => void;
+  const catalog = {
+    modelsList: () => new Promise<unknown>((resolve) => { release = resolve; }),
+    capsGet: () => ({}),
+    capsProbe: async () => ({}),
+  };
+  const running = runRpc(source.input, (line) => frames.push(JSON.parse(line)), engine, home, (event) => event, catalog);
+  source.push({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocol: 1, client: { name: 'test-ui', version: '1' } } });
+  await waitFor(frames, (f) => f.id === 1);
+  source.push({ jsonrpc: '2.0', id: 2, method: 'models/list', params: { conn: 'mock' } });
+  source.push({ jsonrpc: '2.0', id: 3, method: 'session/list' });
+  expect((await waitFor(frames, (f) => f.id === 3)).result).toEqual([]);
+  expect(frames.some((f) => f.id === 2)).toBe(false);
+  release({ models: [{ id: 'demo' }] });
+  expect((await waitFor(frames, (f) => f.id === 2)).result.models[0].id).toBe('demo');
+  source.push({ jsonrpc: '2.0', id: 4, method: 'shutdown' });
+  await running;
+});

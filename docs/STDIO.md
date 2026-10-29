@@ -2,6 +2,8 @@
 
 `rp-core --stdio` lets another program control the engine through UTF-8 JSON-RPC 2.0. Send one JSON object per line to stdin. Read one JSON object per line from stdout. Diagnostics go to stderr.
 
+Requests run concurrently. Responses can arrive in a different order from requests, so match them by `id`. Event notifications have no `id`.
+
 Start with `initialize` using protocol version 1:
 
 ```json
