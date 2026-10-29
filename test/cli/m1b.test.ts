@@ -184,14 +184,12 @@ describe('new', () => {
   );
 
   test(
-    'a connection of a later dialect is named as such',
+    'a native Gemini connection can be used for a new story',
     async () => {
       const home = tmpHome('rp-core-m1b-');
       writeFileSync(join(home, 'config.toml'), '[connections.gemini]\ndialect = "gemini"\nkey_env = "X"\n');
       const r = await run(['new', '--card', join(CARDS, 'v3-full.json'), '--home', home, '--model', 'gemini:flash']);
-      expect(r.code).toBe(64);
-      expect(r.stderr).toContain('connection "gemini" cannot be used');
-      expect(r.stderr).toContain('M8');
+      expect(r.code).toBe(0);
     },
     T,
   );
@@ -294,7 +292,7 @@ describe('a configured openai-chat connection', () => {
       const r = await run(['send', id, 'Hi', '--home', home]);
       expect(r.code).toBe(5);
       expect(r.stderr).toContain('refused (no_connection)');
-      expect(r.stderr).toContain('connection "gemini" in config.toml is skipped');
+      expect(r.stderr).not.toContain('is skipped');
     },
     T,
   );

@@ -43,6 +43,8 @@ context_length = 16384
 
 Для нативного Claude добавьте в `config.toml` таблицу `[connections.claude]` с `dialect = "anthropic"` и `key_env = "ANTHROPIC_API_KEY"`, задайте эту переменную окружения и выполните `rp-core models claude`. Модель можно выбрать через **F4** в TUI или командой `/model narrator claude:имя-модели` в чате.
 
+Для нативного Gemini добавьте таблицу `[connections.gemini]` с `dialect = "gemini"` и `key_env = "GEMINI_API_KEY"`, задайте переменную и выполните `rp-core models gemini`. Выберите модель через **F4** или `/model narrator gemini:имя-модели`.
+
 ## Запуск
 
 ```bash

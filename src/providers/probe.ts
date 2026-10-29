@@ -35,7 +35,7 @@ import { guardedFetch, originOf } from './http.ts';
 import { HOST_ROWS, SAMPLER_NAMES, globMatch } from './caps.ts';
 
 export interface CatalogInfo {
-  server: 'llama.cpp' | 'ollama' | 'lmstudio' | 'koboldcpp' | 'openrouter' | 'vllm' | 'anthropic' | 'unknown';
+  server: 'llama.cpp' | 'ollama' | 'lmstudio' | 'koboldcpp' | 'openrouter' | 'vllm' | 'anthropic' | 'gemini' | 'unknown';
   models: { id: string; contextLength?: number }[];
   /** Per model id, what the catalog says (contextLength, tools, reasoning...). */
   caps: Record<string, Partial<ModelCaps>>;
@@ -403,6 +403,38 @@ export async function listModels(
   baseUrl: string,
   opts: { fetch: typeof fetch; key: string | null; signal: AbortSignal; timeoutMs?: number; dialect?: ModelCaps['dialect']; apiVersion?: string },
 ): Promise<{ models: { id: string; contextLength?: number }[]; notes: string[] }> {
+  if (opts.dialect === 'gemini') {
+    const url = new URL(baseUrl);
+    url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/(?:v1|v1beta)(?:\/models)?$/i, '') + '/v1beta/models';
+    url.search = 'pageSize=1000';
+    const headers: Record<string, string> = { accept: 'application/json' };
+    if (opts.key) headers['x-goog-api-key'] = opts.key;
+    const models = new Map<string, { id: string; contextLength?: number }>();
+    const notes: string[] = [];
+    const seenPages = new Set<string>();
+    for (let page = 0; page < 8; page++) {
+      const signal = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs ?? PROBE_TIMEOUT_MS)]);
+      const res = await guardedFetch({ url: url.href, method: 'GET', headers }, { fetch: opts.fetch, signal, allowedOrigin: originOf(baseUrl) });
+      if (res.status === 401 || res.status === 403) return { models: [], notes: [`auth_failed: GET /v1beta/models answered HTTP ${res.status}; check the connection's key`] };
+      if (!res.ok) { notes.push(`GET /v1beta/models answered HTTP ${res.status}`); break; }
+      const payload: unknown = await res.json();
+      if (!isRecord(payload)) break;
+      for (const row of Array.isArray(payload.models) ? payload.models : []) {
+        if (!isRecord(row)) continue;
+        const methods = row.supportedGenerationMethods;
+        if (Array.isArray(methods) && !methods.includes('generateContent')) continue;
+        const id = typeof row.name === 'string' ? row.name.replace(/^models\//, '') : '';
+        if (!id) continue;
+        const contextLength = posInt(row.inputTokenLimit);
+        models.set(id, contextLength ? { id, contextLength } : { id });
+      }
+      const token = typeof payload.nextPageToken === 'string' ? payload.nextPageToken : '';
+      if (!token || seenPages.has(token)) break;
+      seenPages.add(token);
+      url.searchParams.set('pageToken', token);
+    }
+    return { models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)), notes };
+  }
   if (opts.dialect === 'anthropic') {
     const url = new URL(baseUrl);
     url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v1(?:\/models)?$/i, '') + '/v1/models';
@@ -442,6 +474,14 @@ export async function fetchCatalog(
   baseUrl: string,
   opts: { fetch: typeof fetch; key: string | null; signal: AbortSignal; model?: string; timeoutMs?: number; dialect?: ModelCaps['dialect']; apiVersion?: string },
 ): Promise<CatalogInfo> {
+  if (opts.dialect === 'gemini') {
+    const result = await listModels(baseUrl, opts);
+    const caps: CatalogInfo['caps'] = {};
+    for (const m of result.models) if (m.contextLength !== undefined && (opts.model === undefined || opts.model === m.id)) caps[m.id] = { contextLength: m.contextLength };
+    const notes = [...result.notes];
+    if (opts.model && result.models.length && !result.models.some((m) => m.id === opts.model)) notes.push(`${opts.model} is not in the server's model list`);
+    return { server: 'gemini', models: result.models, caps, notes, ...(notes.some((n) => n.startsWith('auth_failed:')) ? { authFailed: true } : {}) };
+  }
   if (opts.dialect === 'anthropic') {
     const result = await listModels(baseUrl, opts);
     const caps: CatalogInfo['caps'] = {};

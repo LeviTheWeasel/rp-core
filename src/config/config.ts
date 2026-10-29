@@ -30,11 +30,12 @@ import { isLocalOrigin, originOf } from '../providers/http.ts';
 import { resolveCaps, type CapsInput } from '../providers/caps.ts';
 import { createOpenAIChatProvider, type OpenAIChatOptions } from '../providers/openai-chat.ts';
 import { createAnthropicProvider, type AnthropicOptions } from '../providers/anthropic.ts';
+import { createGeminiProvider, type GeminiOptions } from '../providers/gemini.ts';
 import { PROTECTED_BODY_KEYS, PROTECTED_HEADERS, type ConnectionOverrides } from '../providers/wire.ts';
 
 export interface ConnectionConfig {
   id: string;
-  /** Native Anthropic and OpenAI-compatible connections are supported; Gemini is reserved for M8. */
+  /** OpenAI-compatible, native Anthropic, or native Gemini. */
   dialect: 'openai-chat' | 'anthropic' | 'gemini';
   baseUrl: string;
   keyEnv?: string;
@@ -183,15 +184,15 @@ export const CONFIG_TEMPLATE: string = `# rp-core configuration: connections, de
 # One table per server. Its name is what bindings use: "<connection>:<model>". Names may hold
 # letters, digits, "_" and "-", never ":".
 #
-#   dialect        "openai-chat" (the default; "anthropic" and "gemini" come later)
+#   dialect        "openai-chat" (default), "anthropic", or "gemini"
 #   base_url       required, http:// or https://
 #   key_env        name of the environment variable that holds the API key
 #   key_cmd        argv of a command that prints the key, e.g. secret-tool on Linux
 #   max_in_flight  requests at once to this server, 1-64 (default: 1 local, 4 remote)
 #   local          true/false: overrides the guess from the URL
 #   headers        header name -> name of the environment variable holding its value
-#   extra_body     fields added to every request body (model, messages, stream, tools and
-#                  tool_choice are protected)
+#   extra_body     fields added to every request body (core message, tool and safety fields
+#                  are protected)
 #   exclude_body   body fields to leave out
 
 # Ollama on this machine. \`ollama list\` shows the model names.
@@ -272,7 +273,7 @@ prefill_vs_tools = "prefill"     # prefill | tools: which wins when a turn wants
  * resolveKey via the SecretResolver (lazy, memoised); header values read from env at build time (a
  * missing or unusable one makes that connection's resolveKey reject with key_unavailable, naming the
  * header and the variable; it never fails the whole config).
- * Gemini connections are skipped and reported in `skipped`.
+ * All three dialects build a provider; `skipped` remains for forward compatibility.
  */
 export function buildConnections(
   cfg: RpConfig,
@@ -289,6 +290,7 @@ export function buildConnections(
     resolveCaps,
     createProvider: createOpenAIChatProvider,
     createAnthropicProvider,
+    createGeminiProvider,
   });
 }
 
@@ -299,6 +301,7 @@ export interface ConnectionBuilders {
   resolveCaps(input: CapsInput): ModelCaps;
   createProvider(o: OpenAIChatOptions): Provider;
   createAnthropicProvider?(o: AnthropicOptions): Provider;
+  createGeminiProvider?(o: GeminiOptions): Provider;
 }
 
 /** buildConnections with its provider-side functions passed in. */
@@ -311,10 +314,6 @@ export function buildConnectionsWith(
   const skipped: { id: string; why: string }[] = [];
 
   for (const c of Object.values(cfg.connections)) {
-    if (c.dialect === 'gemini') {
-      skipped.push({ id: c.id, why: `dialect '${c.dialect}' is not supported yet (M8)` });
-      continue;
-    }
     const origin = impl.originOf(c.baseUrl);
     const local = c.local ?? impl.isLocalOrigin(origin);
 
@@ -347,7 +346,9 @@ export function buildConnectionsWith(
     if (Object.keys(overrides).length > 0) providerOpts.overrides = overrides;
     const provider = c.dialect === 'anthropic'
       ? (impl.createAnthropicProvider ?? createAnthropicProvider)({ ...providerOpts, apiVersion: c.apiVersion, cacheTtl: c.cacheTtl })
-      : impl.createProvider(providerOpts);
+      : c.dialect === 'gemini'
+        ? (impl.createGeminiProvider ?? createGeminiProvider)(providerOpts)
+        : impl.createProvider(providerOpts);
 
     // The server kind is a property of the endpoint: any probed row of this connection may tell it.
     const prefix = `${c.id}:`;
