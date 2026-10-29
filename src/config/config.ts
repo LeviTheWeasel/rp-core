@@ -29,11 +29,12 @@ import { isHeaderSafeValue, type SecretResolver } from './secrets.ts';
 import { isLocalOrigin, originOf } from '../providers/http.ts';
 import { resolveCaps, type CapsInput } from '../providers/caps.ts';
 import { createOpenAIChatProvider, type OpenAIChatOptions } from '../providers/openai-chat.ts';
+import { createAnthropicProvider, type AnthropicOptions } from '../providers/anthropic.ts';
 import { PROTECTED_BODY_KEYS, PROTECTED_HEADERS, type ConnectionOverrides } from '../providers/wire.ts';
 
 export interface ConnectionConfig {
   id: string;
-  /** M1b: 'openai-chat' only; 'anthropic' (M7) and 'gemini' (M8) parse but are refused when used. */
+  /** Native Anthropic and OpenAI-compatible connections are supported; Gemini is reserved for M8. */
   dialect: 'openai-chat' | 'anthropic' | 'gemini';
   baseUrl: string;
   keyEnv?: string;
@@ -264,14 +265,14 @@ prefill_vs_tools = "prefill"     # prefill | tools: which wins when a turn wants
 `;
 
 /**
- * Build engine Connections for every openai-chat connection: provider = createOpenAIChatProvider,
+ * Build engine Connections for every supported connection: its native provider,
  * origin = originOf(base_url), local = isLocalOrigin unless overridden, caps = resolveCaps for model ''
  * and capsFor(model) = resolveCaps with host preset, model rows, the cache row of "conn:model"
  * (its catalog part in the catalog slot, its probe part in the probe slot) and user overrides;
  * resolveKey via the SecretResolver (lazy, memoised); header values read from env at build time (a
  * missing or unusable one makes that connection's resolveKey reject with key_unavailable, naming the
  * header and the variable; it never fails the whole config).
- * anthropic/gemini connections are skipped and reported in `skipped`.
+ * Gemini connections are skipped and reported in `skipped`.
  */
 export function buildConnections(
   cfg: RpConfig,
@@ -287,6 +288,7 @@ export function buildConnections(
     isLocalOrigin,
     resolveCaps,
     createProvider: createOpenAIChatProvider,
+    createAnthropicProvider,
   });
 }
 
@@ -296,6 +298,7 @@ export interface ConnectionBuilders {
   isLocalOrigin(origin: string): boolean;
   resolveCaps(input: CapsInput): ModelCaps;
   createProvider(o: OpenAIChatOptions): Provider;
+  createAnthropicProvider?(o: AnthropicOptions): Provider;
 }
 
 /** buildConnections with its provider-side functions passed in. */
@@ -308,8 +311,8 @@ export function buildConnectionsWith(
   const skipped: { id: string; why: string }[] = [];
 
   for (const c of Object.values(cfg.connections)) {
-    if (c.dialect !== 'openai-chat') {
-      skipped.push({ id: c.id, why: `dialect '${c.dialect}' is not supported yet (${c.dialect === 'anthropic' ? 'M7' : 'M8'})` });
+    if (c.dialect === 'gemini') {
+      skipped.push({ id: c.id, why: `dialect '${c.dialect}' is not supported yet (M8)` });
       continue;
     }
     const origin = impl.originOf(c.baseUrl);
@@ -342,7 +345,9 @@ export function buildConnectionsWith(
 
     const providerOpts: OpenAIChatOptions = { connectionId: c.id, baseUrl: c.baseUrl, local };
     if (Object.keys(overrides).length > 0) providerOpts.overrides = overrides;
-    const provider = impl.createProvider(providerOpts);
+    const provider = c.dialect === 'anthropic'
+      ? (impl.createAnthropicProvider ?? createAnthropicProvider)({ ...providerOpts, apiVersion: c.apiVersion, cacheTtl: c.cacheTtl })
+      : impl.createProvider(providerOpts);
 
     // The server kind is a property of the endpoint: any probed row of this connection may tell it.
     const prefix = `${c.id}:`;
@@ -398,6 +403,7 @@ export function buildConnectionsWith(
         : () => deps.secrets.resolve(spec),
       dialect: c.dialect,
       baseUrl: c.baseUrl,
+      ...(c.apiVersion !== undefined ? { apiVersion: c.apiVersion } : {}),
     };
   }
   return { connections, skipped };

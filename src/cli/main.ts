@@ -462,7 +462,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
           if (!c.baseUrl) throw new Refusal('no_connection', `connection ${conn} has no model catalog URL`);
           let key: string | null = null;
           try { key = c.resolveKey ? await c.resolveKey() : (c.key ?? null); } catch { /* public catalogs may work without a key */ }
-          return listModels(c.baseUrl, { fetch: deps.fetch ?? fetch, key, signal: abort.signal });
+          return listModels(c.baseUrl, { fetch: deps.fetch ?? fetch, key, signal: abort.signal, dialect: c.dialect, apiVersion: c.apiVersion });
         },
         capsGet: (conn, model) => {
           const c = connection(conn);

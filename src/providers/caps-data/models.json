@@ -2,6 +2,183 @@
   "as_of": "2026-10-26",
   "rows": [
     {
+      "name": "Claude 4 through 4.5",
+      "match": "*claude-*4-*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+      "caps": {
+        "prefill": "assistant-last",
+        "reasoning": {
+          "control": "budget",
+          "canDisable": true
+        }
+      }
+    },
+    {
+      "name": "Claude 4.6 and later",
+      "match": "*claude-*4-{6,7,8}*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+      "caps": {
+        "prefill": "none",
+        "reasoning": {
+          "control": "adaptive",
+          "canDisable": false
+        },
+        "samplers": {
+          "accepted": [
+            "stop",
+            "max_tokens"
+          ],
+          "fixed": true
+        }
+      }
+    },
+    {
+      "name": "Claude 5 series",
+      "match": "*claude-{opus,sonnet,haiku,fable,mythos}-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+      "caps": {
+        "reasoning": {
+          "control": "adaptive",
+          "canDisable": false
+        },
+        "samplers": {
+          "accepted": [
+            "stop",
+            "max_tokens"
+          ],
+          "fixed": true
+        },
+        "cacheMinTokens": 1024
+      }
+    },
+    {
+      "name": "Claude 5.5 mid-conversation system",
+      "match": "*claude-{opus,sonnet,haiku,fable,mythos}-5-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages",
+      "caps": {
+        "midSystem": "anthropic-native"
+      }
+    },
+    {
+      "name": "Claude Opus 5 mid-conversation system",
+      "match": "*claude-opus-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages",
+      "caps": {
+        "midSystem": "anthropic-native"
+      }
+    },
+    {
+      "name": "Claude Opus 4.8 mid-conversation system",
+      "match": "*claude-opus-4-8*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages",
+      "caps": {
+        "midSystem": "anthropic-native",
+        "reasoning": {
+          "control": "adaptive",
+          "canDisable": false
+        },
+        "samplers": {
+          "accepted": [
+            "stop",
+            "max_tokens"
+          ],
+          "fixed": true
+        }
+      }
+    },
+    {
+      "name": "Claude Opus 4.5 cache minimum",
+      "match": "*claude-opus-4-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 4096
+      }
+    },
+    {
+      "name": "Claude Opus 4.6 cache minimum",
+      "match": "*claude-opus-4-6*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 4096
+      }
+    },
+    {
+      "name": "Claude Haiku 4.5 cache minimum",
+      "match": "*claude-haiku-4-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 4096
+      }
+    },
+    {
+      "name": "Claude legacy Haiku 3.5 cache minimum",
+      "match": "*claude-haiku-3-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 2048
+      }
+    },
+    {
+      "name": "Claude Opus 4.7 cache minimum",
+      "match": "*claude-opus-4-7*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 2048
+      }
+    },
+    {
+      "name": "Claude Opus 5 cache minimum",
+      "match": "*claude-opus-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 512
+      }
+    },
+    {
+      "name": "Claude Fable 5 cache minimum",
+      "match": "*claude-fable-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 512
+      }
+    },
+    {
+      "name": "Claude Mythos 5 cache minimum",
+      "match": "*claude-mythos-5*",
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "caps": {
+        "cacheMinTokens": 512
+      }
+    },
+    {
       "name": "Qwen3: <think> tags",
       "match": "*qwen3*",
       "as_of": "2026-10-26",

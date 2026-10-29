@@ -41,6 +41,8 @@ context_length = 16384
 
 Set `context_length` to the context window the server **actually** uses. With Ollama, increase `num_ctx` on the server if needed. You can instead choose a model per story with `rp-core new --model ollama:model-name`. The config also includes llama.cpp, LM Studio and OpenRouter connections. For a remote server, provide its API key through an environment variable (`key_env`), not in the config file. In the TUI, **F4 → F9** lets you enter an OpenRouter key for this run; rp-core adds the non-secret connection to `config.toml` if needed. Set `OPENROUTER_API_KEY` in your environment to use it after restarting.
 
+For native Claude, add `[connections.claude]` with `dialect = "anthropic"` and `key_env = "ANTHROPIC_API_KEY"` to `config.toml`, set that environment variable, then run `rp-core models claude` to see available model IDs. Select one with **F4** in the TUI or `/model narrator claude:model-id` in a chat.
+
 ## Start a chat
 
 ```bash

@@ -187,11 +187,11 @@ describe('new', () => {
     'a connection of a later dialect is named as such',
     async () => {
       const home = tmpHome('rp-core-m1b-');
-      writeFileSync(join(home, 'config.toml'), '[connections.claude]\ndialect = "anthropic"\nkey_env = "X"\n');
-      const r = await run(['new', '--card', join(CARDS, 'v3-full.json'), '--home', home, '--model', 'claude:sonnet']);
+      writeFileSync(join(home, 'config.toml'), '[connections.gemini]\ndialect = "gemini"\nkey_env = "X"\n');
+      const r = await run(['new', '--card', join(CARDS, 'v3-full.json'), '--home', home, '--model', 'gemini:flash']);
       expect(r.code).toBe(64);
-      expect(r.stderr).toContain('connection "claude" cannot be used');
-      expect(r.stderr).toContain('M7');
+      expect(r.stderr).toContain('connection "gemini" cannot be used');
+      expect(r.stderr).toContain('M8');
     },
     T,
   );
@@ -289,12 +289,12 @@ describe('a configured openai-chat connection', () => {
     'a binding on a connection config.toml does not have: no_connection with the hint',
     async () => {
       const home = tmpHome('rp-core-m1b-');
-      writeFileSync(join(home, 'config.toml'), '[connections.claude]\ndialect = "anthropic"\nkey_env = "X"\n');
+      writeFileSync(join(home, 'config.toml'), '[connections.gemini]\ndialect = "gemini"\nkey_env = "X"\n');
       const id = await newSessionWith(home, '--model', 'gone:m', '--provider', script('reply.jsonl'));
       const r = await run(['send', id, 'Hi', '--home', home]);
       expect(r.code).toBe(5);
       expect(r.stderr).toContain('refused (no_connection)');
-      expect(r.stderr).toContain('connection "claude" in config.toml is skipped');
+      expect(r.stderr).toContain('connection "gemini" in config.toml is skipped');
     },
     T,
   );

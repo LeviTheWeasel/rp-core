@@ -180,6 +180,8 @@ export async function runProbe(a: ProbeArgs): Promise<{ code: number; results: P
         fetch: doFetch,
         key,
         signal,
+        dialect: c.dialect,
+        apiVersion: c.apiVersion,
         ...(w.model !== undefined ? { model: w.model } : {}),
         ...(a.timeoutMs !== undefined ? { timeoutMs: a.timeoutMs } : {}),
       });
@@ -302,6 +304,8 @@ export async function cmdModels(a: CatalogArgs & { conn: string }): Promise<numb
     out = await listModels(c.baseUrl!, {
       fetch: a.fetch ?? fetch,
       key,
+      dialect: c.dialect,
+      apiVersion: c.apiVersion,
       signal: a.signal ?? new AbortController().signal,
       ...(a.timeoutMs !== undefined ? { timeoutMs: a.timeoutMs } : {}),
     });
