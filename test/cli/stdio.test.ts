@@ -25,6 +25,25 @@ test('rp-core --stdio speaks JSON-RPC on stdout and exits cleanly on shutdown', 
   expect(frames[1].result).toEqual([]);
 });
 
+test('stdio session/new uses config.toml defaults and applies the requested patch', async () => {
+  const home = tmpHome();
+  writeFileSync(join(home, 'config.toml'), '[connections.ollama]\nbase_url = "http://127.0.0.1:11434"\n[roles]\nnarrator = "ollama:magmell-32k:latest"\n');
+  const out = memoryChannel();
+  const err = memoryChannel();
+  async function* input(): AsyncGenerator<Uint8Array> {
+    for (const [id, method, params] of [
+      [1, 'initialize', { protocol: 1, client: { name: 'test', version: '1' } }],
+      [2, 'session/new', { character: MIRA, config: { narrator: { maxRounds: 2 } } }],
+      [3, 'shutdown', {}],
+    ] as const) yield new TextEncoder().encode(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+  }
+  expect(await main(['--home', home, '--stdio'], { io: { out, err }, env: {}, exit: () => {}, input: input() })).toBe(0);
+  const frames = out.text().trim().split('\n').map((line) => JSON.parse(line));
+  const config = frames.find((frame) => frame.id === 2)?.result.snapshot.config;
+  expect(config.roles.narrator).toEqual({ conn: 'ollama', model: 'magmell-32k:latest' });
+  expect(config.narrator.maxRounds).toBe(2);
+});
+
 test('stdio exposes configured caps and the model catalog', async () => {
   const home = tmpHome();
   writeFileSync(join(home, 'config.toml'), '[connections.mock]\nbase_url = "https://example.invalid"\n[caps."mock:demo"]\ncontext_length = 32768\n');

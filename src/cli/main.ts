@@ -474,7 +474,7 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
           const report = await runProbe({ rt, io: quiet, json: true, target: conn, model, write: false, active, fetch: deps.fetch, clock: deps.clock ?? systemClock, signal: abort.signal });
           return report.results[0];
         },
-      }, { signal: abort.signal, onReady: (control) => { stopTurns = control.stopTurns; } });
+      }, { signal: abort.signal, sessionDefaults: rt.config.sessionDefaults, onReady: (control) => { stopTurns = control.stopTurns; } });
       } finally {
         signals.removeListener('SIGINT', onInt);
         signals.removeListener('SIGTERM', onTerm);

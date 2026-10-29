@@ -4,7 +4,8 @@
 import { Refusal, type EngineHandle, type SessionHandle, type TurnHandle } from '../engine/api.ts';
 import { loadFromLibrary } from '../formats/library.ts';
 import { validateCharacter, validatePersona } from '../formats/native.ts';
-import { currentConfig } from '../session/fold.ts';
+import { currentConfig, mergePatch } from '../session/fold.ts';
+import type { DeepPartial, SessionConfig } from '../session/entries.ts';
 import { readSessionFile } from '../session/log.ts';
 import { openTurns } from '../engine/recover.ts';
 import { ProviderError } from '../providers/types.ts';
@@ -28,7 +29,7 @@ export interface RpcCatalog {
   capsProbe(conn: string, model: string, active: boolean): Promise<unknown>;
 }
 export interface RpcControl { stopTurns(): void }
-export interface RpcRunOptions { signal?: AbortSignal; onReady?: (control: RpcControl) => void }
+export interface RpcRunOptions { signal?: AbortSignal; onReady?: (control: RpcControl) => void; sessionDefaults?: DeepPartial<SessionConfig> }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -141,7 +142,8 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
         }
         const config = objectParam(p, 'config', true);
         const title = stringParam(p, 'title', true);
-        const s = engine.createSession({ character: valid.value, ...(persona ? { persona } : {}), ...(config ? { config } : {}), ...(title ? { title } : {}) });
+        const initialConfig = mergePatch<DeepPartial<SessionConfig>>(options.sessionDefaults ?? {}, config);
+        const s = engine.createSession({ character: valid.value, ...(persona ? { persona } : {}), config: initialConfig, ...(title ? { title } : {}) });
         sessions.set(s.id, s);
         return { sessionId: s.id, snapshot: snapshot(home, s, turns) };
       }
