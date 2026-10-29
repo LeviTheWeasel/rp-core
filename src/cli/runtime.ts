@@ -24,7 +24,7 @@ export interface Runtime {
   config: RpConfig;
   /** openai-chat connections of config.toml, ready for the engine (under --provider record: each one records its calls). */
   connections: Record<string, Connection>;
-  /** Connections in config.toml that cannot run yet (anthropic M7, gemini M8), with the reason. */
+  /** Connections in config.toml that cannot run yet (Gemini M8), with the reason. */
   skipped: { id: string; why: string }[];
   secrets: SecretResolver;
   /** --provider script:<file> or replay:<file>: every role resolves to this one for this process. */

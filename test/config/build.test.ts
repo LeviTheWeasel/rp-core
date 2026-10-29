@@ -81,13 +81,12 @@ tools = "native"
 `;
 
 describe('buildConnections', () => {
-  test('one Connection per openai-chat connection; anthropic and gemini are skipped and reported', () => {
+  test('Anthropic builds a native connection; Gemini remains deferred', () => {
     const { impl } = stubs();
     const cfg = parseConfig(CONFIG + '\n[connections.g]\ndialect = "gemini"\n', null);
     const out = buildConnectionsWith(cfg, { env: { RP_TITLE: 'rp-core' }, secrets: recordingSecrets(), capsCache: {} }, impl);
-    expect(Object.keys(out.connections)).toEqual(['ollama', 'box', 'openrouter']);
+    expect(Object.keys(out.connections)).toEqual(['ollama', 'box', 'openrouter', 'claude']);
     expect(out.skipped).toEqual([
-      { id: 'claude', why: "dialect 'anthropic' is not supported yet (M7)" },
       { id: 'g', why: "dialect 'gemini' is not supported yet (M8)" },
     ]);
   });
@@ -147,7 +146,7 @@ describe('buildConnections', () => {
       const secrets = recordingSecrets();
       const out = buildConnectionsWith(parseConfig(CONFIG, null), { env, secrets, capsCache: {} }, impl);
       // Every connection is built; the others work as before.
-      expect(Object.keys(out.connections)).toEqual(['ollama', 'box', 'openrouter']);
+      expect(Object.keys(out.connections)).toEqual(['ollama', 'box', 'openrouter', 'claude']);
       expect(await out.connections.ollama!.resolveKey!()).toBeNull();
       // The header is not sent half-set, and the connection's first call fails with the reason.
       expect(providers.find((p) => p.connectionId === 'openrouter')?.overrides?.headers).toBeUndefined();

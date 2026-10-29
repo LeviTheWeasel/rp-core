@@ -4,8 +4,8 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M5b**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
-  koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), with SillyTavern presets
+- **Status:** milestone **M7**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+  koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), or native Claude, with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
   it notes to remember. The [Compendium](#the-compendium) keeps typed world knowledge (characters,
   places, items…) from RoleCall exports, from your own entries and, in the background, from the
@@ -79,7 +79,8 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 |---|---|
 | M5c | Recall: a model picks the Compendium entries before each answer (or ahead of it, between turns, on a local server); `/memory recall`, `profile`, `mode`; slot pinning on llama.cpp and latency measurements ([details](#not-in-m5b-yet)) |
 | M6 | `--stdio` for other UIs: the first JSON-RPC methods work on the M6 branch; the full protocol is still in progress ([current methods](STDIO.md)) |
-| M7, M8 | Native Anthropic, then native Gemini |
+| M7 | Native Anthropic Messages API |
+| M8 | Native Gemini (planned) |
 
 ## Install
 
@@ -2336,11 +2337,21 @@ key_env = "OPENROUTER_API_KEY"
 [connections.deepseek]
 base_url = "https://api.deepseek.com/beta"
 key_cmd = ["secret-tool", "lookup", "service", "rp-core", "conn", "deepseek"]
+
+# Native Anthropic Messages API
+[connections.claude]
+dialect = "anthropic"
+key_env = "ANTHROPIC_API_KEY"
+# cache_ttl = "1h"             # default; use "5m" for a shorter cache
 ```
 
 - **Context window.** For llama.cpp and LM Studio the window is what you started the server with
   (`-c` / the context slider). `rp-core probe` reads it from llama.cpp's `/props`.
 - **Remote servers** get 4 requests in flight by default; local ones get 1.
+- **Native Claude:** `rp-core models claude` reads Anthropic's catalog. Use its exact model ID in
+  `/model narrator claude:<model id>` or the TUI model picker. The connection uses the Messages API,
+  including native tools, prompt cache marks, structured output and signed thinking blocks within
+  a tool loop. `api_version` can pin an API version; otherwise it uses `2023-06-01`.
 - **Switching mid-story:** `/model narrator openrouter:<model id>`. The next answer comes from the
   new model; the story stays the same.
 

@@ -4,7 +4,7 @@
 // - a key with an invisible character pasted along is refused before fetch can quote it;
 // - `probe --write` during an auth failure stores nothing and exits 1;
 // - a D-53 header variable that is not set fails only its own connection, not every command;
-// - /model refuses a connection the runtime skipped (anthropic M7) with the reason.
+// - /model refuses a connection the runtime skipped (gemini M8) with the reason.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -194,15 +194,15 @@ describe('config: one connection\'s problem is not every command\'s', () => {
   );
 
   test(
-    '/model on a connection the runtime skipped (anthropic arrives in M7) is refused with the reason',
+    '/model on a connection the runtime skipped (gemini arrives in M8) is refused with the reason',
     async () => {
       const home = tmpHome('rp-core-review-');
-      writeFileSync(join(home, 'config.toml'), `[connections.mock]\nbase_url = "${base()}"\n[connections.anthropic]\ndialect = "anthropic"\nkey_env = "X"\n[roles]\nnarrator = "mock:m1"\n`);
+      writeFileSync(join(home, 'config.toml'), `[connections.mock]\nbase_url = "${base()}"\n[connections.gemini]\ndialect = "gemini"\nkey_env = "X"\n[roles]\nnarrator = "mock:m1"\n`);
       const id = await newSession(home, {});
-      const r = await cli(['chat', id, '--home', home], {}, '/model anthropic:claude-sonnet\n/model\n/quit\n');
+      const r = await cli(['chat', id, '--home', home], {}, '/model gemini:flash\n/model\n/quit\n');
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain(`/model narrator: connection "anthropic" cannot be used: dialect 'anthropic' is not supported yet (M7)`);
-      expect(r.stdout).not.toContain('narrator → anthropic:claude-sonnet');
+      expect(r.stdout).toContain(`/model narrator: connection "gemini" cannot be used: dialect 'gemini' is not supported yet (M8)`);
+      expect(r.stdout).not.toContain('narrator → gemini:flash');
       expect(r.stdout).toContain('mock:m1'); // the binding did not change
     },
     T,

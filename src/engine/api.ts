@@ -40,6 +40,8 @@ export interface Connection {
   /** M1b: the dialect and base URL, for probes and display. Absent for in-process providers. */
   dialect?: ModelCaps['dialect'];
   baseUrl?: string;
+  /** Version pin for Anthropic's native API and catalog. */
+  apiVersion?: string;
 }
 
 export interface EngineOptions {

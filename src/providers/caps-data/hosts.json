@@ -2,6 +2,50 @@
   "as_of": "2026-10-26",
   "rows": [
     {
+      "name": "Anthropic Messages API",
+      "match": {
+        "hostname": "api.anthropic.com"
+      },
+      "dialect": "anthropic",
+      "as_of": "2026-10-29",
+      "src": "https://platform.claude.com/docs/en/api/messages/create",
+      "caps": {
+        "tools": "native",
+        "toolChoice": [
+          "auto",
+          "none"
+        ],
+        "toolChoiceHonored": true,
+        "parallelToolCalls": "never",
+        "strictTools": false,
+        "structuredOutput": {
+          "mode": "json_schema",
+          "confirmedBy": "host"
+        },
+        "midSystem": "as-user",
+        "alternation": "free",
+        "prefill": "none",
+        "reasoning": {
+          "output": "anthropic-blocks",
+          "control": "none",
+          "canDisable": false,
+          "echo": "tool-turn"
+        },
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "streamUsage": "always",
+        "caching": "anthropic-breakpoints",
+        "cacheMinTokens": 1024
+      }
+    },
+    {
       "name": "llama.cpp server",
       "match": {
         "port": 8080,

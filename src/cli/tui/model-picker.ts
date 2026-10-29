@@ -19,7 +19,7 @@ export async function modelGroups(rt: Runtime, fetcher: typeof fetch, signal: Ab
     try { key = c.resolveKey ? await c.resolveKey() : (c.key ?? null); }
     catch { return { conn: c.id, models: [], note: 'API key unavailable' }; }
     try {
-      const found = await listModels(c.baseUrl, { fetch: fetcher, key, signal });
+      const found = await listModels(c.baseUrl, { fetch: fetcher, key, signal, dialect: c.dialect, apiVersion: c.apiVersion });
       if (found.notes.some((note) => note.startsWith('auth_failed:'))) return { conn: c.id, models: [], note: 'API key rejected (HTTP 401/403)' };
       const models = found.models.map((m) => m.id).filter((id) => id !== '' && !/\s|[\x00-\x1f\x7f]/.test(id));
       return { conn: c.id, models, ...(models.length ? {} : { note: 'server listed no usable models' }) };

@@ -1635,7 +1635,7 @@ class Repl {
     const r = resolveBindingArg(role, spec, Object.keys(this.deps.config.connections));
     if (!r.ok) return this.say(this.style.red(r.message));
     const value = r.value;
-    // In config.toml is not enough: a connection the runtime skipped (anthropic M7, gemini M8) would
+    // In config.toml is not enough: a connection the runtime skipped (Gemini M8) would
     // be accepted here and refused at the next turn as "not configured".
     const problem = typeof value === 'string' ? null : (this.deps.connectionProblem?.(value.conn) ?? null);
     if (problem !== null) return this.say(this.style.red(`/model ${role}: ${problem}`));

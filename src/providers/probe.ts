@@ -35,7 +35,7 @@ import { guardedFetch, originOf } from './http.ts';
 import { HOST_ROWS, SAMPLER_NAMES, globMatch } from './caps.ts';
 
 export interface CatalogInfo {
-  server: 'llama.cpp' | 'ollama' | 'lmstudio' | 'koboldcpp' | 'openrouter' | 'vllm' | 'unknown';
+  server: 'llama.cpp' | 'ollama' | 'lmstudio' | 'koboldcpp' | 'openrouter' | 'vllm' | 'anthropic' | 'unknown';
   models: { id: string; contextLength?: number }[];
   /** Per model id, what the catalog says (contextLength, tools, reasoning...). */
   caps: Record<string, Partial<ModelCaps>>;
@@ -401,8 +401,20 @@ async function walkModelsLadder(s: Session, baseUrl: string): Promise<ModelEntry
  */
 export async function listModels(
   baseUrl: string,
-  opts: { fetch: typeof fetch; key: string | null; signal: AbortSignal; timeoutMs?: number },
+  opts: { fetch: typeof fetch; key: string | null; signal: AbortSignal; timeoutMs?: number; dialect?: ModelCaps['dialect']; apiVersion?: string },
 ): Promise<{ models: { id: string; contextLength?: number }[]; notes: string[] }> {
+  if (opts.dialect === 'anthropic') {
+    const url = new URL(baseUrl);
+    url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v1(?:\/models)?$/i, '') + '/v1/models';
+    const headers: Record<string, string> = { accept: 'application/json', 'anthropic-version': opts.apiVersion ?? '2023-06-01' };
+    if (opts.key) headers['x-api-key'] = opts.key;
+    const signal = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs ?? PROBE_TIMEOUT_MS)]);
+    const res = await guardedFetch({ url: url.href, method: 'GET', headers }, { fetch: opts.fetch, signal, allowedOrigin: originOf(baseUrl) });
+    if (res.status === 401 || res.status === 403) return { models: [], notes: [`auth_failed: GET /v1/models answered HTTP ${res.status}; check the connection's key`] };
+    if (!res.ok) return { models: [], notes: [`GET /v1/models answered HTTP ${res.status}`] };
+    const parsed = parseModelsPayload(await res.json());
+    return { models: parsed.map((m) => m.contextLength ? { id: m.id, contextLength: m.contextLength } : { id: m.id }), notes: [] };
+  }
   const s = probeSession(baseUrl, opts);
   const models = await walkModelsLadder(s, baseUrl);
   return {
@@ -428,8 +440,16 @@ export async function listModels(
  */
 export async function fetchCatalog(
   baseUrl: string,
-  opts: { fetch: typeof fetch; key: string | null; signal: AbortSignal; model?: string; timeoutMs?: number },
+  opts: { fetch: typeof fetch; key: string | null; signal: AbortSignal; model?: string; timeoutMs?: number; dialect?: ModelCaps['dialect']; apiVersion?: string },
 ): Promise<CatalogInfo> {
+  if (opts.dialect === 'anthropic') {
+    const result = await listModels(baseUrl, opts);
+    const caps: CatalogInfo['caps'] = {};
+    for (const m of result.models) if (m.contextLength !== undefined && (opts.model === undefined || opts.model === m.id)) caps[m.id] = { contextLength: m.contextLength };
+    const notes = [...result.notes];
+    if (opts.model && result.models.length && !result.models.some((m) => m.id === opts.model)) notes.push(`${opts.model} is not in the server's model list`);
+    return { server: 'anthropic', models: result.models, caps, notes, ...(notes.some((n) => n.startsWith('auth_failed:')) ? { authFailed: true } : {}) };
+  }
   const origin = originOf(baseUrl);
   const s = probeSession(baseUrl, opts);
   const root = serverRootOf(baseUrl);
