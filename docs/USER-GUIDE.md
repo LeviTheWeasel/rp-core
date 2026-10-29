@@ -340,6 +340,7 @@ Maren Vell › …
 | `/note <text> [@depth]`, `/note off` | The author's note, inserted *depth* messages from the end (default 4) |
 | `/think show`, `/think hide` | Show the model's reasoning, or fold it |
 | `/preset [id\|file]` | Show the preset, or switch it ([details](#presets-and-lorebooks)) |
+| `/persona` | Show the current persona and the personas in your library. `/persona use <id>` switches to one; `/persona name <text>` and `/persona description <text>` edit this session's persona for future answers |
 | `/lore`, `/lore add <id\|file>`, `/lore rm <id>` | The session's lorebooks: list, add, remove |
 | `/lore test <text>` | Which lore entries a message would wake, and why; nothing is sent |
 | `/preview [n] [--wire] [--verdicts]` | The exact request of the next answer (or of answer *n*), without sending it; `--verdicts` adds the lore test |
@@ -490,6 +491,10 @@ The labels are those of the left pane.
 | F4 | choose model | Opens the narrator model picker. It lists configured connections and models reported by their servers; ↑/↓ selects, Enter switches this session, Esc closes, F4 refreshes. Unreachable servers are marked in the list |
 | F5 | stories | Opens the story browser. Type to search by title, character or id; ↑/↓ selects, Enter opens a story. → shows its current leaf and alternative branches; Enter switches to the selected branch, even in another story. ← returns to stories, Esc closes, F5 refreshes. Forked stories appear under their parent. Your unfinished input stays in the chat box |
 | F6 | new story | Creates and opens a session from a character card in the library. Pick an optional library persona and preset, then select any number of library lorebooks with Space. Enter creates the session on the last step; Esc cancels |
+| F7 | persona | Shows library personas and the current persona. Enter on a library row switches this session; Edit name and Edit description put an editable command in the chat input. Changes affect future answers and survive reopening the session |
+
+Changing a persona leaves earlier messages, including greetings that already contain the old name,
+as they were written. The next prompt uses the new persona.
 | Esc | cancel/clear | Cancels an edit in place, or clears the input |
 
 - **Hotkeys are typed lines.** A hotkey that stands for a command goes in as if you typed it, so the

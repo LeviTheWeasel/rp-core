@@ -335,6 +335,8 @@ export type PreviewResult =
 export interface SessionHandle {
   readonly id: string;
   header(): SessionHeader;
+  /** Replace this session's persona for future turns; preserves the journal's past. */
+  setPersona(persona: Persona): void;
   /** version(session) (§5.3). */
   version(): number;
   /**

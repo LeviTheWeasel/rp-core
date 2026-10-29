@@ -352,6 +352,13 @@ export interface ConfigEntry {
   ts: string;
   patch: DeepPartial<SessionConfig>;
 }
+/** A session-level persona change; the original header stays immutable on disk. */
+export interface PersonaEntry {
+  t: 'persona';
+  seq: number;
+  ts: string;
+  persona: Persona;
+}
 export interface TurnEntry {
   t: 'turn';
   seq: number;
@@ -478,6 +485,7 @@ export interface ToolTraceRow {
 
 export type Entry =
   | ConfigEntry
+  | PersonaEntry
   | MsgEntry
   | EditEntry
   | HideEntry
@@ -504,7 +512,7 @@ export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omi
 export type EntryInput = DistributiveOmit<Entry, 'seq'>;
 
 /** Entry kinds that change version(session) (§5.3). */
-export const VERSIONED_KINDS: ReadonlySet<EntryKind> = new Set(['msg', 'edit', 'hide', 'head']);
+export const VERSIONED_KINDS: ReadonlySet<EntryKind> = new Set(['msg', 'edit', 'hide', 'head', 'persona']);
 
 // ---- parsing (implemented by the storage agent) -------------------------------------------------
 
@@ -732,6 +740,7 @@ const header = obj(
 
 const ENTRY_CHECKS: Record<EntryKind, Check> = {
   config: obj({ seq: seqNum, ts: str, patch: anyObj }),
+  persona: obj({ seq: seqNum, ts: str, persona }),
   msg: obj(
     { seq: seqNum, ts: str, id: nonEmpty, parent: nullable(nonEmpty), role: oneOf('user', 'assistant') },
     { speaker: str, turn: str, tail: oneOf(true), ...commitFields },

@@ -118,7 +118,7 @@ ${PROVIDER_HELP}`,
     summary: 'open a session in the REPL (swipe, continue, edit, rewind, /model, /preset, /lore, /memory, /search, ...)',
     help: `Opens the session (lock + recovery of an interrupted answer) and reads lines: text is your
 message, /help lists the commands (/r swipe, /c continue, /e edit, /rewind n, /tails, /goto,
-/fork, /model, /preset, /lore, /memory, /search, /director, /preview, /usage, /trace, /probe,
+/fork, /model, /persona, /preset, /lore, /memory, /search, /director, /preview, /usage, /trace, /probe,
 /quit). The
 banner says whether the narrator can use tools (native, prompted or off). Ctrl+C stops an answer and keeps
 what arrived; twice at the prompt quits. Piped stdin is a script: each line waits for the
@@ -145,7 +145,8 @@ Alt+Enter or Ctrl+J start a new line. Hotkeys: Ctrl+R swipe, Ctrl+G guided re-ro
 Ctrl+E edit the last message in the input (Enter saves, Esc cancels), Alt+Left/Right versions,
 PgUp/PgDn and Ctrl+Home/End scroll, Ctrl+D the Director, F1 help, F3 mouse wheel on/off,
 F4 choose the narrator model from the configured connections (↑/↓, Enter, Esc), F5 browse stories
-and branches, F6 create a story from a library card with persona, preset and lorebook choices. Ctrl+C
+and branches, F6 create a story from a library card with persona, preset and lorebook choices,
+F7 choose or edit the current session's persona. Ctrl+C
 stops an answer and keeps what arrived; twice at the prompt quits. /e edits in place (no $EDITOR).
 Errors and debug lines also go to <home>/logs/tui.log. Needs a terminal on stdin and stdout: pipes
 and scripts use rp-core chat.

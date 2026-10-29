@@ -46,6 +46,7 @@ export type Command =
   | { name: 'trace' }
   /** /preset alone shows the preset and the library; with a ref (library id, 'builtin' or a file) switches. */
   | { name: 'preset'; ref?: string }
+  | { name: 'persona'; action: 'show' | 'use' | 'name' | 'description'; value?: string }
   /** /lore (or /lore list): the books a turn scans. */
   | { name: 'lore'; action: 'list' }
   /** /lore add <id|file>: a file is imported first. */
@@ -158,6 +159,8 @@ export function commandClass(c: Command): CommandClass {
       return c.action === 'show' ? 'read' : 'edit';
     case 'preset':
       return c.ref === undefined ? 'read' : 'edit';
+    case 'persona':
+      return c.action === 'show' ? 'read' : 'edit';
     case 'lore':
       return c.action === 'add' || c.action === 'rm' ? 'edit' : 'read';
     case 'preview':
@@ -181,7 +184,6 @@ export function commandClass(c: Command): CommandClass {
 
 /** §12.4 commands that arrive with later milestones (§15). */
 const LATER: Readonly<Record<string, string>> = {
-  persona: 'a later milestone',
   impersonate: 'M9 (draft)',
 };
 
@@ -268,6 +270,16 @@ export function parseLine(raw: string): ParsedLine {
       return noArgs({ name: 'trace' });
     case 'preset':
       return rest === '' ? cmd({ name: 'preset' }) : cmd({ name: 'preset', ref: unquote(rest) });
+    case 'persona': {
+      if (rest === '' || rest === 'show') return cmd({ name: 'persona', action: 'show' });
+      const space = rest.indexOf(' ');
+      const action = (space < 0 ? rest : rest.slice(0, space)).toLowerCase();
+      const value = space < 0 ? '' : rest.slice(space + 1);
+      if (action === 'use') return value.trim() ? cmd({ name: 'persona', action: 'use', value: unquote(value.trim()) }) : err('/persona use needs a library persona id');
+      if (action === 'name') return value.trim() ? cmd({ name: 'persona', action: 'name', value }) : err('/persona name needs a name');
+      if (action === 'description') return cmd({ name: 'persona', action: 'description', value });
+      return err('/persona: use /persona, /persona use <id>, /persona name <text>, or /persona description <text>');
+    }
     case 'lore':
       return parseLore(rest);
     case 'preview':
@@ -760,6 +772,7 @@ export function helpText(): string {
     '  /director on|off   let the Director plan every reply, or stop it (its plan is kept)',
     '  /probe             how to probe a server; /probe --active [--write] tests the narrator\'s model (a few tiny calls)',
     '  /preset [id|file]  show the preset and the library, or switch (builtin, a library id, or an ST preset file to import)',
+    '  /persona          show the current persona and library; /persona use <id>, /persona name <text>, /persona description <text>',
     '  /lore              the lorebooks of this session; /lore add <id|file> (a world info file is imported), /lore rm <id>',
     '  /lore test <text>  which lore entries a message would wake, and why (nothing is sent)',
     '  /preview [n] [--wire] [--verdicts]   the exact request of the next turn (or of answer n), without sending it;',

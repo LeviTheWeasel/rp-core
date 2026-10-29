@@ -1,6 +1,7 @@
 // Engine sessions: creation, greetings, the non-turn verbs, locking, fork, events, close.
 import { describe, expect, test } from 'bun:test';
 import { Refusal } from '../../src/engine/api.ts';
+import { readSessionFile } from '../../src/session/log.ts';
 import type { Event } from '../../src/protocol/events.ts';
 import { calls, drain, entriesOf, LEVI, MIRA, ONE_GREETING, rig, textOf, withUserMessage } from './kit.ts';
 
@@ -57,6 +58,29 @@ describe('createSession', () => {
 });
 
 describe('verbs', () => {
+  test('persona changes are journaled, affect the view and survive reopen and fork', async () => {
+    const { engine, home } = await rig([]);
+    const s = engine.createSession({ character: MIRA, persona: LEVI });
+    const before = s.version();
+    expect(() => s.setPersona({ name: '', description: '' })).toThrow(Refusal);
+    expect(s.version()).toBe(before);
+    s.setPersona({ name: 'Alex', description: 'A new traveller.' });
+    expect(s.version()).toBeGreaterThan(before);
+    expect(s.header().cast.persona).toEqual({ name: 'Alex', description: 'A new traveller.' });
+    expect(s.view().castNames).toContain('Alex');
+    expect(textOf(s.view().path[0]!)).toContain('Levi'); // past text remains as written
+    const preview = s.preview({ draft: 'Hello.' });
+    expect(preview.ok).toBe(true);
+    if (preview.ok) expect(JSON.stringify(preview.messages)).toContain('A new traveller.');
+    expect(readSessionFile(home, s.id).header.cast.persona?.name).toBe('Alex');
+    expect(entriesOf(home, s.id).at(-1)).toMatchObject({ t: 'persona', persona: { name: 'Alex' } });
+    const forkId = s.fork({ at: s.view().path[0]!.id });
+    expect(engine.session(forkId).header().cast.persona?.name).toBe('Alex');
+    await engine.close();
+    const again = (await rig([], { home })).engine;
+    expect(again.session(s.id).header().cast.persona?.name).toBe('Alex');
+    await again.close();
+  });
   test('send / edit / hide / select bump the version and emit changed', async () => {
     const { engine } = await rig([]);
     const tail = engine.events();

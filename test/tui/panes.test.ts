@@ -123,6 +123,7 @@ const KEYS = [
   'F4         choose model',
       'F5         stories',
       'F6         new story',
+      'F7         persona',
   'Esc        cancel/clear',
 ];
 

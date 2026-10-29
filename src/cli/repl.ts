@@ -54,7 +54,8 @@ import {
   type TurnOutcome,
 } from '../engine/api.ts';
 import { ConfigError, type RpConfig } from '../config/config.ts';
-import { listLibrary } from '../formats/library.ts';
+import { listLibrary, loadFromLibrary } from '../formats/library.ts';
+import { validatePersona } from '../formats/native.ts';
 import { CARD_BOOK_KEY, entryLabel, PERSONA_BOOK_KEY } from '../lore/engine.ts';
 import { entryNames, normalizeName } from '../agents/compendium/apply.ts';
 import { isNote, NOTES_BOOK_KEY } from '../agents/compendium/notes.ts';
@@ -1372,6 +1373,8 @@ class Repl {
         return this.trace();
       case 'preset':
         return this.preset(c.ref);
+      case 'persona':
+        return this.persona(c);
       case 'lore':
         return this.lore(c);
       case 'preview':
@@ -1770,6 +1773,29 @@ class Repl {
     this.session.configure({ preset: r.id });
     const caps = presetCapText(r.value.context?.maxContext, model);
     this.say(this.style.dim(`preset → ${r.id}${r.value.name !== r.id ? ` "${r.value.name}"` : ''} (from the next turn${caps ? `; ${caps}` : ''})`));
+  }
+
+  /** Session persona: choose a library row, or edit its two visible fields in place. */
+  private persona(c: Extract<Command, { name: 'persona' }>): void {
+    const current = this.session.header().cast.persona;
+    if (c.action === 'show') {
+      const available = listLibrary(this.deps.home, 'personas');
+      this.say(`persona: ${current ? JSON.stringify(current.name) : '(none)'}\n  description: ${JSON.stringify(current?.description ?? '')}\nlibrary: ${available.length ? available.map((p) => `${p.id} (${p.name})`).join(', ') : '(empty)'}`);
+      return;
+    }
+    let next;
+    if (c.action === 'use') {
+      const id = c.value!;
+      const raw = loadFromLibrary(this.deps.home, 'personas', id);
+      if (raw === null) return this.say(this.style.red(`no library persona named ${JSON.stringify(id)}`));
+      const valid = validatePersona(raw);
+      if (!valid.ok) return this.say(this.style.red(`library persona ${id} is invalid: ${valid.errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`));
+      next = valid.value;
+    } else if (c.action === 'name') next = { ...(current ?? { description: '' }), name: c.value! };
+    else next = { ...(current ?? { name: 'User' }), description: c.value ?? '' };
+    this.session.setPersona(next);
+    this.view.banner(this.bannerInfo());
+    this.say(this.style.dim(`persona → ${next.name} (from the next turn)`));
   }
 
   /** The narrator route's caps (the --provider override's, when one is set), or null when unknown. */

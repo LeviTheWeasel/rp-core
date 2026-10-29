@@ -28,8 +28,7 @@ describe('/director', () => {
     expect(error('/director maybe')).toContain('/director takes show, on or off');
     expect(error('/director on now')).toContain('show, on or off');
     expect(cmd('/director').name).not.toBe('later');
-    // /persona stays a later command.
-    expect(cmd('/persona')).toMatchObject({ name: 'later', command: 'persona' });
+    expect(cmd('/persona')).toEqual({ name: 'persona', action: 'show' });
   });
 
   test('show is read-only (it waits for a running answer); on and off change the session (refused mid-turn)', () => {

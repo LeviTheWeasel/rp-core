@@ -42,6 +42,7 @@ describe('runTurn refusals', () => {
     expect(refusal(() => s.select({ messageId: userId, expectedVersion: version }))).toBe('session_busy');
     expect(refusal(() => s.fork({ at: userId }))).toBe('session_busy');
     expect(refusal(() => s.configure({ reasoningShown: true }))).toBe('session_busy');
+    expect(refusal(() => s.setPersona({ name: 'Alex', description: '' }))).toBe('session_busy');
     provider.release('p');
     await drain(turn);
     expect(s.busy()).toBe(false);

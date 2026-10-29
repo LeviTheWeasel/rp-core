@@ -106,6 +106,9 @@ export function buildTree(entries: readonly Entry[]): TreeIndex {
         version = e.seq;
         if (msgs.has(e.leaf)) head = e.leaf;
         break;
+      case 'persona':
+        version = e.seq;
+        break;
       case 'mem':
         // Not part of the tree or the version; collected for the Compendium fold (M3).
         mems.push(e);

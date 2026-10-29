@@ -172,3 +172,10 @@ export function currentConfig(header: SessionHeader, entries: readonly Entry[]):
   for (const e of entries) if (e.t === 'config') config = mergePatch<SessionConfig>(config, e.patch);
   return config;
 }
+
+/** The current cast after session-level persona changes. The journal's first line is never rewritten. */
+export function currentHeader(header: SessionHeader, entries: readonly Entry[]): SessionHeader {
+  let latest = header.cast.persona;
+  for (const e of entries) if (e.t === 'persona') latest = e.persona;
+  return latest === header.cast.persona ? header : { ...header, cast: { ...header.cast, ...(latest ? { persona: latest } : {}) } };
+}

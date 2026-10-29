@@ -102,7 +102,7 @@ export type HotkeyAction =
   | { kind: 'prefill'; text: string }
   | {
       kind: 'ui';
-      what: 'scrollPageUp' | 'scrollPageDown' | 'scrollTop' | 'scrollBottom' | 'togglePanes' | 'toggleMouse' | 'modelPicker' | 'storyPicker' | 'newStory' | 'escape' | 'editLast';
+      what: 'scrollPageUp' | 'scrollPageDown' | 'scrollTop' | 'scrollBottom' | 'togglePanes' | 'toggleMouse' | 'modelPicker' | 'storyPicker' | 'newStory' | 'personaPicker' | 'escape' | 'editLast';
     };
 
 export interface Hotkey {
@@ -134,6 +134,7 @@ export const HOTKEYS: readonly Hotkey[] = [
   { label: 'F4', description: 'choose model', match: [{ name: 'f4' }], action: { kind: 'ui', what: 'modelPicker' } },
   { label: 'F5', description: 'stories', match: [{ name: 'f5' }], action: { kind: 'ui', what: 'storyPicker' } },
   { label: 'F6', description: 'new story', match: [{ name: 'f6' }], action: { kind: 'ui', what: 'newStory' } },
+  { label: 'F7', description: 'persona', match: [{ name: 'f7' }], action: { kind: 'ui', what: 'personaPicker' } },
   { label: 'Esc', description: 'cancel/clear', match: [{ name: 'escape' }], action: { kind: 'ui', what: 'escape' } },
 ];
 // Pairs inside one entry (Alt+←/→, PgUp/PgDn, Ctrl+Home/End) are told apart by the host from the

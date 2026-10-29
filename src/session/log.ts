@@ -48,6 +48,7 @@ import { join, resolve } from 'node:path';
 import { systemClock } from '../engine/system.ts';
 import { splitLineSpans } from '../protocol/jsonl.ts';
 import { parseEntry, parseHeader } from './entries.ts';
+import { currentHeader } from './fold.ts';
 import type { Entry, EntryInput, SessionHeader } from './entries.ts';
 
 export interface LockInfo {
@@ -820,7 +821,7 @@ export function readSessionFile(
     throw e;
   }
   const { header, entries, notices } = parseJournal(id, bytes);
-  return { header, entries, notices };
+  return { header: currentHeader(header, entries), entries, notices };
 }
 
 // ---- compact (D-35, D-114, D-124) -------------------------------------------------------------------

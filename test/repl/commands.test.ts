@@ -112,9 +112,12 @@ describe('parseLine: commands', () => {
     // M5c (D-206): recall's subcommands arrived.
     expect(cmd('/memory recall')).toEqual({ name: 'memory', action: 'recall' });
     expect(cmd('/memory mode sync')).toEqual({ name: 'memory', action: 'mode', mode: 'sync' });
-    // M4: /director arrived (D-113); /persona is still later.
+    // M4: /director arrived (D-113); persona edits are supported now.
     expect(cmd('/director on')).toEqual({ name: 'director', action: 'on' });
-    expect(cmd('/persona')).toMatchObject({ name: 'later', command: 'persona' });
+    expect(cmd('/persona')).toEqual({ name: 'persona', action: 'show' });
+    expect(cmd('/persona use alex')).toEqual({ name: 'persona', action: 'use', value: 'alex' });
+    expect(cmd('/persona name Alex Smith')).toEqual({ name: 'persona', action: 'name', value: 'Alex Smith' });
+    expect(cmd('/persona description Explorer of dreams.')).toEqual({ name: 'persona', action: 'description', value: 'Explorer of dreams.' });
     expect(error('/me waves')).toContain('/help');
     expect(error('/me waves')).toContain('//');
     expect(error('/')).toContain('/help');

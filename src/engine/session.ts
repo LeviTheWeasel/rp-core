@@ -68,7 +68,7 @@ import { checkRecord } from '../agents/director/state.ts';
 import { compendiumPatchProblem } from '../config/config.ts';
 import { compendiumWarnings } from '../formats/compendium-v1.ts';
 import { libraryDir, saveToLibrary } from '../formats/library.ts';
-import { canonicalId, type ImportWarning } from '../formats/native.ts';
+import { canonicalId, validatePersona, type ImportWarning, type Persona } from '../formats/native.ts';
 import { searchHistory, type HistorySearch } from '../tools/builtin/history.ts';
 import { Refusal } from './api.ts';
 import type {
@@ -115,7 +115,7 @@ import {
   type Trace,
   type TurnKind,
 } from '../session/entries.ts';
-import { currentConfig, foldView, foldViewAt, mergePatch } from '../session/fold.ts';
+import { currentConfig, currentHeader, foldView, foldViewAt, mergePatch } from '../session/fold.ts';
 import { forkSession } from '../session/fork.ts';
 import { newMessageId, newSeed, newSessionId, newTurnId } from '../session/ids.ts';
 import {
@@ -555,6 +555,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   /** D-141: the books as last loaded, with the key they were loaded under (libraryKey). */
   private libCache: { key: string; lib: SessionLibrary; categories?: ReadonlyMap<string, string> } | null = null;
   private config: SessionConfig;
+  private effectiveHeader: SessionHeader;
   private running: TurnRun | null = null;
   /** Turns left open with a `held` answer (M6 decides them); new turns are refused meanwhile. */
   private readonly held = new Set<string>();
@@ -583,6 +584,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     this.ver = tree.version;
     this.memSeq = tree.lastMemSeq;
     this.config = currentConfig(log.header, entries);
+    this.effectiveHeader = currentHeader(log.header, entries);
     for (const e of entries) if (e.t === 'turn') this.turnIds.add(e.turn);
     this.lane = new Lane(ctx, this, ctx.lane);
   }
@@ -715,7 +717,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
    */
   library(): SessionLibrary {
     const key = libraryKey(this.ctx.home, this.config);
-    if (this.libCache?.key !== key) this.libCache = { key, lib: loadLibrary(this.ctx.home, this.config, this.log.header.cast) };
+    if (this.libCache?.key !== key) this.libCache = { key, lib: loadLibrary(this.ctx.home, this.config, this.header().cast) };
     return this.libCache.lib;
   }
 
@@ -750,7 +752,19 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
   // ---- reading -----------------------------------------------------------------------------------
 
   header(): SessionHeader {
-    return this.log.header;
+    return this.effectiveHeader;
+  }
+
+  setPersona(persona: Persona): void {
+    this.assertOpen();
+    if (this.running) throw new Refusal('session_busy', 'a turn is running');
+    const valid = validatePersona(persona);
+    if (!valid.ok) throw new Refusal('invalid_params', `invalid persona: ${valid.errors.map((e) => `${e.path}: ${e.message}`).join('; ')}`);
+    const entry = this.verbAppend({ t: 'persona', ts: this.now(), persona: valid.value });
+    this.effectiveHeader = { ...this.header(), cast: { ...this.header().cast, persona: entry.persona } };
+    this.libCache = null;
+    this.publish({ type: 'changed', version: this.ver, change: 'persona' });
+    this.lane.poke();
   }
 
   version(): number {
@@ -763,7 +777,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     const seed = this.library().seed;
     const c = this.viewCache;
     if (c?.version === this.ver && c.memSeq === this.memSeq && c.seed === seed) return c.view;
-    const view = foldView(this.log.header, this.log.entries(), this.tree(), { library: seed });
+    const view = foldView(this.header(), this.log.entries(), this.tree(), { library: seed });
     this.viewCache = { version: this.ver, memSeq: this.memSeq, seed, view };
     return view;
   }
@@ -921,7 +935,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     for (let i = 0; i < ID_ATTEMPTS; i++) {
       const newId = newSessionId(this.ctx.random);
       try {
-        const log = forkSession(this.ctx.home, { header: this.log.header, entries: this.log.entries() }, input.at, { newId, now: this.now() });
+        const log = forkSession(this.ctx.home, { header: this.header(), entries: this.log.entries() }, input.at, { newId, now: this.now() });
         log.close(); // not opened: the caller opens it with engine.session(id)
         return newId;
       } catch (e) {
@@ -967,7 +981,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (opts.explain !== undefined && typeof opts.explain !== 'boolean') throw new Refusal('invalid_params', 'explain must be a boolean');
     if (opts.draft !== undefined && opts.turn !== undefined) throw new Refusal('invalid_params', 'draft and turn exclude each other');
 
-    const header = this.log.header;
+    const header = this.header();
     const tree = this.tree();
     const library = this.library();
     const current = this.view();
@@ -1153,7 +1167,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (turn !== undefined) return directiveInsert(checkRecord(tree.msgs.get(turn)?.dir)?.directive);
     if (plan.config.director?.enabled !== true) return [];
     if (plan.kind === 'swipe' && plan.target !== undefined && swipeReuses(plan.config, plan.guidance)) {
-      const reused = reusedRecord(tree, plan.target, this.log.header.cast.persona);
+      const reused = reusedRecord(tree, plan.target, this.header().cast.persona);
       if (reused !== null) return directiveInsert(reused.directive);
     }
     return stubInsert();
@@ -1168,7 +1182,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (problem !== null) throw new Refusal('invalid_params', `invalid config: ${problem}`);
     const next = mergePatch<SessionConfig>(this.config, patch);
     // A patch that would make the config unreadable is refused before it reaches the journal.
-    const checked = checkHeader(JSON.parse(JSON.stringify({ ...this.log.header, config: next })) as unknown);
+    const checked = checkHeader(JSON.parse(JSON.stringify({ ...this.header(), config: next })) as unknown);
     if (!checked.ok) throw new Refusal('invalid_params', `invalid config: ${checked.why}`);
     this.verbAppend({ t: 'config', ts: this.now(), patch });
     this.config = next;
@@ -1275,7 +1289,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (limit !== undefined && !(Number.isSafeInteger(limit) && limit >= 1)) throw new Refusal('invalid_params', 'limit must be a positive integer');
     const view = this.view();
     const sent = sentByHeadRequest(view, this.tree());
-    const { character, persona } = this.log.header.cast;
+    const { character, persona } = this.header().cast;
     return searchHistory(view, null, input.query, {
       ...(before !== undefined ? { before } : {}),
       ...(limit !== undefined ? { limit } : {}),
@@ -1728,14 +1742,14 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (cfg.enabled !== false) return this.view();
     const seed = this.readableSeed();
     if (seed === EMPTY_SEED) return this.view();
-    return foldView(this.log.header, this.log.entries(), this.tree(), { library: seed });
+    return foldView(this.header(), this.log.entries(), this.tree(), { library: seed });
   }
 
   /** The readable books' seed as if the Compendium were on (the session's own seed while it is). */
   private readableSeed(): LibrarySeed {
     const cfg = compendiumConfigOf(this.config);
     if (cfg.enabled !== false) return this.library().seed;
-    return librarySeed(loreSources(this.log.header.cast, this.library().sources), { ...cfg, enabled: true });
+    return librarySeed(loreSources(this.header().cast, this.library().sources), { ...cfg, enabled: true });
   }
 
   /** The memory verbs' preconditions: an open session and no running turn. */

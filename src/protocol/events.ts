@@ -99,7 +99,7 @@ export type EventBody =
       /** The checkpointed text when it exists but was not committed (dropped, or an abandoned continue). */
       draft?: string;
     }
-  | { type: 'changed'; version: number; change: 'msg' | 'edit' | 'hide' | 'head'; id?: string }
+  | { type: 'changed'; version: number; change: 'msg' | 'edit' | 'hide' | 'head' | 'persona'; id?: string }
   | ({ type: 'notice' } & Notice)
   | { type: 'idle'; background: number };
 

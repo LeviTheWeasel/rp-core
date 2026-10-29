@@ -431,7 +431,7 @@ describe('every slash command (smoke)', () => {
         ['/director on', 'director on:'],
         ['/director off', 'director off (from the next turn)'],
         ['/help', 'Type to speak. Commands:'],
-        ['/persona', 'arrives with a later milestone'],
+        ['/persona', 'persona: "Levi"'],
         ['/bogus', 'unknown command /bogus'],
         ['/', 'a lone "/" is not a command'],
         ['/model narrator alt:default', 'narrator → alt:default'],

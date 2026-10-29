@@ -233,7 +233,7 @@ describe('REPL: models and settings', () => {
     expect(out).toContain('1 generation on this path · in 1000 tok · out 100 tok · cost $0.0012');
     expect(out).toMatch(/trace of [0-9a-f]{8} · script:default\n {2}window 8192 · reserve \d+ · prompt ~\d+ tok \(server: 1000\)/);
     expect(out).toContain('rp-core probe <connection>');
-    expect(out).toContain('/persona arrives with a later milestone');
+    expect(out).toContain('persona: "Levi"');
     expect(out).toContain('unknown command /bogus; /help lists the commands');
   });
 
@@ -360,6 +360,7 @@ describe('REPL: Ctrl+C, held lines, EOF', () => {
         return s.id;
       },
       header: () => s.header(),
+      setPersona: (persona) => s.setPersona(persona),
       version: () => s.version(),
       view: () => s.view(),
       busy: () => false,
