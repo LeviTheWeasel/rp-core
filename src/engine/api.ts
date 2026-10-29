@@ -448,14 +448,14 @@ export interface SessionHandle {
    * M5a: the entries of the current path's Compendium (library seed included) in handle order, live
    * only unless includeRetired; `type` keeps one entry type, 'note' or 'arc'. Read-only.
    */
-  memoryList(input?: { type?: EntryType | 'note' | 'arc'; includeRetired?: boolean }): MemoryRow[];
+  memoryList(input?: { at?: string; type?: EntryType | 'note' | 'arc'; includeRetired?: boolean }): MemoryRow[];
   /** M5a: one entry (C<n>, key or a unique name; live first) with its full render and its brief. not_found. */
-  memoryGet(input: { ref: string }): { ref: string; entry: CEntry; render: string; brief: string };
+  memoryGet(input: { ref: string; at?: string }): { ref: string; entry: CEntry; render: string; brief: string };
   /**
    * M5a (D-165): the session's tree first, then one tree per readable book (its overlays applied),
    * or only that book's with `book` (a library id; not_found when it is not a readable book).
    */
-  memoryTree(input?: { book?: string }): TreeNode[];
+  memoryTree(input?: { at?: string; book?: string }): TreeNode[];
   /**
    * M5a (D-163): export the session's entries and overlays (live and retired) under `name`. 'core':
    * a library lorebook (canonicalId(name)); 'compendium': <home>/exports/<id>.compendium.json. An

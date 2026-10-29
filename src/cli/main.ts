@@ -35,7 +35,7 @@ import { EXIT, runSend } from './oneshot.ts';
 import { cmdPreview } from './preview.ts';
 import { prepareProvider, ScriptFileError, type PreparedProvider } from './provider.ts';
 import { engineOptions, loadRuntime, redactor, type Runtime } from './runtime.ts';
-import type { SignalSource } from './signals.ts';
+import { EXIT_SIGINT, EXIT_SIGTERM, type SignalSource } from './signals.ts';
 import type { TurnKind } from '../session/entries.ts';
 
 const GLOBAL_FLAGS: Record<string, FlagKind> = {
@@ -433,18 +433,36 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
       const rt = runtimeOf(home, deps, p, providerOf(p, name));
       const engine = await Engine.open(engineOptions(rt));
       const redact = redactor(rt);
+      const abort = new AbortController();
+      let stopTurns = (): void => {};
+      let interrupted = false;
+      let terminated = false;
+      const signals = deps.signals ?? process;
+      const onInt = (): void => {
+        if (interrupted || terminated) return exitNow(EXIT_SIGINT);
+        interrupted = true;
+        stopTurns();
+      };
+      const onTerm = (): void => {
+        if (terminated) return exitNow(EXIT_SIGTERM);
+        terminated = true;
+        abort.abort();
+        if (!deps.input) process.stdin.destroy();
+      };
+      signals.on('SIGINT', onInt);
+      signals.on('SIGTERM', onTerm);
       const connection = (id: string) => {
         const c = rt.connections[id];
         if (!c) throw new Refusal('no_connection', `connection ${id} is not configured`);
         return c;
       };
-      await runRpc(deps.input ?? process.stdin, (line) => io.out.write(line), engine, home.dir, (event) => redactEvent(event, redact), {
+      try { await runRpc(deps.input ?? process.stdin, (line) => io.out.write(line), engine, home.dir, (event) => redactEvent(event, redact), {
         modelsList: async (conn) => {
           const c = connection(conn);
           if (!c.baseUrl) throw new Refusal('no_connection', `connection ${conn} has no model catalog URL`);
           let key: string | null = null;
           try { key = c.resolveKey ? await c.resolveKey() : (c.key ?? null); } catch { /* public catalogs may work without a key */ }
-          return listModels(c.baseUrl, { fetch: deps.fetch ?? fetch, key, signal: new AbortController().signal });
+          return listModels(c.baseUrl, { fetch: deps.fetch ?? fetch, key, signal: abort.signal });
         },
         capsGet: (conn, model) => {
           const c = connection(conn);
@@ -453,11 +471,15 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         capsProbe: async (conn, model, active) => {
           connection(conn);
           const quiet: Io = { out: memoryChannel(), err: memoryChannel() };
-          const report = await runProbe({ rt, io: quiet, json: true, target: conn, model, write: false, active, fetch: deps.fetch, clock: deps.clock ?? systemClock });
+          const report = await runProbe({ rt, io: quiet, json: true, target: conn, model, write: false, active, fetch: deps.fetch, clock: deps.clock ?? systemClock, signal: abort.signal });
           return report.results[0];
         },
-      });
-      return EXIT.done;
+      }, { signal: abort.signal, onReady: (control) => { stopTurns = control.stopTurns; } });
+      } finally {
+        signals.removeListener('SIGINT', onInt);
+        signals.removeListener('SIGTERM', onTerm);
+      }
+      return terminated ? EXIT_SIGTERM : EXIT.done;
     }
     case 'init':
       noPositionals(p, name, 0);
@@ -640,7 +662,8 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
   let home: Home | null = null;
   try {
     // Global flags may come before the command; the command's own parse accepts them anywhere.
-    const head = parseArgs(argv, { flags: GLOBAL_FLAGS, short: SHORT }, { stopAtPositional: true });
+    const headFlags = argv.includes('--stdio') ? { ...GLOBAL_FLAGS, ...COMMANDS.stdio!.flags } : GLOBAL_FLAGS;
+    const head = parseArgs(argv, { flags: headFlags, short: SHORT }, { stopAtPositional: true });
     const [givenName, ...rest] = head.positionals;
     if (bool(head, 'stdio') && givenName !== undefined) throw new UsageError('--stdio takes no command');
     const name = bool(head, 'stdio') ? 'stdio' : givenName;

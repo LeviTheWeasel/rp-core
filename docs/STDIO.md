@@ -4,6 +4,12 @@
 
 Requests run concurrently. Responses can arrive in a different order from requests, so match them by `id`. Event notifications have no `id`.
 
+The [example client](../tools/stdio-demo.py) starts a story from a character already in the library and prints one streamed reply:
+
+```bash
+python3 tools/stdio-demo.py <character-id> "Hello" --home ~/.rp-core
+```
+
 Start with `initialize` using protocol version 1:
 
 ```json
@@ -23,6 +29,8 @@ To send text and generate a reply in one call, use `turn/submit` with `sessionId
 
 While a turn runs, `message/edit`, `message/hide`, and `history/select` can change the history. If the version changes, the complete answer is durably held and the turn ends with `conflict{turnId,draft}`. `session/open` reports it in `openTurns` even after a restart. The client must call `turn/commitAnyway` or `turn/discard` before starting another turn. An answer committed after the head moved may become a side branch; a continued answer whose target text changed is discarded.
 
-Implemented methods: `initialize`, `session/list`, `session/new`, `session/open`, `session/close`, `session/configure`, `session/fork`, `session/preview`, `message/send`, `message/edit`, `message/hide`, `history/select`, `history/tails`, `history/search`, `turn/run`, `turn/submit`, `turn/stop`, `turn/commitAnyway`, `turn/discard`, `lore/test`, `director/show`, `models/list`, `caps/get`, `caps/probe`, `memory/list`, `memory/get`, `memory/tree`, `memory/status`, `memory/wait`, `memory/recall`, `memory/file`, `memory/add`, `memory/edit`, `memory/retire`, `memory/restore`, `memory/undo`, `memory/refile`, `memory/retry`, `memory/export`, and `shutdown`. `models/list` and `caps/probe` contact the configured server; `caps/get` reads the locally resolved capabilities. `caps/probe` accepts `active:true` to call the model for capability checks. Memory reads currently use the active path; historical `at` reads remain to be implemented. Closing stdin stops running turns and shuts the engine down cleanly. A protocol error has JSON-RPC's `error` object; engine refusals use code `-32000` and `error.data.code`.
+Implemented methods: `initialize`, `session/list`, `session/new`, `session/open`, `session/close`, `session/configure`, `session/fork`, `session/preview`, `message/send`, `message/edit`, `message/hide`, `history/select`, `history/tails`, `history/search`, `turn/run`, `turn/submit`, `turn/stop`, `turn/commitAnyway`, `turn/discard`, `lore/test`, `director/show`, `models/list`, `caps/get`, `caps/probe`, `memory/list`, `memory/get`, `memory/tree`, `memory/status`, `memory/wait`, `memory/recall`, `memory/file`, `memory/add`, `memory/edit`, `memory/retire`, `memory/restore`, `memory/undo`, `memory/refile`, `memory/retry`, `memory/export`, and `shutdown`. `models/list` and `caps/probe` contact the configured server; `caps/get` reads the locally resolved capabilities. `caps/probe` accepts `active:true` to call the model for capability checks. `memory/list`, `memory/get`, and `memory/tree` accept `at:<messageId>` to read the Compendium on a historical branch without moving the session's head. Closing stdin stops running turns and shuts the engine down cleanly. SIGINT stops running turns without closing the host; a second SIGINT exits immediately. SIGTERM stops turns, closes sessions, and exits with code 143. A protocol error has JSON-RPC's `error` object; engine refusals use code `-32000` and `error.data.code`.
 
-The protocol is **not frozen yet**. M6 still needs historical memory reads, JSON Schema, and full signal and reconnection behavior. The planned complete contract is in [ARCHITECTURE.md](ARCHITECTURE.md#122-формат-провода-m6).
+The [JSON Schema](../src/protocol/protocol.schema.json) for commands, responses, and events is generated from TypeScript types with `bun run schema`; `bun run schema:check` verifies that the checked-in copy is current. It allows extra fields for forward compatibility.
+
+`session/open` is the reconnection point: it returns the current snapshot and replays recovery notices for turns interrupted by a crash. Past live events are not replayed; refresh the snapshot after reconnecting. The planned contract is in [ARCHITECTURE.md](ARCHITECTURE.md#122-формат-провода-m6).

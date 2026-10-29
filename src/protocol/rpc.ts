@@ -27,6 +27,8 @@ export interface RpcCatalog {
   capsGet(conn: string, model: string): unknown;
   capsProbe(conn: string, model: string, active: boolean): Promise<unknown>;
 }
+export interface RpcControl { stopTurns(): void }
+export interface RpcRunOptions { signal?: AbortSignal; onReady?: (control: RpcControl) => void }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -78,7 +80,7 @@ function snapshot(home: string, session: SessionHandle, active: ReadonlyMap<stri
 }
 
 /** A concurrent JSON-RPC host: turn events stream while later stdin lines can stop that turn. */
-export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>, write: Writer, engine: EngineHandle, home: string, filterEvent: (event: Event) => Event = (event) => event, catalog?: RpcCatalog): Promise<void> {
+export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>, write: Writer, engine: EngineHandle, home: string, filterEvent: (event: Event) => Event = (event) => event, catalog?: RpcCatalog, options: RpcRunOptions = {}): Promise<void> {
   const sessions = new Map<string, SessionHandle>();
   const turns = new Map<string, { sessionId: string; kind: string; handle: TurnHandle }>();
   const pumps = new Set<Promise<void>>();
@@ -91,6 +93,7 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
   const stream = (async (): Promise<void> => {
     for await (const event of engine.events()) coalescer.push(event);
   })();
+  options.onReady?.({ stopTurns: () => { for (const turn of turns.values()) turn.handle.stop(); } });
   const sessionOf = (p: Record<string, unknown>): SessionHandle => {
     const id = stringParam(p, 'sessionId')!;
     const session = sessions.get(id);
@@ -183,19 +186,16 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       case 'history/search': return sessionOf(p).search({ query: stringParam(p, 'query')!, ...(p.before === undefined ? {} : { before: numberParam(p, 'before') }), ...(p.limit === undefined ? {} : { limit: numberParam(p, 'limit') }) });
       case 'memory/list': {
         const s = sessionOf(p);
-        if (p.at !== undefined) throw new InvalidParams('memory/list at is not supported yet');
         const type = stringParam(p, 'type', true);
-        return s.memoryList({ ...(type !== undefined ? { type: type as EntryType } : {}), ...(p.includeRetired === undefined ? {} : { includeRetired: booleanParam(p, 'includeRetired') }) });
+        return s.memoryList({ ...(p.at === undefined ? {} : { at: stringParam(p, 'at') }), ...(type !== undefined ? { type: type as EntryType } : {}), ...(p.includeRetired === undefined ? {} : { includeRetired: booleanParam(p, 'includeRetired') }) });
       }
       case 'memory/get': {
         const s = sessionOf(p);
-        if (p.at !== undefined) throw new InvalidParams('memory/get at is not supported yet');
-        return s.memoryGet({ ref: stringParam(p, 'ref')! });
+        return s.memoryGet({ ref: stringParam(p, 'ref')!, ...(p.at === undefined ? {} : { at: stringParam(p, 'at') }) });
       }
       case 'memory/tree': {
         const s = sessionOf(p);
-        if (p.at !== undefined) throw new InvalidParams('memory/tree at is not supported yet');
-        return s.memoryTree({ ...(p.book === undefined ? {} : { book: stringParam(p, 'book') }) });
+        return s.memoryTree({ ...(p.at === undefined ? {} : { at: stringParam(p, 'at') }), ...(p.book === undefined ? {} : { book: stringParam(p, 'book') }) });
       }
       case 'memory/status': return sessionOf(p).memoryStatus();
       case 'memory/wait': return sessionOf(p).memoryWait({ ...(p.timeoutMs === undefined ? {} : { timeoutMs: numberParam(p, 'timeoutMs') }) });
@@ -254,11 +254,15 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       }
       case 'turn/run': {
         const s = sessionOf(p);
+        if (p.inspect !== undefined) throw new Refusal('gate_unsupported', 'turn inspection is not available through protocol 1');
         const kind = stringParam(p, 'kind');
         if (kind !== 'reply' && kind !== 'swipe' && kind !== 'continue') throw new InvalidParams('kind must be reply, swipe or continue');
         const onError = stringParam(p, 'onError', true);
         if (onError !== undefined && onError !== 'drop' && onError !== 'keep') throw new InvalidParams('onError must be drop or keep');
-        const turn = s.runTurn({ kind, expectedVersion: numberParam(p, 'expectedVersion'), ...(stringParam(p, 'guidance', true) !== undefined ? { guidance: p.guidance as string } : {}), ...(onError ? { onError } : {}) });
+        const emptyReply = stringParam(p, 'emptyReply', true);
+        if (emptyReply !== undefined && emptyReply !== 'fail' && emptyReply !== 'keep') throw new InvalidParams('emptyReply must be fail or keep');
+        const fallback = stringParam(p, 'fallback', true);
+        const turn = s.runTurn({ kind, expectedVersion: numberParam(p, 'expectedVersion'), ...(stringParam(p, 'guidance', true) !== undefined ? { guidance: p.guidance as string } : {}), ...(onError ? { onError } : {}), ...(emptyReply ? { emptyReply } : {}), ...(fallback ? { fallback } : {}) });
         watch(s.id, kind, turn);
         return { turnId: turn.turnId, messageId: turn.messageId };
       }
@@ -282,8 +286,16 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       default: throw new Error(`method not found: ${method}`);
     }
   };
+  const iterator = lines(input)[Symbol.asyncIterator]();
+  const aborted = new Promise<null>((resolve) => {
+    if (options.signal?.aborted) resolve(null);
+    else options.signal?.addEventListener('abort', () => resolve(null), { once: true });
+  });
   try {
-    for await (const line of lines(input)) {
+    for (;;) {
+      const next = options.signal ? await Promise.race([iterator.next(), aborted]) : await iterator.next();
+      if (next === null || next.done) break;
+      const line = next.value;
       let value: unknown;
       try { value = JSON.parse(line); }
       catch { send(error(null, -32700, 'Parse error')); continue; }
@@ -299,6 +311,7 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
           if (Object.hasOwn(request, 'id')) send({ jsonrpc: '2.0', id: request.id, result });
           for (const event of recovery) coalescer.push(event);
         } catch (e) {
+          if (options.signal?.aborted) return;
           if (!Object.hasOwn(request, 'id')) return;
           if (e instanceof Refusal) send(error(request.id ?? null, -32000, e.message, { code: e.code }));
           else if (e instanceof ProviderError) send(error(request.id ?? null, -32000, e.message, { code: e.code }));
@@ -312,6 +325,12 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       if (shutdown) break;
     }
   } finally {
+    // An aborted input may still be waiting in a host-owned iterator; do not wait for its return.
+    if (!options.signal?.aborted) await iterator.return?.(undefined);
+    else {
+      const closing = iterator.return?.(undefined);
+      if (closing) void closing.catch(() => {});
+    }
     await engine.close();
     await Promise.allSettled([...pendingRequests]);
     await Promise.allSettled([...pumps]);

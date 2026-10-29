@@ -114,6 +114,8 @@ test('Compendium commands read and update the opened session', async () => {
   expect(added.result.changed).toBe(true);
   const list = await ask(4, 'memory/list', { sessionId, type: 'note' });
   expect(list.result.map((row: { name: string }) => row.name)).toEqual(['Lamp']);
+  expect((await ask(16, 'memory/list', { sessionId, at: created.snapshot.path[0].id, type: 'note' })).result).toHaveLength(1);
+  expect((await ask(17, 'memory/list', { sessionId, at: 'missing-message' })).error.data.code).toBe('not_found');
   const ref = list.result[0].ref;
   expect((await ask(5, 'memory/get', { sessionId, ref })).result.entry.content).toBe('A blue lamp.');
   expect((await ask(6, 'memory/edit', { sessionId, ref, content: 'A red lamp.' })).result.changed).toBe(true);

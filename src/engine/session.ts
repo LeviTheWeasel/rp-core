@@ -1541,17 +1541,27 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     return { key: e.key, changed: true, ...this.untold() };
   }
 
-  memoryList(input?: { type?: EntryType | 'note' | 'arc'; includeRetired?: boolean }): MemoryRow[] {
+  /** Fold the Compendium on any message path, without moving the session's head. */
+  private memoryAt(at: unknown): CompendiumView {
+    this.assertOpen();
+    if (at === undefined) return this.view().compendium;
+    if (typeof at !== 'string' || at === '') throw new Refusal('invalid_params', 'at must be a message id');
+    const tree = this.tree();
+    this.mustExist(tree, at);
+    return foldViewAt(this.header(), tree, at, { library: this.library().seed }).compendium;
+  }
+
+  memoryList(input?: { at?: string; type?: EntryType | 'note' | 'arc'; includeRetired?: boolean }): MemoryRow[] {
     this.assertOpen();
     const opts = input ?? {};
-    if (!isObject(opts)) throw new Refusal('invalid_params', 'memoryList takes {type?, includeRetired?}');
-    const { type, includeRetired } = opts;
+    if (!isObject(opts)) throw new Refusal('invalid_params', 'memoryList takes {at?, type?, includeRetired?}');
+    const { at, type, includeRetired } = opts;
     if (type !== undefined && type !== 'note' && type !== 'arc' && !isEntryType(type)) {
       throw new Refusal('invalid_params', `type must be note, arc or an entry type (${ENTRY_TYPES.join(', ')})`);
     }
     if (includeRetired !== undefined && typeof includeRetired !== 'boolean') throw new Refusal('invalid_params', 'includeRetired must be true or false');
     const rows: MemoryRow[] = [];
-    for (const { ref, entry } of entryRefs(this.view().compendium)) {
+    for (const { ref, entry } of entryRefs(this.memoryAt(at))) {
       if (entry.retired && includeRetired !== true) continue;
       if (type !== undefined && entryKind(entry) !== type) continue;
       rows.push(memoryRow(ref, entry));
@@ -1559,20 +1569,22 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     return rows;
   }
 
-  memoryGet(input: { ref: string }): { ref: string; entry: CEntry; render: string; brief: string } {
+  memoryGet(input: { ref: string; at?: string }): { ref: string; entry: CEntry; render: string; brief: string } {
     this.assertOpen();
     if (!isObject(input)) throw new Refusal('invalid_params', 'memoryGet needs {ref}');
-    const c = this.view().compendium;
-    const entry = this.findEntry(input.ref, 'live');
+    if (typeof input.ref !== 'string' || input.ref.trim() === '') throw new Refusal('invalid_params', 'ref must be an entry handle (C<n>), key or name');
+    const c = this.memoryAt(input.at);
+    const entry = resolveEntryRef(c, input.ref.trim(), 'live');
+    if (!entry) throw new Refusal('not_found', `no single entry matches ${JSON.stringify(input.ref)} (use its C<n> handle or key)`);
     return { ref: refOf(c, entry.key) ?? entry.key, entry, render: renderEntry(entry), brief: renderBrief(entry, COMPENDIUM_LIMITS.full.briefChars) };
   }
 
-  memoryTree(input?: { book?: string }): TreeNode[] {
+  memoryTree(input?: { at?: string; book?: string }): TreeNode[] {
     this.assertOpen();
     const opts = input ?? {};
-    if (!isObject(opts) || (opts.book !== undefined && typeof opts.book !== 'string')) throw new Refusal('invalid_params', 'memoryTree takes {book?}');
+    if (!isObject(opts) || (opts.book !== undefined && typeof opts.book !== 'string')) throw new Refusal('invalid_params', 'memoryTree takes {at?, book?}');
     const lib = this.library();
-    const all = [...this.view().compendium.entries.values()];
+    const all = [...this.memoryAt(opts.at).entries.values()];
     const trees: TreeNode[] = [];
     if (opts.book === undefined) trees.push(deriveTree(all.filter((e) => e.origin.kind === 'session')));
     const categories = this.categories();

@@ -14,7 +14,9 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit -p ."
+    "typecheck": "bunx tsc --noEmit -p .",
+    "schema": "bun tools/generate-protocol-schema.ts",
+    "schema:check": "bun tools/generate-protocol-schema.ts --check"
   },
   "dependencies": {
     "@opentui/core": "0.7.0",
