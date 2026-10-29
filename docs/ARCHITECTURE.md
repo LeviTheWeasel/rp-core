@@ -1053,7 +1053,7 @@ interface PathView {
 
 ```ts
 interface RecordStore {
-  create(header: SessionHeader): Promise<void>;
+  create(header: SessionHeader, initial?: readonly Entry[]): Promise<void>; // header + first rows atomically
   acquire(session: string): Promise<Lease>;                   // эксклюзивно; Lease.renew() / release()
   read(session: string): AsyncIterable<SessionHeader | Entry>; // заголовок, затем по seq; рваный хвост уже отброшен
   append(lease: Lease, entries: Entry[], durable: boolean): Promise<void>;  // каждая запись атомарна
@@ -1071,7 +1071,7 @@ interface RecordStore {
 
 Тесты гоняются на файловой реализации и на второй, in-memory, написанной по этой спецификации. Это доказывает, что порт не завязан на файлы.
 
-*Примечание реализации M9.* Публичные `SessionHandle` и журнал хода пока синхронны: `turn` и `prep` должны быть долговечны до следующего шага. Поэтому для непосредственного встраивания движок принимает синхронный `SessionStore` (`create/open/fork/list`, возвращает `SessionLog`), с файловой реализацией по умолчанию и in-memory реализацией для хостов и тестов. Асинхронный `RecordStore` выше остаётся отдельным контрактом записей и проходит conformance; использовать его напрямую как backend движка без перевода всех записей хода на `await` нельзя. Подробности — `docs/M9-HOST.md`.
+*Примечание реализации M9.* Синхронный `Engine.open` принимает `SessionStore` (`create/open/fork/list`, возвращает `SessionLog`) для существующих клиентов. `Engine.openWithRecordStore` принимает асинхронный `RecordStore` и возвращает асинхронный фасад сессии. Он ждёт долговечной записи `turn` до вызовов агентов, `prep` до вызова рассказчика и ответа до итогового события. Так прежний синхронный API не ломается, а асинхронный хост получает тот же движок. Подробности — `docs/M9-HOST.md`.
 
 ---
 

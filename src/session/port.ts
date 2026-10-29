@@ -7,8 +7,9 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parseEntry, parseHeader } from './entries.ts';
+import { currentHeader } from './fold.ts';
 import type { Entry, SessionHeader } from './entries.ts';
-import { createSessionLog, FileSessionLog, listSessions, openSessionLog, sessionsDir, SessionLockedError } from './log.ts';
+import { createSessionLogWith, FileSessionLog, listSessions, openSessionLog, sessionsDir, SessionLockedError } from './log.ts';
 import type { SessionLog } from './log.ts';
 
 export interface Lease {
@@ -18,7 +19,8 @@ export interface Lease {
 }
 
 export interface RecordStore {
-  create(header: SessionHeader): Promise<void>;
+  /** Publish the header and initial rows atomically. */
+  create(header: SessionHeader, initial?: readonly Entry[]): Promise<void>;
   acquire(session: string): Promise<Lease>;
   read(session: string): AsyncIterable<SessionHeader | Entry>;
   append(lease: Lease, entries: readonly Entry[], durable: boolean): Promise<void>;
@@ -65,10 +67,10 @@ export class MemoryRecordStore implements RecordStore {
   private readonly records = new Map<string, { header: SessionHeader; rows: Entry[] }>();
   private readonly owners = new Map<string, MemoryLease>();
 
-  async create(header: SessionHeader): Promise<void> {
+  async create(header: SessionHeader, initial: readonly Entry[] = []): Promise<void> {
     const copy = checkedHeader(header);
     if (this.records.has(copy.id)) throw new Error(`session already exists: ${copy.id}`);
-    this.records.set(copy.id, { header: copy, rows: [] });
+    this.records.set(copy.id, { header: copy, rows: validBatch(initial, 0) });
   }
 
   async acquire(session: string): Promise<Lease> {
@@ -103,11 +105,10 @@ export class MemoryRecordStore implements RecordStore {
   }
 
   async list(): Promise<{ id: string; title?: string; updated: string }[]> {
-    return [...this.records.values()].map(({ header, rows }) => ({
-      id: header.id,
-      ...(header.title !== undefined ? { title: header.title } : {}),
-      updated: (rows.at(-1) as { ts?: string } | undefined)?.ts ?? header.created,
-    }));
+    return [...this.records.values()].map(({ header, rows }) => {
+      const title = currentHeader(header, rows).title;
+      return { id: header.id, ...(title !== undefined ? { title } : {}), updated: (rows.at(-1) as { ts?: string } | undefined)?.ts ?? header.created };
+    });
   }
 }
 
@@ -138,8 +139,9 @@ export class FileRecordStore implements RecordStore {
     mkdirSync(sessionsDir(resolve(home)), { recursive: true });
   }
 
-  async create(header: SessionHeader): Promise<void> {
-    const log = createSessionLog(this.home, checkedHeader(header));
+  async create(header: SessionHeader, initial: readonly Entry[] = []): Promise<void> {
+    const rows = validBatch(initial, 0);
+    const log = createSessionLogWith(this.home, checkedHeader(header), rows);
     log.close();
   }
 
@@ -216,6 +218,11 @@ export async function checkRecordStoreConformance(
   } finally { await lease.release(); }
   const reopened = await store.acquire(header.id);
   await reopened.release();
+  const initialHeader = { ...header, id: `${header.id}_initial` };
+  await store.create(initialHeader, entries);
+  const initialRows: (SessionHeader | Entry)[] = [];
+  for await (const row of store.read(initialHeader.id)) initialRows.push(row);
+  if (!isDeepStrictEqual(initialRows, [initialHeader, ...entries])) throw new Error('atomic create omitted initial rows');
   if (reopen) {
     const fresh = await reopen();
     const rows: (SessionHeader | Entry)[] = [];

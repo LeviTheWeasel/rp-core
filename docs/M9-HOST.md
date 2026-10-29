@@ -1,6 +1,6 @@
 # M9 host API (in progress)
 
-This branch adds the host-facing pieces of M9. `Engine.open` accepts a synchronous `SessionStore` for its journal; without one it uses the filesystem journal under `home/sessions`.
+This branch adds the host-facing pieces of M9. `Engine.open` accepts a synchronous `SessionStore` for its journal; without one it uses the filesystem journal under `home/sessions`. `Engine.openWithRecordStore` connects the asynchronous `RecordStore` port to the turn lifecycle and returns an asynchronous facade.
 
 ## Hooks
 
@@ -36,11 +36,23 @@ In stdio, declare `capabilities.gates: ['review', 'transform']` at `initialize`.
 
 `rp-core/testing` exports `MemoryRecordStore`, `FileRecordStore`, and `checkRecordStoreConformance`. The port transports the session header and ordered `Entry` rows, and takes an exclusive `Lease` for appends. The file implementation wraps the existing durable JSONL journal; the memory implementation clones rows at its boundary. The contract checks ordering, sequence monotonicity, exclusivity, and optional reopening of durable rows.
 
-For the current synchronous `SessionHandle` API, a host supplies `SessionStore` instead. It has `create`, `open`, `fork` and `list`; each opened `SessionLog` appends entries synchronously and durably before the operation continues. The in-memory reference implementation supports a full turn, fork and reopening through the engine:
+For the synchronous `SessionHandle` API, a host can supply `SessionStore`. It has `create`, `open`, `fork` and `list`; each opened `SessionLog` appends entries synchronously and durably before the operation continues. The in-memory reference implementation supports a full turn, fork and reopening through the engine:
 
 ```ts
 const sessionStore = new MemorySessionStore();
 const engine = await Engine.open({ home, connections, sessionStore });
 ```
 
-This synchronous boundary matches Bunraku's in-process `bun:sqlite` storage. The asynchronous `RecordStore` contract remains separately available for host adapters and conformance testing. Bridging a genuinely asynchronous store into `SessionHandle` would require asynchronous journal writes throughout the engine; a write-behind adapter would break the turn durability rules.
+For an asynchronous store, use `Engine.openWithRecordStore` and await session operations:
+
+```ts
+const engine = await Engine.openWithRecordStore({ home, connections, recordStore });
+const session = await engine.createSession({ character });
+const sent = await session.send({ text: 'Hello', expectedVersion: await session.version() });
+const turn = await session.runTurn({ kind: 'reply', expectedVersion: sent.version });
+for await (const event of turn.events) { /* render event */ }
+await turn.result;
+await engine.close();
+```
+
+The facade keeps an in-memory fold of each open session and queues writes to the supplied `RecordStore`. It waits for the `turn` row before any agent call, for `prep` before the narrator call, and for the committed answer before announcing it. Public session operations resolve after their writes. A failed durable write prevents the provider call and releases the lease when the engine closes. `create(header, initial)` must publish the header and first rows atomically; adapters must implement that part of the port.

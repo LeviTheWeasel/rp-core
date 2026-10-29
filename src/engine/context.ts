@@ -20,6 +20,8 @@ import type { SessionStore } from '../session/backend.ts';
 export interface EngineCtx {
   home: string;
   sessionStore: SessionStore;
+  /** Async RecordStore mode: flush this session's ordered writes before a durability boundary. */
+  journalFlush?: (id: string) => Promise<void>;
   clock: () => Date;
   random: RandomBytes;
   timeZone: string;

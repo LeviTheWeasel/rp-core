@@ -81,6 +81,12 @@ class MemorySessionLog implements SessionLog {
 /** A host-owned in-memory journal that survives Engine.close() and a later Engine.open(). */
 export class MemorySessionStore implements SessionStore {
   private readonly records = new Map<string, MemoryRecord>();
+  /** Used by the asynchronous RecordStore adapter after releasing its lease. */
+  drop(id: string): void {
+    const record = this.records.get(id);
+    if (record?.owner) throw new Error(`cannot drop open session ${id}`);
+    this.records.delete(id);
+  }
   create(header: SessionHeader, initial: readonly EntryInput[]): SessionLog {
     const copy = validHeader(header);
     if (this.records.has(copy.id)) throw new Error(`session already exists: ${copy.id}`);

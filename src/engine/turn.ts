@@ -447,8 +447,10 @@ export class TurnRun {
     let ending: Ending;
     try {
       ending = await this.body();
+      await this.ctx.journalFlush?.(this.host.sessionId);
     } catch (e) {
       ending = this.crashed(e);
+      try { await this.ctx.journalFlush?.(this.host.sessionId); } catch { /* the failure is already reported */ }
     }
     this.finish(ending);
   }
@@ -457,6 +459,8 @@ export class TurnRun {
 
   private async body(): Promise<Ending> {
     const { plan } = this;
+    // `turn` must be durable before any agent or narrator model call begins.
+    await this.ctx.journalFlush?.(this.host.sessionId);
     let hooked: DepthInsert[] = [];
     if (this.ctx.hooks?.beforeAssemble) {
       this.emit({ type: 'agent', agent: 'host', turnId: this.entry.turn, status: 'started' });
@@ -513,6 +517,8 @@ export class TurnRun {
       ...(shaped.cont ? { cont: shaped.cont } : {}),
       ...(shaped.prefill !== undefined && plan.kind !== 'continue' ? { prefill: shaped.prefill } : {}),
     });
+    // `prep` is the recovery point; no provider request may overtake its durable write.
+    await this.ctx.journalFlush?.(this.host.sessionId);
     if (shaped.prefill !== undefined && plan.kind !== 'continue') {
       this.emit({ type: 'prefill', turnId: this.entry.turn, text: shaped.prefill });
     }
@@ -1365,6 +1371,7 @@ export class TurnRun {
           return { kind: 'held' as const, entry };
         })()
       : placeCommit(this.host, commitPlan);
+    await this.ctx.journalFlush?.(this.host.sessionId);
     this.committing = false;
     if (placed.kind === 'msg') {
       this.emit({ type: 'changed', version: placed.entry.seq, change: 'msg', id: placed.entry.id });
