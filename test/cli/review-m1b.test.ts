@@ -4,7 +4,7 @@
 // - a key with an invisible character pasted along is refused before fetch can quote it;
 // - `probe --write` during an auth failure stores nothing and exits 1;
 // - a D-53 header variable that is not set fails only its own connection, not every command;
-// - /model refuses a connection the runtime skipped (gemini M8) with the reason.
+// - /model accepts a configured native connection.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -194,16 +194,15 @@ describe('config: one connection\'s problem is not every command\'s', () => {
   );
 
   test(
-    '/model on a connection the runtime skipped (gemini arrives in M8) is refused with the reason',
+    '/model accepts a configured native Gemini connection',
     async () => {
       const home = tmpHome('rp-core-review-');
       writeFileSync(join(home, 'config.toml'), `[connections.mock]\nbase_url = "${base()}"\n[connections.gemini]\ndialect = "gemini"\nkey_env = "X"\n[roles]\nnarrator = "mock:m1"\n`);
       const id = await newSession(home, {});
       const r = await cli(['chat', id, '--home', home], {}, '/model gemini:flash\n/model\n/quit\n');
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain(`/model narrator: connection "gemini" cannot be used: dialect 'gemini' is not supported yet (M8)`);
-      expect(r.stdout).not.toContain('narrator → gemini:flash');
-      expect(r.stdout).toContain('mock:m1'); // the binding did not change
+      expect(r.stdout).toContain('gemini:flash');
+      expect(r.stdout).not.toContain('cannot be used');
     },
     T,
   );

@@ -2,6 +2,102 @@
   "as_of": "2026-10-26",
   "rows": [
     {
+      "name": "Gemini 2.5 thinking budget",
+      "match": "*gemini-2.5*",
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+      "caps": {
+        "reasoning": {
+          "control": "budget",
+          "canDisable": false
+        }
+      }
+    },
+    {
+      "name": "Gemini 2.5 Flash thinking may be disabled",
+      "match": "*gemini-2.5-flash*",
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+      "caps": {
+        "reasoning": {
+          "control": "budget",
+          "canDisable": true
+        }
+      }
+    },
+    {
+      "name": "Gemini 3 thinking levels",
+      "match": "*gemini-3*",
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+      "caps": {
+        "reasoning": {
+          "control": "level",
+          "canDisable": false,
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Gemini 4 thinking levels",
+      "match": "*gemini-4*",
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+      "caps": {
+        "reasoning": {
+          "control": "level",
+          "canDisable": false,
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Gemini 3 Flash Lite minimal thinking",
+      "match": "*gemini-3*flash-lite*",
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+      "caps": {
+        "reasoning": {
+          "efforts": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Gemini 3 Flash minimal thinking",
+      "match": "*gemini-3-flash*",
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+      "caps": {
+        "reasoning": {
+          "efforts": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    {
       "name": "Claude 4 through 4.5",
       "match": "*claude-*4-*",
       "dialect": "anthropic",

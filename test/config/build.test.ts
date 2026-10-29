@@ -81,14 +81,12 @@ tools = "native"
 `;
 
 describe('buildConnections', () => {
-  test('Anthropic builds a native connection; Gemini remains deferred', () => {
+  test('Anthropic and Gemini build native connections', () => {
     const { impl } = stubs();
     const cfg = parseConfig(CONFIG + '\n[connections.g]\ndialect = "gemini"\n', null);
     const out = buildConnectionsWith(cfg, { env: { RP_TITLE: 'rp-core' }, secrets: recordingSecrets(), capsCache: {} }, impl);
-    expect(Object.keys(out.connections)).toEqual(['ollama', 'box', 'openrouter', 'claude']);
-    expect(out.skipped).toEqual([
-      { id: 'g', why: "dialect 'gemini' is not supported yet (M8)" },
-    ]);
+    expect(Object.keys(out.connections)).toEqual(['ollama', 'box', 'openrouter', 'claude', 'g']);
+    expect(out.skipped).toEqual([]);
   });
 
   test('origin, local (guessed or overridden), dialect, baseUrl; no key read at build time', () => {

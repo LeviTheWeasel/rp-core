@@ -4,8 +4,8 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M7**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
-  koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), or native Claude, with SillyTavern presets
+- **Status:** milestone **M8**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+  koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), or native Claude and Gemini, with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
   it notes to remember. The [Compendium](#the-compendium) keeps typed world knowledge (characters,
   places, items…) from RoleCall exports, from your own entries and, in the background, from the
@@ -80,7 +80,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | M5c | Recall: a model picks the Compendium entries before each answer (or ahead of it, between turns, on a local server); `/memory recall`, `profile`, `mode`; slot pinning on llama.cpp and latency measurements ([details](#not-in-m5b-yet)) |
 | M6 | `--stdio` for other UIs: the first JSON-RPC methods work on the M6 branch; the full protocol is still in progress ([current methods](STDIO.md)) |
 | M7 | Native Anthropic Messages API |
-| M8 | Native Gemini (planned) |
+| M8 | Native Gemini generateContent API |
 
 ## Install
 
@@ -2343,6 +2343,11 @@ key_cmd = ["secret-tool", "lookup", "service", "rp-core", "conn", "deepseek"]
 dialect = "anthropic"
 key_env = "ANTHROPIC_API_KEY"
 # cache_ttl = "1h"             # default; use "5m" for a shorter cache
+
+# Native Gemini generateContent API
+[connections.gemini]
+dialect = "gemini"
+key_env = "GEMINI_API_KEY"
 ```
 
 - **Context window.** For llama.cpp and LM Studio the window is what you started the server with
@@ -2352,6 +2357,9 @@ key_env = "ANTHROPIC_API_KEY"
   `/model narrator claude:<model id>` or the TUI model picker. The connection uses the Messages API,
   including native tools, prompt cache marks, structured output and signed thinking blocks within
   a tool loop. `api_version` can pin an API version; otherwise it uses `2023-06-01`.
+- **Native Gemini:** `rp-core models gemini` reads Google's model catalog. Use a listed model ID in
+  `/model narrator gemini:<model id>` or the TUI picker. The native connection uses
+  `streamGenerateContent`, function calls and signed parts within a tool loop.
 - **Switching mid-story:** `/model narrator openrouter:<model id>`. The next answer comes from the
   new model; the story stays the same.
 

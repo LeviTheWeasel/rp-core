@@ -43,6 +43,8 @@ Set `context_length` to the context window the server **actually** uses. With Ol
 
 For native Claude, add `[connections.claude]` with `dialect = "anthropic"` and `key_env = "ANTHROPIC_API_KEY"` to `config.toml`, set that environment variable, then run `rp-core models claude` to see available model IDs. Select one with **F4** in the TUI or `/model narrator claude:model-id` in a chat.
 
+For native Gemini, add `[connections.gemini]` with `dialect = "gemini"` and `key_env = "GEMINI_API_KEY"`, set the variable, then run `rp-core models gemini`. Choose a listed model with **F4** or `/model narrator gemini:model-id`.
+
 ## Start a chat
 
 ```bash

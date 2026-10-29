@@ -2,6 +2,51 @@
   "as_of": "2026-10-26",
   "rows": [
     {
+      "name": "Google Gemini native API",
+      "match": {
+        "hostname": "generativelanguage.googleapis.com"
+      },
+      "dialect": "gemini",
+      "as_of": "2026-10-29",
+      "src": "https://ai.google.dev/api/generate-content",
+      "caps": {
+        "tools": "native",
+        "toolChoice": [
+          "auto",
+          "none"
+        ],
+        "toolChoiceHonored": true,
+        "parallelToolCalls": "never",
+        "strictTools": false,
+        "structuredOutput": {
+          "mode": "json_schema",
+          "confirmedBy": "host"
+        },
+        "midSystem": "as-user",
+        "alternation": "free",
+        "prefill": "none",
+        "reasoning": {
+          "output": "gemini-parts",
+          "control": "none",
+          "canDisable": false,
+          "echo": "tool-turn"
+        },
+        "samplers": {
+          "accepted": [
+            "temperature",
+            "top_p",
+            "top_k",
+            "seed",
+            "stop",
+            "max_tokens"
+          ]
+        },
+        "streamUsage": "always",
+        "caching": "auto-prefix",
+        "stopMax": 5
+      }
+    },
+    {
       "name": "Anthropic Messages API",
       "match": {
         "hostname": "api.anthropic.com"

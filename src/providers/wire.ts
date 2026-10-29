@@ -303,7 +303,10 @@ export interface ConnectionOverrides {
 }
 
 /** Body keys and header names an override may never touch [D-53]. */
-export const PROTECTED_BODY_KEYS: readonly string[] = ['model', 'messages', 'stream', 'tools', 'tool_choice'];
+export const PROTECTED_BODY_KEYS: readonly string[] = [
+  'model', 'messages', 'stream', 'tools', 'tool_choice',
+  'contents', 'systemInstruction', 'generationConfig', 'toolConfig', 'safetySettings',
+];
 /**
  * Compared lower-case and trimmed. The architect's four, plus the rest of Bunraku's list
  * (params/custom.ts PROTECTED_HEADER_KEYS): other credential headers and the framing the fetch sets.
