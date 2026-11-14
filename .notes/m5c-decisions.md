@@ -194,3 +194,10 @@ is an RP fine-tune; `/memory profile` shows the binding.
   'the answer was not a selection' for prose; status after a skipped prefetch says what the next reply
   does (cli#3, #6, #8, #9, #10).
 - D-208 (JSON prefill) is in this round.
+
+### K amended (2026-11-14, the lead, after the docs check)
+
+Ruling K's "at most two recall calls" counts recall's own calls: the first answer, then one
+corrective pass or one top-up. The engine's shared §6.6 retry of a failed provider call is outside
+that count, as it is for every agent. So a retried call can make the total three, or four when the
+corrective pass's own call is retried too. docs/COMPENDIUM-DEVIATIONS.md states this.
