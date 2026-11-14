@@ -121,15 +121,39 @@ async function* chunksOf(
   yield* source as AsyncIterable<Uint8Array>;
 }
 
+/** Options for `lines`. Without `maxLineBytes` a line may grow without bound (files on disk). */
+export interface LinesOptions {
+  /**
+   * Longest line kept, in bytes without its LF. A longer line is dropped: its bytes are released as
+   * soon as it crosses the limit, the rest up to the next LF is skipped, and `onOversize` is called
+   * once for it. So a peer that never sends LF (or sends /dev/zero) cannot grow memory without bound.
+   */
+  maxLineBytes?: number;
+  /** Called once per dropped line, when it crosses `maxLineBytes`. */
+  onOversize?: (limit: number) => void;
+}
+
 /**
  * Stream lines from a byte stream (stdin, child stdout). A final segment without LF IS yielded as a
  * line on stdin semantics. Empty lines (including Bun's trailing empty line at EOF) are skipped.
  */
-export async function* lines(source: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>): AsyncGenerator<string> {
+export async function* lines(
+  source: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
+  options: LinesOptions = {},
+): AsyncGenerator<string> {
   const decoder = makeDecoder();
+  const max = options.maxLineBytes ?? Infinity;
   // Bytes of the current, not yet terminated line, kept as separate copies until LF arrives.
   let pending: Uint8Array[] = [];
   let pendingLen = 0;
+  // The current line crossed `max`: it was reported, and its bytes are dropped up to the next LF.
+  let skipping = false;
+  const drop = (): void => {
+    pending = [];
+    pendingLen = 0;
+    if (!skipping) options.onOversize?.(max);
+    skipping = true;
+  };
   for await (const raw of chunksOf(source)) {
     // Be lenient with text streams handed in by mistake; the contract is bytes.
     const chunk: Uint8Array = typeof raw === 'string' ? encoder.encode(raw) : raw;
@@ -138,6 +162,12 @@ export async function* lines(source: AsyncIterable<Uint8Array> | ReadableStream<
       const lf = chunk.indexOf(LF, start);
       if (lf < 0) break;
       const head = chunk.subarray(start, lf);
+      start = lf + 1;
+      if (!skipping && pendingLen + head.length > max) drop();
+      if (skipping) {
+        skipping = false;
+        continue;
+      }
       let lineBytes = head;
       if (pendingLen > 0) {
         pending.push(head);
@@ -147,12 +177,14 @@ export async function* lines(source: AsyncIterable<Uint8Array> | ReadableStream<
       }
       const text = decodeLine(decoder, lineBytes);
       if (text.length > 0) yield text;
-      start = lf + 1;
     }
-    if (start < chunk.length) {
-      // Copy: the producer may reuse its chunk buffer after we return control.
-      pending.push(chunk.slice(start));
-      pendingLen += chunk.length - start;
+    if (start < chunk.length && !skipping) {
+      if (pendingLen + (chunk.length - start) > max) drop();
+      else {
+        // Copy: the producer may reuse its chunk buffer after we return control.
+        pending.push(chunk.slice(start));
+        pendingLen += chunk.length - start;
+      }
     }
   }
   if (pendingLen > 0) {

@@ -29,7 +29,9 @@ export interface RpcCatalog {
   capsProbe(conn: string, model: string, active: boolean): Promise<unknown>;
 }
 export interface RpcControl { stopTurns(): void }
-export interface RpcRunOptions { signal?: AbortSignal; onReady?: (control: RpcControl) => void; sessionDefaults?: DeepPartial<SessionConfig> }
+/** Longest request line read from the client, in bytes; a longer one is dropped with -32600. */
+export const RPC_MAX_LINE_BYTES = 16 * 1024 * 1024;
+export interface RpcRunOptions { signal?: AbortSignal; onReady?: (control: RpcControl) => void; sessionDefaults?: DeepPartial<SessionConfig>; maxLineBytes?: number }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -331,7 +333,13 @@ export async function runRpc(input: AsyncIterable<Uint8Array> | ReadableStream<U
       default: throw new Error(`method not found: ${method}`);
     }
   };
-  const iterator = lines(input)[Symbol.asyncIterator]();
+  // A line past the limit is dropped as it crosses it, so a client that never sends LF cannot grow
+  // the reader's buffer without bound; its id is unknown, so the error carries id null.
+  const maxLineBytes = options.maxLineBytes ?? RPC_MAX_LINE_BYTES;
+  const iterator = lines(input, {
+    maxLineBytes,
+    onOversize: (limit) => send(error(null, -32600, 'Request too large', { code: 'line_too_long', maxLineBytes: limit })),
+  })[Symbol.asyncIterator]();
   const aborted = new Promise<null>((resolve) => {
     if (options.signal?.aborted) resolve(null);
     else options.signal?.addEventListener('abort', () => resolve(null), { once: true });

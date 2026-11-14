@@ -83,7 +83,7 @@ A client that declared `transform` gets a `transform` gate on every `turn/run` a
 | Code | When |
 |---|---|
 | `-32700` | The line is not JSON |
-| `-32600` | The object is not a JSON-RPC request |
+| `-32600` | The object is not a JSON-RPC request, or the line is longer than 16 MiB (`error.data.code` is `line_too_long`, `id` is `null`; the rest of that line is skipped up to its newline) |
 | `-32601` | Unknown method |
 | `-32602` | Invalid params, or a call before `initialize` |
 | `-32603` | Internal error |

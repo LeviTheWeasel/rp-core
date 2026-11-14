@@ -156,3 +156,37 @@ describe('lines (stream)', () => {
     }
   });
 });
+
+describe('lines with maxLineBytes', () => {
+  test('a line at the limit is kept; one byte over is dropped and reported once', async () => {
+    const seen: number[] = [];
+    const opts = { maxLineBytes: 4, onOversize: (limit: number) => seen.push(limit) };
+    expect(await collect(lines(chunked([b('abcd\nabcde\nok\n')]), opts))).toEqual(['abcd', 'ok']);
+    expect(seen).toEqual([4]);
+  });
+
+  test('a line without LF stops buffering at the limit and the next line still arrives', async () => {
+    const seen: number[] = [];
+    async function* flood(): AsyncGenerator<Uint8Array> {
+      const zeros = new Uint8Array(1024);
+      for (let i = 0; i < 2000; i++) yield zeros;
+      yield b('tail of the long line\n{"next":1}\n');
+    }
+    const got = await collect(lines(flood(), { maxLineBytes: 4096, onOversize: (limit) => seen.push(limit) }));
+    expect(got).toEqual(['{"next":1}']);
+    expect(seen).toEqual([4096]);
+  });
+
+  test('each oversized line is reported; one torn across chunks counts once', async () => {
+    let count = 0;
+    const got = await collect(lines(chunked([b('xxx'), b('xxx\nyy\nzzzzzz'), b('z\n')]), { maxLineBytes: 5, onOversize: () => count++ }));
+    expect(got).toEqual(['yy']);
+    expect(count).toBe(2);
+  });
+
+  test('an oversized line cut by EOF yields nothing', async () => {
+    let count = 0;
+    expect(await collect(lines(chunked([b('ok\n'), b('0123456789')]), { maxLineBytes: 5, onOversize: () => count++ }))).toEqual(['ok']);
+    expect(count).toBe(1);
+  });
+});

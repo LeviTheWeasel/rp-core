@@ -204,3 +204,23 @@ test('a slow catalog request does not block another JSON-RPC request', async () 
   source.push({ jsonrpc: '2.0', id: 4, method: 'shutdown' });
   await running;
 });
+
+test('a request line over the limit gets -32600 and the stream goes on', async () => {
+  const { engine, home } = await rig(calls([]));
+  const source = byteInput();
+  const frames: Record<string, any>[] = [];
+  const running = runRpc(source.input, (line) => frames.push(JSON.parse(line)), engine, home, undefined, undefined, { maxLineBytes: 256 });
+  source.raw('x'.repeat(200));
+  source.raw('y'.repeat(200));
+  const tooLong = await waitFor(frames, (f) => f.error?.code === -32600);
+  expect(tooLong.id).toBeNull();
+  expect(tooLong.error.data).toEqual({ code: 'line_too_long', maxLineBytes: 256 });
+  source.raw('z'.repeat(5000) + '\n');
+  source.push({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocol: 1, client: { name: 'big-line', version: '1' } } });
+  expect((await waitFor(frames, (f) => f.id === 1)).result.protocol).toBe(1);
+  expect(frames.filter((f) => f.error?.code === -32600)).toHaveLength(1);
+  source.push({ jsonrpc: '2.0', id: 2, method: 'shutdown', params: {} });
+  await waitFor(frames, (f) => f.id === 2);
+  source.end();
+  await running;
+});
