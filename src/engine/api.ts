@@ -111,6 +111,14 @@ export interface EngineOptions {
    * RP_CORE_LANE=manual (read once when the engine opens), else 'auto'.
    */
   lane?: 'auto' | 'manual';
+  /**
+   * M5d (.notes/m5d-decisions.md D-210): whether the engine asks its local openai-chat servers what
+   * they are (llama.cpp slots and build, Ollama's models, LM Studio's loaded ones), once per origin, for
+   * slot pinning (D-211) and the server notices (D-212). Never for script:, record: or replay:
+   * providers or remote origins. Default: 'off' when the process environment has
+   * RP_CORE_SERVER_INFO=off (read once when the engine opens), else 'auto'.
+   */
+  serverInfo?: 'auto' | 'off';
 }
 
 export type RefusalCode =
@@ -411,6 +419,12 @@ export interface SessionHandle {
    * stub; a past answer's preview (`turn`) re-renders that answer's stored directive.
    */
   preview(opts?: PreviewOptions): PreviewResult;
+  /**
+   * M5d (D-210): resolves once the server info of the session's local origins is read (or failed; the
+   * reader's 3 s deadline bounds it), so a preview's wire shows the slot pin a call would send. Resolves
+   * at once when the engine reads no server info.
+   */
+  serverInfoReady?(): Promise<void>;
   /** One model call over the current context. Never writes a journal row. */
   draft(input: { kind: 'impersonate' } | { kind: 'quiet'; prompt: string }, signal?: AbortSignal): Promise<{ text: string; usage?: Usage }>;
 

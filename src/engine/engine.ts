@@ -13,6 +13,8 @@
 // connections (sched.ts connectionLocality), and RP_CORE_RECALL, read once here like RP_CORE_LANE,
 // can replace the recall mode default (EngineCtx.recallDefault). The lead's ruling K: so does a scripted
 // providerOverride whose script tags no line for recall (scriptRecallDefault): lexical.
+// M5d (.notes/m5d-decisions.md D-210): the engine keeps one server-info memo (server-notices.ts) unless
+// EngineOptions.serverInfo or RP_CORE_SERVER_INFO turns it off; closing the engine ends its reads.
 
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -25,6 +27,7 @@ import type { EngineCtx } from './context.ts';
 import type { ToolSets } from './request.ts';
 import { connectionLocality, createScheduler } from './sched.ts';
 import { SessionImpl } from './session.ts';
+import { ServerInfoMemo } from './server-notices.ts';
 import { systemClock, systemRandom, systemTimeZone } from './system.ts';
 import { defaultCounter, type TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
@@ -67,6 +70,9 @@ export type RecallDefaultCtx = Pick<EngineCtx, 'recallDefault'>;
 /** M5b (the lead's ruling G): EngineOptions.lane's default, read once per engine: RP_CORE_LANE=manual, else auto. */
 const laneFromEnv = (): 'auto' | 'manual' => (process.env.RP_CORE_LANE === 'manual' ? 'manual' : 'auto');
 
+/** D-210: EngineOptions.serverInfo's default, read once per engine: RP_CORE_SERVER_INFO=off, else auto. */
+const serverInfoFromEnv = (): 'auto' | 'off' => (process.env.RP_CORE_SERVER_INFO === 'off' ? 'off' : 'auto');
+
 /** D-207: the recall mode default's override, read once per engine: RP_CORE_RECALL=lexical|off, else none. */
 const recallFromEnv = (): RecallOverride | undefined => {
   const v = process.env.RP_CORE_RECALL;
@@ -107,6 +113,8 @@ export class Engine {
     const override = opts.providerOverride;
     const recallDefault = recallDefaultOf(opts.recall, override);
     const recordBackend = opts.sessionStore instanceof RecordSessionStore ? opts.sessionStore : undefined;
+    const fetchFn = opts.fetch ?? globalThis.fetch;
+    const serverInfo = (opts.serverInfo ?? serverInfoFromEnv()) === 'auto' ? new ServerInfoMemo({ fetch: fetchFn }) : undefined;
     const ctx: EngineCtx = {
       home,
       sessionStore: opts.sessionStore ?? new FileSessionStore(home),
@@ -114,7 +122,7 @@ export class Engine {
       clock: opts.clock ?? systemClock,
       random: opts.random ?? systemRandom,
       timeZone: opts.timeZone ?? systemTimeZone(),
-      fetch: opts.fetch ?? globalThis.fetch,
+      fetch: fetchFn,
       // M5b (the lead's ruling G): the idle gate waits on the engine's timers (tests' fake ones too).
       // D-207: an origin is local when a connection on it says so (read when the origin is first used).
       sched: createScheduler({
@@ -137,6 +145,7 @@ export class Engine {
       lane: opts.lane ?? laneFromEnv(),
       ...(opts.toolSets ? { toolSets: opts.toolSets } : {}),
       ...(recallDefault !== undefined ? { recallDefault } : {}),
+      ...(serverInfo ? { serverInfo } : {}),
     };
     return new EngineImpl(ctx);
   }
@@ -199,6 +208,7 @@ class EngineImpl implements EngineHandle {
       // Shutdown order: stop every turn (partial text kept), let each settle, release the locks,
       // then end the event tails.
       await Promise.all([...this.open.values()].map((s) => s.close()));
+      this.ctx.serverInfo?.close();
       this.ctx.bus.close();
     })();
     return this.closing;

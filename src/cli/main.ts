@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { ConfigError } from '../config/config.ts';
 import { Engine } from '../engine/engine.ts';
 import { Refusal } from '../engine/api.ts';
-import { systemClock } from '../engine/system.ts';
+import { systemClock, systemRandom } from '../engine/system.ts';
 import { runRpc } from '../protocol/rpc.ts';
 import { listModels } from '../providers/probe.ts';
 import { redactEvent } from './render.ts';
@@ -277,6 +277,39 @@ config.toml) and prints the server kind, the models with their context windows, 
             turns use them; [caps."conn:model"] in config.toml still wins
   --json    print an array of {connection, ok, server, models, slots, notes, model, caps, active?}
 Exit 1 when a server did not answer or refused the key (nothing is stored for it then).`,
+  },
+  bench: {
+    flags: { rounds: 'string', 'prompt-tokens': 'string', 'tail-tokens': 'string', 'agent-tokens': 'string', 'agent-shared': 'string', pin: 'string', json: 'bool' },
+    usage:
+      'rp-core bench ttft [connection:model] [--rounds N] [--prompt-tokens N] [--tail-tokens N] [--agent-tokens N] [--agent-shared PCT] [--pin auto|on|off] [--json]',
+    summary: "time a server's first token and check that it keeps the narrator's prompt cached",
+    help: `ttft makes REAL model calls (3 per round; on a paid API they cost money) and never touches a
+session. It first prints how many calls it will make, then the server info and the slot pinning
+verdict. The model defaults to the narrator in [roles]. Each round sends, with stream, temperature 0
+and at most 16 output tokens:
+  1. a narrator prompt P;
+  2. an agent prompt A as agent filing, starting with part of P as an agent prompt shares the
+     system prompt and card (--agent-shared); slot pinning sends it to the agents' slot;
+  3. P again plus a new tail T.
+The prompts are made-up words from a fixed seed; no story text is sent. Per call it prints the
+first-token time, the total time and the server's prompt counts. Call 3's ratio is the tokens the
+server processed over the new ones (its prompt_tokens minus call 1's): PASS when it is at most 1.5.
+A server that reports no prompt counts (LM Studio) gets the timings only, and says why.
+  --rounds N         rounds (default 3)
+  --prompt-tokens N  size of P (default 4000, o200k estimate)
+  --tail-tokens N    size of T (default 200)
+  --agent-tokens N   size of A (default 1500)
+  --agent-shared PCT how much of A is P's own start, as an agent prompt shares the system prompt and
+                     card with the narrator's (default 50; 0 makes A unrelated)
+  --pin auto|on|off  llama.cpp id_slot: auto follows the rule a session uses (2 or more slots and a
+                     build from b11552, or max_in_flight 1); on sends slot 0 for the narrator and 1
+                     for the agent; off sends none
+  --json             print one JSON object on stdout (the call count goes to stderr)
+Server setups to compare (you start the server; the bench only calls it):
+  llama-server -np 1 --cache-ram N     one slot, P kept in the host-RAM prompt cache
+  llama-server -np 1 --cache-ram 0     one slot, no host cache: call 3 processes P again
+  llama-server -np 2 --no-kv-unified   two slots, pinned: the narrator keeps slot 0
+Exit 0 when every round passed or the ratio is unknown, 1 on a FAIL, 3 when a call failed.`,
   },
   models: {
     flags: { json: 'bool' },
@@ -556,6 +589,38 @@ async function runCommand(name: string, p: Parsed, home: Home, deps: MainDeps): 
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(target !== undefined ? { target } : {}),
         ...(model !== undefined ? { model } : {}),
+      });
+    }
+    case 'bench': {
+      noPositionals(p, name, 2);
+      const [what, target] = p.positionals;
+      if (what === undefined) throw new UsageError('which benchmark? rp-core bench ttft', name);
+      if (what !== 'ttft') throw new UsageError(`unknown benchmark ${JSON.stringify(what)}; there is ttft`, name);
+      const rounds = positiveInt(p, 'rounds', name);
+      const promptTokens = positiveInt(p, 'prompt-tokens', name);
+      const tailTokens = positiveInt(p, 'tail-tokens', name);
+      const agentTokens = positiveInt(p, 'agent-tokens', name);
+      const pin = str(p, 'pin');
+      const sharedRaw = str(p, 'agent-shared');
+      if (sharedRaw !== undefined && !/^[0-9]{1,2}$/.test(sharedRaw)) throw new UsageError(`--agent-shared must be a whole percent from 0 to 90, got ${JSON.stringify(sharedRaw)}`, name);
+      // A fresh salt per run, so a rerun is measured cold; RP_CORE_BENCH_SALT (tests: '') replaces it.
+      const salt = deps.env.RP_CORE_BENCH_SALT ?? `run ${Array.from(systemRandom(4), (b) => b.toString(16).padStart(2, '0')).join('')}. `;
+      const { cmdBench } = await import('./bench.ts');
+      return cmdBench({
+        rt: runtimeOf(home, deps, p),
+        io,
+        json,
+        clock: deps.clock ?? systemClock,
+        serverInfo: deps.env.RP_CORE_SERVER_INFO === 'off' ? 'off' : 'auto',
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(target !== undefined ? { target } : {}),
+        ...(rounds !== undefined ? { rounds } : {}),
+        ...(promptTokens !== undefined ? { promptTokens } : {}),
+        ...(tailTokens !== undefined ? { tailTokens } : {}),
+        ...(agentTokens !== undefined ? { agentTokens } : {}),
+        ...(pin !== undefined ? { pin } : {}),
+        ...(sharedRaw !== undefined ? { agentShared: Number(sharedRaw) } : {}),
+        salt,
       });
     }
     case 'models': {

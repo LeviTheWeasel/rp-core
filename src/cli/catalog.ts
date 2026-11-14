@@ -12,11 +12,17 @@
 // The keys of config.toml are used when present (OpenRouter lists models without one, so a missing
 // key is a note, not a failure). Requests go through providers/probe.ts (guardedFetch, same origin,
 // short per-request timeouts); nothing here retries.
+//
+// M5d (D-210, D-211): on a local llama.cpp, Ollama or LM Studio of the openai-chat dialect it also
+// reads the server info (providers/server-info.ts) and, for llama.cpp, prints the slot pinning
+// verdict a session would get. RP_CORE_SERVER_INFO=off skips that read, as it does in the engine.
 
 import type { DelayTimers } from '../engine/abort.ts';
 import type { Connection } from '../engine/api.ts';
 import { fetchCatalog, listModels, readCapsCache, writeCapsCache, capsCachePath, type CapsCacheRow, type CatalogInfo } from '../providers/probe.ts';
 import { PROBE_NOT_RUN, runActiveProbes, toolsRefusedHint, type ProbeObservation, type ProbeVerdict } from '../providers/probe-active.ts';
+import { pinLine, readServerInfo, type PinVerdict, type ServerInfo } from '../providers/server-info.ts';
+import { readsServerInfo, slotPinOf } from '../engine/server-notices.ts';
 import { ProviderError, type ModelCaps } from '../providers/types.ts';
 import { UsageError } from './args.ts';
 import { CliError } from './commands.ts';
@@ -42,6 +48,10 @@ export interface CatalogArgs {
    * calls end, the abort is rethrown and nothing is stored or printed. Default: never.
    */
   signal?: AbortSignal;
+  /** M5d server-info read (D-210): default 'off' under RP_CORE_SERVER_INFO=off, else 'auto'. */
+  serverInfo?: 'auto' | 'off';
+  /** Its deadlines (tests); default server-info.ts's 1.5 s per request, 3 s in all. */
+  serverInfoMs?: { requestMs: number; totalMs: number };
 }
 
 /** What --active did for one model. */
@@ -78,6 +88,19 @@ export interface ProbeResult {
   notStored?: string;
   /** --active: the model calls and what they showed. */
   active?: ActiveProbeReport;
+  /** M5d: what a local server said about itself (D-210); absent when it was not read. */
+  serverInfo?: ServerInfo;
+  /** M5d: the slot pinning a session would get on this llama.cpp (D-211). */
+  slotPin?: PinVerdict;
+}
+
+/** Kinds whose server info rp-core reads (D-210). */
+const SERVER_INFO_KINDS: ReadonlySet<string> = new Set(['llama.cpp', 'ollama', 'lmstudio']);
+
+/** A semaphore capacity as streamCall asks for it (at least 1). */
+function capacityOf(caps: ModelCaps): number {
+  const n = Math.floor(caps.maxInFlight);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
 const hasFacts = (c: Partial<ModelCaps> | undefined): boolean => c !== undefined && Object.keys(c).length > 0;
@@ -281,6 +304,33 @@ export async function runProbe(a: ProbeArgs): Promise<{ code: number; results: P
       const probed = connectionsWith(rt, next)[c.id];
       if (probed) r.caps = probed.capsFor ? probed.capsFor(model) : probed.caps;
     }
+    // M5d: the server's own account of itself, and for llama.cpp the pinning a session would get.
+    // The engine's own gate (readsServerInfo), so a local = false tunnel is not judged as local here.
+    const infoMode = a.serverInfo ?? (process.env.RP_CORE_SERVER_INFO === 'off' ? 'off' : 'auto');
+    const known = info.server !== undefined && SERVER_INFO_KINDS.has(info.server);
+    if (infoMode === 'auto' && known && readsServerInfo(c)) {
+      r.serverInfo = await readServerInfo(c.baseUrl!, { fetch: doFetch, key, signal, dialect: c.dialect, ...(a.serverInfoMs ?? {}) });
+      if (signal.aborted) throw signal.reason;
+      if (r.serverInfo.kind === 'llama.cpp') {
+        const conn = connectionsWith(rt, next)[c.id];
+        const caps = r.caps ?? conn?.caps ?? c.caps;
+        const own = capacityOf(caps);
+        r.slotPin = slotPinOf(caps, r.serverInfo, own);
+        // A session's origin semaphore takes the smallest capacity of the connections it uses there.
+        const others = Object.values(rt.connections).filter((o) => o.id !== c.id && o.origin === c.origin && capacityOf(o.caps) < own);
+        if (others.length > 0) {
+          const low = Math.min(...others.map((o) => capacityOf(o.caps)));
+          const shared = slotPinOf(caps, r.serverInfo, low);
+          if ((shared.pin === null) !== (r.slotPin.pin === null)) {
+            const ids = others.filter((o) => capacityOf(o.caps) === low).map((o) => o.id);
+            r.notes.push(`a session that also uses ${ids.join(', ')} at ${c.origin} gets capacity ${low} there: ${pinLine(shared)}`);
+          }
+        }
+      }
+    } else if (infoMode === 'auto' && known && readsServerInfo({ ...c, local: true })) {
+      r.notes.push('server info not read: local = false, so a session never reads this server or pins its slots by the rule (slot_pin = true still pins)');
+    }
+
     if (a.write) cache = next;
     results.push(r);
   }
@@ -359,6 +409,8 @@ export function renderProbe(r: ProbeResult, cachePath: string): string {
   const width = Math.min(60, Math.max(0, ...models.map((m) => m.id.length)));
   for (const m of models) out.push(`    ${m.id.padEnd(width)}  ctx ${m.contextLength ?? '?'}`);
   if (r.slots !== undefined) out.push(`  slots: ${r.slots} reported (advice only; capacity stays at the connection's max_in_flight)`);
+  if (r.serverInfo) out.push(`  server info: ${serverInfoLine(r.serverInfo)}`);
+  if (r.slotPin) out.push(`  ${pinLine(r.slotPin)}`);
   if (r.notes.length > 0) {
     out.push('  notes:');
     for (const n of r.notes) out.push(`    - ${n}`);
@@ -373,6 +425,28 @@ export function renderProbe(r: ProbeResult, cachePath: string): string {
   const what = r.active ? 'this catalog and the probe facts' : 'this catalog';
   out.push(r.written ? `  stored in ${cachePath}` : r.notStored !== undefined ? `  not stored: ${r.notStored}` : `  not stored: --write keeps ${what} for new turns`);
   return `${out.join('\n')}\n\n`;
+}
+
+/** The server info in one line ("llama.cpp b11901, 2 slots", "ollama 0.40.12, loaded: a (ctx 16384)"). */
+export function serverInfoLine(i: ServerInfo): string {
+  switch (i.kind) {
+    case 'llama.cpp': {
+      const slots = i.totalSlots === null ? 'slots unknown' : `${i.totalSlots} slot${i.totalSlots === 1 ? '' : 's'}`;
+      return `llama.cpp ${i.build === null ? 'build unknown' : `b${i.build}`}, ${slots}${i.endpointSlots === false ? ', /slots off' : ''}`;
+    }
+    case 'ollama': {
+      const loaded = i.loaded.map((m) => (m.contextLength !== undefined ? `${m.name} (ctx ${m.contextLength})` : m.name));
+      return `ollama${i.version !== undefined ? ` ${i.version}` : ''}, ${loaded.length > 0 ? `loaded: ${loaded.join(', ')}` : 'nothing loaded'}`;
+    }
+    case 'lmstudio': {
+      const keys = Object.keys(i.loaded).sort();
+      const on = keys.filter((k) => i.loaded[k]);
+      const off = keys.filter((k) => !i.loaded[k]);
+      return `LM Studio, loaded: ${on.length > 0 ? on.join(', ') : 'none'}${off.length > 0 ? `; not loaded: ${off.join(', ')}` : ''}`;
+    }
+    default:
+      return `unknown (${i.reason})`;
+  }
 }
 
 /** The facts of an active run in one line ("tools native · usage stream_options · ..."). */

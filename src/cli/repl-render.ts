@@ -25,7 +25,7 @@ import { ageOf, isFinishedArc, isFinishedHidden } from '../agents/director/state
 import { SURFACE_TURNS, type DirectorRecord, type DirectorState, type Horizon, type NarratorDirective } from '../agents/director/types.ts';
 import type { HistorySearch } from '../tools/builtin/history.ts';
 import { estimateMessage } from '../prompt/tokens.ts';
-import type { CompendiumTrace, Generation, RecallRecord, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace } from '../session/entries.ts';
+import type { CompendiumTrace, Generation, RecallRecord, Roles, SessionConfig, SessionHeader, ToolTraceRow, Trace, TraceCallRow } from '../session/entries.ts';
 import type { RecallMode } from '../engine/recall.ts';
 import type { MessageView, PathView } from '../session/view.ts';
 import { markers, messageText, toolLine } from './render.ts';
@@ -639,10 +639,44 @@ export function renderTrace(
   if (tr.compendium) lines.push(compendiumTraceLine(tr.compendium, names));
   const recap = recapTraceLine(tr.recap, names, refs);
   if (recap !== null) lines.push(recap);
-  if (tr.calls.length > 0) lines.push(`  calls: ${tr.calls.map((c) => `${c.agent} ${c.model} ${(c.ms / 1000).toFixed(1)}s`).join(', ')}`);
+  lines.push(...traceCallLines(tr.calls, t.gen?.connection ? `${t.gen.connection}:${t.gen.model ?? '?'}` : undefined));
   lines.push(...toolTraceLines(tr));
   if (tr.partial) lines.push('  (partial: recovered after an interruption)');
   return lines.join('\n');
+}
+
+/** A count with its thousands apart: 3412 → "3 412". */
+function grouped(n: number): string {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+const finiteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const spacedSecs = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
+
+/**
+ * /trace (D-213): one line per model call, "narrator  +2.1 s  first token 0.4 s  1.8 s  prompt 3 412
+ * cached, 96 new". Each part only when the row has it (older rows: the agent and the time). The model
+ * follows when it is not the answer's own (`model`). Rows are journal data, so every field is checked.
+ */
+export function traceCallLines(calls: readonly TraceCallRow[], model?: string): string[] {
+  if (calls.length === 0) return [];
+  const width = Math.max(...calls.map((c) => String(c.agent).length));
+  const lines = ['  calls:'];
+  for (const c of calls) {
+    const parts = [String(c.agent).padEnd(width)];
+    if (finiteNum(c.at)) parts.push(`+${spacedSecs(c.at)}`);
+    if (finiteNum(c.ttftMs)) parts.push(`first token ${spacedSecs(c.ttftMs)}`);
+    if (finiteNum(c.ms)) parts.push(spacedSecs(c.ms));
+    const p = typeof c.prompt === 'object' && c.prompt !== null ? c.prompt : {};
+    const counts = [
+      ...(finiteNum(p.cached) ? [`${grouped(p.cached)} cached`] : []),
+      ...(finiteNum(p.processed) ? [`${grouped(p.processed)} new`] : []),
+    ];
+    if (counts.length > 0) parts.push(`prompt ${counts.join(', ')}`);
+    if (c.model !== model) parts.push(String(c.model));
+    lines.push(`    ${parts.join('  ')}`);
+  }
+  return lines;
 }
 
 /**

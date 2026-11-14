@@ -729,6 +729,7 @@ export class Lane {
     const env: AgentCallEnv = {
       sched: boosted(this.ctx.sched, boost),
       fetch: this.ctx.fetch,
+      ...(this.ctx.serverInfo ? { serverInfo: this.ctx.serverInfo } : {}),
       timeouts: timeoutsFor(w.setup.route.conn, this.ctx.timeouts),
       timers: this.ctx.timers,
       clock: this.ctx.clock,
@@ -1675,6 +1676,7 @@ export class Lane {
     const env: AgentCallEnv = {
       sched: this.tapped(r),
       fetch: this.ctx.fetch,
+      ...(this.ctx.serverInfo ? { serverInfo: this.ctx.serverInfo } : {}),
       timeouts: timeoutsFor(rec.route.conn, this.ctx.timeouts),
       timers: this.ctx.timers,
       clock: this.ctx.clock,

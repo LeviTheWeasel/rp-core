@@ -97,6 +97,8 @@ export function engineOptions(rt: Runtime): EngineOptions {
   if (Object.keys(rt.config.prices).length > 0) o.prices = rt.config.prices;
   if (rt.provider) o.providerOverride = rt.provider;
   if (rt.keepRequests === true) o.keepRequests = true;
+  // D-210: a recording replays without a server to ask, so it is made without the server info's pin.
+  if (rt.recording !== undefined) o.serverInfo = 'off';
   if (rt.debug) {
     const redact = redactor(rt);
     // rt.debug is read when a failure happens (the REPL swaps it while it runs).

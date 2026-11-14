@@ -20,6 +20,8 @@
 // reasoning model thinks, DeepSeek's ': keep-alive' while queued, llama.cpp's pings) keep a live
 // server's call open even though they carry no event. M3: the call declares tools / tool_choice /
 // stop, collects native calls and replay payloads, and ends quietly FINISH_GRACE_MS after a finish.
+// M5d (D-211): every agent's call starts here, so here a call on a local llama.cpp origin waits for the
+// server info (its first call only) and gets its slot pin (server-notices.ts callCaps).
 //
 // The loop (narrateRounds, .notes/m3-decisions.md B): every round of one route. Port notes. Kept
 // from Bunraku: the request is never re-assembled inside the turn; text accumulates across rounds
@@ -41,8 +43,8 @@ import type { Priority, Scheduler } from './sched.ts';
 import type { Connection } from './api.ts';
 import { ProviderError } from '../providers/types.ts';
 import { echoPlaceholders, SAFE_ID, SAFE_NAME } from '../providers/wire.ts';
-import type { CallAgent, FinishReason, JSONSchema, ModelCaps, ModelRequest, PromptMsg, Replay, StreamEv, ToolSpec, Usage } from '../providers/types.ts';
-import type { Block, ToolTraceRow, Trace } from '../session/entries.ts';
+import type { CallAgent, FinishReason, JSONSchema, ModelCaps, ModelRequest, PromptCounts, PromptMsg, Replay, StreamEv, ToolSpec, Usage } from '../providers/types.ts';
+import type { Block, ToolTraceRow, Trace, TraceCallRow } from '../session/entries.ts';
 import { historyPageChars } from '../tools/builtin/history.ts';
 import { recoverLeaks } from '../tools/leaks.ts';
 import { createPromptedStripper, cutAtPromptedStop, frameResults, parsePromptedCalls, PROMPTED_STOP, stripPromptedCalls } from '../tools/prompted.ts';
@@ -50,6 +52,8 @@ import { runTools } from '../tools/run.ts';
 import type { Tool, ToolCall, ToolCallOutcome, ToolCtx } from '../tools/types.ts';
 import type { Samplers } from '../formats/native.ts';
 import { CYRILLIC_CHARS_PER_TOKEN, MESSAGE_OVERHEAD_TOKENS } from '../prompt/tokens.ts';
+import type { ServerInfo } from '../providers/server-info.ts';
+import { callCaps, type ServerInfoMemo } from './server-notices.ts';
 
 /** §8.8: first byte 600 s on a local origin (prompt processing is slow), 120 s remote; idle 120 s. */
 export const FIRST_BYTE_LOCAL_MS = 600_000;
@@ -108,6 +112,12 @@ export interface CallInput {
   priority?: Priority;
   /** M5b (D-172): background only, the session's compendium.idleDelaySec (the local idle gate). */
   idleDelaySec?: number;
+  /**
+   * M5d (D-210, D-211): the engine's server-info memo (EngineCtx.serverInfo). With it, a call on a local
+   * openai-chat origin waits for the origin's first read and is pinned to a llama.cpp slot by D-211's rule
+   * (the caps' own slot_pin first). Absent: no server info, only a slot_pin in the caps pins.
+   */
+  serverInfo?: ServerInfoMemo;
   /** Streamed text / reasoning deltas, in arrival order. */
   onText(delta: string): void;
   onReasoning(delta: string): void;
@@ -148,6 +158,19 @@ export interface CallResult {
   output: boolean;
   ms: number;
   ttftMs?: number;
+  /** [D-213] the call's start on its clock (ms since the epoch), queue wait included: the trace row's `at`. */
+  startedAt?: number;
+  /** [D-213] the server's prompt counts (StreamEv 'usage' prompt), merged like usage. */
+  prompt?: PromptCounts;
+}
+
+/** [D-213] a Trace.calls row's timing and prompt fields; `turnStart` is the turn's own start on the call's clock. */
+export function callTiming(res: CallResult, turnStart: number): Pick<TraceCallRow, 'at' | 'ttftMs' | 'prompt'> {
+  return {
+    ...(res.startedAt !== undefined ? { at: Math.max(0, res.startedAt - turnStart) } : {}),
+    ...(res.ttftMs !== undefined ? { ttftMs: res.ttftMs } : {}),
+    ...(res.prompt !== undefined ? { prompt: { ...res.prompt } } : {}),
+  };
 }
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -349,11 +372,26 @@ async function resolveKey(conn: Connection, signal: AbortSignal): Promise<KeyOut
   }
 }
 
+/** `p`, or STOPPED when `signal` aborts first (the promise itself is left to settle). */
+async function untilAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T | typeof STOPPED> {
+  if (signal.aborted) return STOPPED;
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<typeof STOPPED>((resolve) => {
+    onAbort = () => resolve(STOPPED);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([p, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 /** One streamed narrator call. Never throws for provider trouble; the outcome says what happened. */
 export async function streamCall(input: CallInput): Promise<CallResult> {
   const { clock, timers } = input;
   const t0 = clock().getTime();
-  const out: CallResult = { text: '', reasoning: '', calls: [], replay: [], stopped: false, output: false, ms: 0 };
+  const out: CallResult = { text: '', reasoning: '', calls: [], replay: [], stopped: false, output: false, ms: 0, startedAt: t0 };
   const done = (): CallResult => {
     out.ms = Math.max(0, clock().getTime() - t0);
     return out;
@@ -368,6 +406,22 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
   if ('error' in keyed) {
     out.error = keyed.error;
     return done();
+  }
+
+  // D-211: the first call on a local server waits for what it says (the reader's deadline bounds it),
+  // before taking a place so the wait never holds one. A slot_pin in the caps needs no answer.
+  let info: ServerInfo | undefined;
+  if (input.serverInfo && input.caps.slotPin === undefined) {
+    input.serverInfo.start(input.conn, keyed.key);
+    const got = input.serverInfo.peek(input.conn.origin);
+    if (got instanceof Promise) {
+      const waited = await untilAbort(got, input.turnSignal);
+      if (waited === STOPPED) {
+        out.stopped = true;
+        return done();
+      }
+      info = waited;
+    } else info = got;
   }
 
   // The semaphore: a Stop while queued leaves the queue and ends the call as stopped.
@@ -407,7 +461,8 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
   // M3: native calls by stream index; `closed` once tool_end arrived.
   const open = new Map<number, { id: string; name: string; args: string; closed: boolean }>();
   try {
-    const req = modelRequest(input, call.signal);
+    // D-211 on a copy of the caps: the origin's effective capacity decides for an old llama.cpp build.
+    const req = modelRequest({ ...input, caps: callCaps(input.caps, info, sem.capacity) }, call.signal);
     input.keepRequest?.(req);
     const stream = input.conn.provider.stream(req, {
       fetch: input.fetch,
@@ -442,6 +497,7 @@ export async function streamCall(input: CallInput): Promise<CallResult> {
         out.replay.push(ev.r);
       } else if (ev.t === 'usage') {
         out.usage = { ...out.usage, ...ev.u };
+        if (ev.prompt) out.prompt = { ...out.prompt, ...ev.prompt };
         input.onUsage?.(ev.u);
       } else if (ev.t === 'finish') {
         // Keep reading: usage may follow the finish (§8.1), for FINISH_GRACE_MS of silence at most.
@@ -786,6 +842,7 @@ export async function narrateRounds(input: RoundsInput): Promise<RoundsResult> {
       clock,
       ...fields,
       ...(input.keepRequest ? { keepRequest: input.keepRequest } : {}),
+      ...(input.serverInfo ? { serverInfo: input.serverInfo } : {}),
       onText: (d) => show(stripper === null ? d : stripper.push(d)),
       onReasoning: (d) => {
         out.reasoning += d;

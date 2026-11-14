@@ -9,7 +9,7 @@
 
 import type { DirectorRecord } from '../agents/director/types.ts';
 import type { Character, Persona, Samplers } from '../formats/native.ts';
-import type { Usage, FinishReason } from '../providers/types.ts';
+import type { Usage, FinishReason, PromptCounts } from '../providers/types.ts';
 
 // ---- blocks and generations (§5.4) ------------------------------------------------------------
 
@@ -81,7 +81,7 @@ export interface Trace {
   macros: { unknown: string[] };
   /** Oldest and newest message ids cut by the budget, if any. */
   trimmed: { from: string; to: string } | null;
-  calls: { callKey: string; agent: string; model: string; ms: number; usage?: Usage }[];
+  calls: TraceCallRow[];
   agents: Record<string, { status: 'done' | 'reused' | 'skipped' | 'failed'; code?: string; transport?: string }>;
   /**
    * M3: one row per tool call the narrator made, in call order (§9.1: every repair is traced).
@@ -115,6 +115,23 @@ export interface Trace {
    */
   loreNames?: Record<string, string>;
   partial?: true;
+}
+
+/**
+ * One model call of a turn (§5.7). M5d (D-213), all optional and absent in older rows: `at` ms from
+ * the turn's start to the call's start; `ttftMs` the first token from the call's own start (queue
+ * wait included); `prompt` the server's prompt counts. The journal guard does not check these rows
+ * (diagnostics), so old and new rows both read; readers check each field before using it.
+ */
+export interface TraceCallRow {
+  callKey: string;
+  agent: string;
+  model: string;
+  ms: number;
+  usage?: Usage;
+  at?: number;
+  ttftMs?: number;
+  prompt?: PromptCounts;
 }
 
 // ---- agent records (reserved: Director M4, Compendium M5) ----------------------------------------

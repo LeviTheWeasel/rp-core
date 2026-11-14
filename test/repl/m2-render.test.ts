@@ -160,7 +160,7 @@ describe('/trace: the recomputed misses [D-45]', () => {
     const out = renderTrace('abcd1234', { trace: t, continued: false }, undefined, renderTraceMisses(verdicts, lore, plain)).split('\n');
     const cut = out.findIndex((l) => l.startsWith('  lore cut by the budget'));
     expect(out[cut + 1]).toBe('  lore not fired (recomputed from its seed):');
-    expect(out.at(-1)).toBe('  calls: narrator m 1.5s');
+    expect(out.slice(-2)).toEqual(['  calls:', '    narrator  1.5 s  m']); // M5d (D-213): one line per call
   });
 });
 

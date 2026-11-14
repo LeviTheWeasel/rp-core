@@ -19,6 +19,16 @@ export interface Usage {
   cost?: number; // provider-reported, USD
 }
 
+/**
+ * [D-213] What the server did with one call's prompt: `processed` tokens it evaluated, `cached`
+ * tokens it reused from its KV cache. Only from counts that say so (OpenAI cached_tokens, llama.cpp
+ * timings with cache_n); a missing field is unknown, never zero.
+ */
+export interface PromptCounts {
+  processed?: number;
+  cached?: number;
+}
+
 export type FinishReason =
   | 'end'
   | 'length'
@@ -221,6 +231,12 @@ export interface ModelCaps {
   stopMax?: number; // [D-54]
   /** [D-54] host/model specific body fields (OpenRouter provider.allow_fallbacks, llama.cpp cache_prompt, ...). Protected keys are never overwritten. */
   extraBody?: Record<string, unknown>;
+  /**
+   * [D-211] llama.cpp slot pinning: `id_slot` per call, narrator (drafts included) → `narrator`,
+   * every other agent → `agents`. Absent: unset (the engine may pin by its own rule). null: the user
+   * said `slot_pin = false`, never pin, and the engine must keep it that way.
+   */
+  slotPin?: { narrator: number; agents: number } | null;
   source: ('host' | 'model' | 'catalog' | 'probe' | 'user' | 'script')[];
 }
 
@@ -276,7 +292,8 @@ export type StreamEv =
   | { t: 'tool_start'; i: number; id: string; name: string }
   | { t: 'tool_args'; i: number; d: string }
   | { t: 'tool_end'; i: number }
-  | { t: 'usage'; u: Usage }
+  /** `prompt` [D-213]: the prompt counts the same report gave, when it gave them. */
+  | { t: 'usage'; u: Usage; prompt?: PromptCounts }
   /**
    * M3 (§8.6): a verbatim provider payload the next round of the SAME tool loop must send back
    * (OpenRouter reasoning_details, per-call extras). Yielded before `finish`, at most once per kind.

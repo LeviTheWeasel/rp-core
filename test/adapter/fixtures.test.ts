@@ -42,7 +42,7 @@ describe('golden fixtures', () => {
       { t: 'reasoning', i: 0, d: '\nThe guest is soaked; offer the fire first.\n' },
       { t: 'reasoning_end', i: 0 },
       { t: 'text', i: 0, d: '\n\nMara nods toward the hearth. "Dry off first."' },
-      { t: 'usage', u: { inputTotal: 550, inputCacheRead: 512, outputTotal: 14 } },
+      { t: 'usage', u: { inputTotal: 550, inputCacheRead: 512, outputTotal: 14 }, prompt: { processed: 38, cached: 512 } },
       { t: 'finish', reason: 'end', raw: 'stop', model: 'Qwen3-8B-Q5_K_M.gguf' },
     ]);
   });
@@ -51,7 +51,7 @@ describe('golden fixtures', () => {
     await check('ollama-usage.sse', OLLAMA, [
       { t: 'text', i: 0, d: 'Mara sets down the mug.' },
       { t: 'finish', reason: 'end', raw: 'stop', model: 'hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M' },
-      { t: 'usage', u: { inputTotal: 61, inputCacheRead: 48, outputTotal: 7 } },
+      { t: 'usage', u: { inputTotal: 61, inputCacheRead: 48, outputTotal: 7 }, prompt: { processed: 13, cached: 48 } },
     ]);
   });
 
@@ -75,7 +75,7 @@ describe('golden fixtures', () => {
         },
       },
       { t: 'finish', reason: 'end', raw: 'stop', model: 'google/gemini-3-pro-preview' },
-      { t: 'usage', u: { inputTotal: 812, inputCacheRead: 640, outputTotal: 96, outputReasoning: 71, cost: 0.0019 } },
+      { t: 'usage', u: { inputTotal: 812, inputCacheRead: 640, outputTotal: 96, outputReasoning: 71, cost: 0.0019 }, prompt: { processed: 172, cached: 640 } },
     ]);
   });
 
@@ -111,7 +111,7 @@ describe('golden fixtures', () => {
         { t: 'reasoning_end', i: 0 },
         { t: 'text', i: 0, d: '"Second door on the left."' },
         { t: 'finish', reason: 'end', raw: 'stop', model: 'deepseek-reasoner' },
-        { t: 'usage', u: { inputTotal: 420, inputCacheRead: 384, outputTotal: 58, outputReasoning: 41 } },
+        { t: 'usage', u: { inputTotal: 420, inputCacheRead: 384, outputTotal: 58, outputReasoning: 41 }, prompt: { processed: 36, cached: 384 } },
       ],
       'deepseek-reasoner',
     );

@@ -382,7 +382,9 @@ describe('reports', () => {
         '  window 8192 · reserve 1024 · prompt ~2400 tok (server: 2512) · 2 messages sent',
         '  trimmed: aa … bb · prefill: sent',
         '  unknown macros: {{foo}}',
-        '  calls: narrator local:q 1.2s',
+        // M5d (D-213): one line per call; the answer's own model is not repeated.
+        '  calls:',
+        '    narrator  1.2 s',
       ].join('\n'),
     );
   });

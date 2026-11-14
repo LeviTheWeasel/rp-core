@@ -87,6 +87,8 @@ export async function cmdPreview(a: PreviewArgs): Promise<number> {
       ...(turn !== undefined ? { turn } : {}),
       ...(a.verdicts ? { explain: true } : {}),
     };
+    // D-211: the wire shows the slot pin a call would carry, so it waits for the server info (≤ 3 s).
+    if (a.wire) await session.serverInfoReady?.();
     const r = session.preview(opts);
     if (a.json) {
       a.io.out.write(`${redact(JSON.stringify(r))}\n`);

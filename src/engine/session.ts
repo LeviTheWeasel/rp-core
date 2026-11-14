@@ -37,6 +37,11 @@
 // prefetch for the next reply (the lead's ruling H: MemoryStatus.prefetch), read off the lane by the
 // head's basis; memoryWait waits for it as well (ruling I). close() stops a running turn before the lane
 // closes (a grace wait ends as a Stop, not a miss).
+//
+// M5d (.notes/m5d-decisions.md D-210…D-212): at open and after every configure the session starts the
+// server-info reads its roles' local origins need (never waiting for them) and tells the server notices
+// (server-notices.ts) once each, on the bus, when the answers are in; a preview's wire carries the slot
+// pin a call would, from the info already read.
 
 import { statSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -83,14 +88,16 @@ import type {
   SessionHandle,
   TurnHandle,
 } from './api.ts';
-import { admitTurn, checkOnError, resolvePreset, resolvePrimary } from './admit.ts';
+import { admitTurn, checkOnError, resolveDirector, resolvePreset, resolvePrimary, resolveRecall, resolveRecorder, type Route } from './admit.ts';
 import { effectiveText, messageViewOf, placeCommit } from './commit.ts';
 import { isoNow, type EngineCtx } from './context.ts';
 import { Lane, taskOn, type LaneHost } from './lane.ts';
 import { firstRoundLast, modelRequest, roundFields, streamCall, timeoutsFor } from './narrate.ts';
 import { recoverSession, type RecoverJournal } from './recover.ts';
 import { buildRequest, compendiumConfigOf, compendiumNotices, liveTyped, loadLibrary, maxTokensFor, type RecallInput, type SessionLibrary } from './request.ts';
-import { basisHead, prefetchBasis, recallSetup, wantsPrefetch } from './recall.ts';
+import { basisHead, capacityOf, prefetchBasis, recallModeOf, recallSetup, wantsPrefetch } from './recall.ts';
+import { callCaps, ollamaNeeds, serverNotices, type ServerRole } from './server-notices.ts';
+import type { ModelCaps } from '../providers/types.ts';
 import { checkRecallRecord, recallPicks } from '../agents/compendium/recall.ts';
 import { TurnRun, type EventBody, type PrefetchLook, type TurnHost } from './turn.ts';
 import { traceForSent } from '../prompt/assemble.ts';
@@ -621,6 +628,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     if (!log) throw new Error('could not find a free session id');
     const s = new SessionImpl(ctx, log, onClose);
     s.lane.open();
+    s.serverCheck();
     return s;
   }
 
@@ -653,6 +661,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       opened.log.close();
       throw e;
     }
+    s.serverCheck();
     return s;
   }
 
@@ -840,6 +849,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     this.assertOpen();
     if (opts.inspect !== undefined && typeof opts.inspect !== 'boolean') throw new Refusal('invalid_params', 'inspect must be a boolean');
     if (opts.transformGate !== undefined && typeof opts.transformGate !== 'boolean') throw new Refusal('invalid_params', 'transformGate must be a boolean');
+    // D-210 amended: a server that failed its read earlier may answer now; its notices follow.
+    this.serverCheck();
     const plan = admitTurn(
       this.ctx,
       { busy: this.running !== null, heldOpen: this.held.size > 0, version: this.ver, view: this.view(), config: this.config },
@@ -1035,6 +1046,7 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
       turnSignal: signal,
       sched: this.ctx.sched,
       fetch: this.ctx.fetch,
+      ...(this.ctx.serverInfo ? { serverInfo: this.ctx.serverInfo } : {}),
       timeouts: timeoutsFor(route.conn, this.ctx.timeouts),
       timers: this.ctx.timers,
       clock: this.ctx.clock,
@@ -1223,7 +1235,8 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
         {
           conn: primary.conn,
           model: primary.model,
-          caps: primary.caps,
+          // D-211: the slot pin the call would carry, once the server info is in (a preview never waits).
+          caps: this.wireCaps(primary),
           messages: shaped.messages,
           ...(shaped.prefill !== undefined && built.tools === null ? { prefill: shaped.prefill } : {}),
           maxTokens,
@@ -1274,6 +1287,96 @@ export class SessionImpl implements SessionHandle, TurnHost, RecoverJournal, Lan
     this.config = next;
     // D-171: the Compendium switched, filing or the historian changed: the lane's work is derived again.
     this.lane.poke();
+    // D-212: /model, the Director or the Compendium may have changed the roles.
+    this.serverCheck();
+  }
+
+  // ---- M5d: the local servers (D-210…D-212) -----------------------------------------------------
+
+  async serverInfoReady(): Promise<void> {
+    const memo = this.ctx.serverInfo;
+    if (!memo) return;
+    const roles = this.serverRoles();
+    for (const r of roles) memo.start(r.conn);
+    await Promise.all(roles.map((r) => memo.peek(r.conn.origin)));
+  }
+
+  /** D-212: the roles that count — the narrator, the Director when on, the recorder and a calling recall while the Compendium is on. */
+  private serverRoles(): ServerRole[] {
+    const config = this.config;
+    let primary: Route;
+    try {
+      primary = resolvePrimary(this.ctx, config);
+    } catch (e) {
+      // No narrator: no turn runs, so no server is worth a word.
+      if (e instanceof Refusal) return [];
+      throw e;
+    }
+    const roles: ServerRole[] = [];
+    const add = (role: ServerRole['role'], route: Route | null): void => {
+      if (route) roles.push({ role, conn: route.conn, model: route.model, caps: route.caps });
+    };
+    add('narrator', primary);
+    if (config.director?.enabled === true) add('director', resolveDirector(this.ctx, config, { binding: config.roles.narrator, primary }).route);
+    if (resolveCompendium(config.compendium).enabled) {
+      add('recorder', resolveRecorder(this.ctx, config).route);
+      const mode = recallModeOf(config, this.ctx.recallDefault);
+      if (mode !== 'lexical' && mode !== 'off') add('recall', resolveRecall(this.ctx, config).route);
+    }
+    return roles;
+  }
+
+  /**
+   * D-210, D-212: starts the reads the roles need (never blocking) and tells each notice once its
+   * answers are in; looks again when they settle. Runs at open and after every configure.
+   */
+  private serverCheck(): void {
+    // Advisory only: a failure here must never fail an open or a configure.
+    try {
+      this.serverLook();
+    } catch {
+      // nothing to tell
+    }
+  }
+
+  private serverLook(): void {
+    const memo = this.ctx.serverInfo;
+    if (!memo || this.closing) return;
+    const roles = this.serverRoles();
+    if (roles.length === 0) return;
+    const pending: Promise<unknown>[] = [];
+    const settled = <T>(p: T | Promise<T> | undefined): T | undefined => {
+      if (p instanceof Promise) {
+        pending.push(p);
+        return undefined;
+      }
+      return p;
+    };
+    for (const r of roles) memo.start(r.conn);
+    const infos = new Map(roles.map((r) => [r.conn.origin, settled(memo.peek(r.conn.origin))]));
+    for (const r of ollamaNeeds(roles, (o) => infos.get(o))) settled(memo.ollama(r.conn, r.model));
+    const notices = serverNotices(roles, {
+      info: (o) => infos.get(o),
+      ollama: (o, m) => {
+        const p = memo.ollamaPeek(o, m);
+        return p instanceof Promise ? undefined : p;
+      },
+      // The semaphore's capacity, as streamCall reads it (the smallest any role asks for).
+      capacity: (o) => Math.min(...roles.filter((r) => r.conn.origin === o).map((r) => this.ctx.sched.forOrigin(o, capacityOf(r.caps)).capacity)),
+    });
+    for (const n of notices) if (this.firstNotice(n.key)) this.publish({ type: 'notice', ...n.notice });
+    // The roles are read again then: a configure meanwhile is judged on its own roles.
+    if (pending.length > 0) void Promise.all(pending).then(() => this.serverCheck());
+  }
+
+  /** D-211 for the preview's wire: the pin a call would carry, from the server info already in. */
+  private wireCaps(route: Route): ModelCaps {
+    const memo = this.ctx.serverInfo;
+    if (!memo || route.caps.slotPin !== undefined) return route.caps;
+    memo.start(route.conn);
+    const info = memo.peek(route.conn.origin);
+    if (info === undefined || info instanceof Promise) return route.caps;
+    return callCaps(route.caps, info, this.ctx.sched.forOrigin(route.conn.origin, capacityOf(route.caps)).capacity);
   }
 
   close(): Promise<void> {

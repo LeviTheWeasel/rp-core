@@ -103,7 +103,7 @@ describe('the request on the wire', () => {
     expect(coalesce(events)).toEqual([
       { t: 'text', i: 0, d: 'Mara sets down the mug.' },
       { t: 'finish', reason: 'end', raw: 'stop', model: 'hf.co/bartowski/MN-12B-Mag-Mell-R1-GGUF:Q5_K_M' },
-      { t: 'usage', u: { inputTotal: 61, inputCacheRead: 48, outputTotal: 7 } },
+      { t: 'usage', u: { inputTotal: 61, inputCacheRead: 48, outputTotal: 7 }, prompt: { processed: 13, cached: 48 } },
     ]);
   });
 

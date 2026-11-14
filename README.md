@@ -107,12 +107,12 @@ The main chat is imported by default; use `--chat all` to include other branches
 
 ## Long-term memory
 
-Each story keeps a Compendium: typed entries for characters, places, items, events and notes. In the background, agents file what each answer established and summarise older parts of the story. Before each answer, recall picks the entries the narrator gets. `/memory` lists and edits them; `/memory mode` shows or changes how recall runs. A small roleplay model is often poor at recall; bind the `recall` role to an instruction-following model (`/model recall conn:model`) or use `/memory mode lexical`. See [the Compendium](docs/USER-GUIDE.md#the-compendium) in the guide.
+Each story keeps a Compendium: typed entries for characters, places, items, events and notes. In the background, agents file what each answer established and summarise older parts of the story. Before each answer, recall picks the entries the narrator gets. `/memory` lists and edits them; `/memory mode` shows or changes how recall runs. A small roleplay model is often poor at recall; bind the `recall` role to an instruction-following model (`/model recall conn:model`) or use `/memory mode lexical`. See [the Compendium](docs/USER-GUIDE.md#the-compendium) in the guide. These agents share a local server with the narrator: rp-core pins them to their own llama.cpp slot (start the server with `-np 2 --no-kv-unified`), and `rp-core bench ttft` checks that the narrator's prompt stays cached after an agent call ([details](docs/USER-GUIDE.md#local-servers-speed-and-caching)).
 
 ## Other UIs and hosts
 
 `rp-core --stdio` lets another program drive the engine with JSON-RPC 2.0 over stdin and stdout ([protocol reference](docs/STDIO.md)). A TypeScript host on Bun can embed the engine directly, with hooks, request review and its own session storage ([host API](docs/M9-HOST.md)).
 
-Not yet: group chats, and the latency work for local servers (llama.cpp slot pinning, a time-to-first-token benchmark).
+Not yet: group chats.
 
 For configuration, chat commands, import details and troubleshooting, see the [full guide](docs/USER-GUIDE.md). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the architecture. License: [AGPL-3.0-or-later](LICENSE).

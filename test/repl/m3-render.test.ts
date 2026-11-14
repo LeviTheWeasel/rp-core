@@ -197,7 +197,7 @@ describe('/trace: rounds and tool rows', () => {
   test('renderTrace: after the calls; nothing for a turn without tools (an M2 trace)', () => {
     const calls = [{ callKey: 't:narrator:0', agent: 'narrator', model: 'm', ms: 1200 }];
     const out = renderTrace('abcd1234', { trace: trace({ calls, rounds, tools: tools.slice(0, 1) }), continued: false }).split('\n');
-    const at = out.indexOf('  calls: narrator m 1.2s');
+    const at = out.indexOf('    narrator  1.2 s  m'); // M5d (D-213): one line per call, under '  calls:'
     expect(out.slice(at + 1)).toEqual(['  rounds: 3 · prompted tools · ended: answer · tool room 518 of 2048 tok used', '  tool calls: 1', '    round 0 · search_history · ok · 412 chars']);
     const m2 = renderTrace('abcd1234', { trace: trace({ calls }), continued: false });
     expect(m2).not.toContain('rounds');

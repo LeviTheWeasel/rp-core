@@ -288,6 +288,8 @@ describe('usage', () => {
     expect(run([chunk({}, 'stop', { usage: u })])).toContainEqual({
       t: 'usage',
       u: { inputTotal: 5000, inputCacheRead: 4096, inputCacheWrite: 100, outputTotal: 9, outputReasoning: 4, cost: 0.0123 },
+      // M5d (D-213): cached_tokens gives the prompt counts; processed = prompt_tokens − cached.
+      prompt: { processed: 904, cached: 4096 },
     });
     expect(run([chunk({}, 'stop', { usage: { prompt_tokens: 10, completion_tokens: 1, prompt_cache_hit_tokens: 8 } })])).toContainEqual({
       t: 'usage',
@@ -296,13 +298,16 @@ describe('usage', () => {
   });
 
   test('llama.cpp timings count as usage; usage fields win where both exist, timings fill the cache split', () => {
+    // M5d (D-213): timings with cache_n also give the prompt counts.
     expect(run([chunk({}, 'stop', { timings: { prompt_n: 20, cache_n: 3000, predicted_n: 7 } })])).toContainEqual({
       t: 'usage',
       u: { inputTotal: 3020, inputCacheRead: 3000, outputTotal: 7 },
+      prompt: { processed: 20, cached: 3000 },
     });
     expect(run([chunk({}, 'stop', { usage: { prompt_tokens: 3020, completion_tokens: 7 }, timings: { prompt_n: 20, cache_n: 3000, predicted_n: 7 } })])).toContainEqual({
       t: 'usage',
       u: { inputTotal: 3020, inputCacheRead: 3000, outputTotal: 7 },
+      prompt: { processed: 20, cached: 3000 },
     });
   });
 

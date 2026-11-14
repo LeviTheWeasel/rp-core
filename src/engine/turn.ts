@@ -106,7 +106,7 @@ import { isoNow, type EngineCtx } from './context.ts';
 import { priceFor, usageCost } from './cost.ts';
 import { truncatedByServer } from './ema.ts';
 import { HostHookError, hookBeforeAssemble, hookTransformReply, hookTransformRequest, type HookCtx } from './hooks.ts';
-import { narrateRounds, storedSeparator, sumUsage, timeoutsFor, type RoundCall, type RoundsResult, type TurnTools } from './narrate.ts';
+import { callTiming, narrateRounds, storedSeparator, sumUsage, timeoutsFor, type RoundCall, type RoundsResult, type TurnTools } from './narrate.ts';
 import {
   buildRequest,
   echoRuleOf,
@@ -918,6 +918,7 @@ export class TurnRun {
   private agentEnv(conn: Connection, sched: Scheduler = this.ctx.sched): AgentCallEnv {
     const turnId = this.entry.turn;
     return {
+      turnStart: this.t0,
       sched,
       fetch: this.ctx.fetch,
       timeouts: timeoutsFor(conn, this.ctx.timeouts),
@@ -929,6 +930,7 @@ export class TurnRun {
       emit: (ev) => this.emit(ev),
       onProviderError: (info) => this.ctx.onProviderError?.({ sessionId: this.host.sessionId, turnId, ...info }),
       ...(this.keep ? { keepRequest: this.keep } : {}),
+      ...(this.ctx.serverInfo ? { serverInfo: this.ctx.serverInfo } : {}),
     };
   }
 
@@ -1002,6 +1004,7 @@ export class TurnRun {
         turnSignal: this.ctrl.signal,
         sched: this.ctx.sched,
         fetch: this.ctx.fetch,
+        ...(this.ctx.serverInfo ? { serverInfo: this.ctx.serverInfo } : {}),
         timeouts: timeoutsFor(r.conn, this.ctx.timeouts),
         timers: this.ctx.timers,
         clock: this.ctx.clock,
@@ -1132,7 +1135,7 @@ export class TurnRun {
         /* a debug sink must never break a turn */
       }
     }
-    calls.push({ callKey, agent: 'narrator', model: label, ms: res.ms, ...(res.usage ? { usage: res.usage } : {}) });
+    calls.push({ callKey, agent: 'narrator', model: label, ms: res.ms, ...(res.usage ? { usage: res.usage } : {}), ...callTiming(res, this.t0) });
   }
 
   // ---- outcomes -------------------------------------------------------------------------------

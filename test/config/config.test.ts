@@ -161,7 +161,7 @@ describe('CONFIG_TEMPLATE', () => {
       creativity: 'moderate',
     });
     expect(cfg.caps).toEqual({
-      'ollama:qwen3:14b': { contextLength: 16384, tools: 'native', reasoning: { tags: ['<think>'] } as never },
+      'ollama:qwen3:14b': { contextLength: 16384, tools: 'native', reasoning: { tags: ['<think>'] } as never, slotPin: { narrator: 0, agents: 1 } },
     });
     expect(cfg.prices).toEqual({ 'openrouter:vendor/model': { inPerM: 1, outPerM: 2, asOf: '2026-10-06' } });
   });

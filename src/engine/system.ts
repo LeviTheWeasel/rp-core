@@ -16,3 +16,6 @@ export const systemRandom: RandomBytes = (n: number): Uint8Array => {
 };
 
 export const systemTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+/** Milliseconds from a monotonic clock, for I/O deadlines and retry gaps (never for stored times). */
+export const monotonicMs = (): number => performance.now();

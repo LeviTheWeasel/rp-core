@@ -166,7 +166,8 @@ describe('the prefetch in the REPL (auto lane, local origin)', () => {
     );
     expect(said(out, 'Кто здесь был?')).toContain('  ⋯ recall: adopted (1)');
     expect(recallLines(said(out, '/trace'))[0]).toMatch(/^ {2}recall: prefetch after #1 · 1 picked: C3 "Арсений Кеттер" · 0 calls in this turn \(the prefetch: 1 call \d+\.\ds\)$/);
-    expect(said(out, '/trace')).toMatch(/\n {2}calls: narrator script:default \d+\.\ds\n/);
+    // M5d (D-213): one line per call, with the offset and the first token.
+    expect(said(out, '/trace')).toMatch(/\n {2}calls:\n {4}narrator {2}\+\d+\.\d s {2}first token \d+\.\d s {2}\d+\.\d s\n/);
     expect(said(out, '/memory recall')).toMatch(/^recall for #3: prefetch after #1 · recalled 1 · lite · script:default · tagged\n[\s\S]*\n {2}1 call in the background, without the player's message · \d+\.\ds\n$/);
     expect(said(out, '/memory status', 3)).toBe("the Compendium's background lane: 1 running\n  recall: the prefetch after #3 runs\n");
     expect(said(out, '/memory wait', 2)).toBe('⋯ recall: prefetched after #3 → 1: C2 "Серый маяк"\nthe background lane is idle\n');

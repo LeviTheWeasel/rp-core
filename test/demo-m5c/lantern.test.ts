@@ -186,6 +186,17 @@ const laneLines = (out: string): string[] => out.split('\n').filter((l) => l.sta
 const turnLines = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('  ⋯ '));
 /** A /trace line starting with `  <name>: `. */
 const traceLine = (out: string, name: string): string => out.split('\n').find((l) => l.startsWith(`  ${name}: `)) ?? '';
+/** M5d (D-213): /trace's call lines, one per call under `  calls:`. */
+const callLines = (out: string): string[] => {
+  const lines = out.split('\n');
+  const from = lines.indexOf('  calls:');
+  if (from < 0) return [];
+  const rest = lines.slice(from + 1);
+  const end = rest.findIndex((l) => !l.startsWith('    '));
+  return end < 0 ? rest : rest.slice(0, end);
+};
+/** A call line's agent, offset, first token and time. */
+const callRow = (who: string, ms = '\\d+\\.\\d'): RegExp => new RegExp(`^ {4}${who} +\\+\\d+\\.\\d s {2}first token \\d+\\.\\d s {2}${ms} s$`);
 
 const msgRows = (): MsgEntry[] => entries.filter((e): e is MsgEntry => e.t === 'msg');
 const msgRow = (msgId: string): MsgEntry => msgRows().find((m) => m.id === msgId)!;
@@ -333,7 +344,9 @@ describe('the M5c demo (lantern, scripted models, the real CLI: recall sync, reu
     expect(rec!.ms).toBeGreaterThanOrEqual(1200);
     // One after the other the turn would take ≥ 2.4 s; side by side it takes one delay and the rest.
     expect(a8.gen!.ms!).toBeLessThan(dir!.ms + rec!.ms);
-    expect(traceLine(saidFor(2, '/trace'), 'calls')).toMatch(/^ {2}calls: director script:default \d+\.\ds, recall script:default \d+\.\ds, narrator script:default \d+\.\ds$/);
+    const rows = callLines(saidFor(2, '/trace'));
+    expect(rows).toHaveLength(3);
+    ['director', 'recall', 'narrator'].forEach((who, i) => expect(rows[i]).toMatch(callRow(who)));
   });
 
   test('2e. a swipe reuses the record: no recall call, the same picks; the Director’s plan too', () => {
@@ -344,7 +357,8 @@ describe('the M5c demo (lantern, scripted models, the real CLI: recall sync, reu
     expect(msgRow(a8b).trace!.calls!.map((c) => c.agent)).toEqual(['narrator']);
     const trace = saidFor(2, '/trace', 2);
     expect(traceLine(trace, 'recall')).toBe(`  recall: reused from ${replaced('A8')} (another version of #17) · 2 picked: C17 "Переправа к маяку", C5 "Фонарный ряд" · 0 calls`);
-    expect(traceLine(trace, 'calls')).toBe('  calls: narrator script:default 0.0s');
+    expect(callLines(trace)).toHaveLength(1);
+    expect(callLines(trace)[0]).toMatch(callRow('narrator', '0\\.0'));
     // Process 2 kept one Director request and two recall requests (U8's and U9's): none for the swipe.
     const fresh = keptAfter[1]!.filter((f) => !keptAfter[0]!.includes(f));
     expect(fresh.filter((f) => f.includes('_director_'))).toHaveLength(1);
@@ -427,7 +441,8 @@ describe('the M5c demo (lantern, scripted models, the real CLI: recall sync, reu
     expect(msgRow(a11).trace!.compendium?.source).toBe('prefetch');
     const trace = saidFor(3, '/trace', 2);
     expect(traceLine(trace, 'recall')).toMatch(/^ {2}recall: prefetch after #21 · 2 picked: C17 "Переправа к маяку", C6 "Серый маяк" · 0 calls in this turn \(the prefetch: 1 call \d+\.\ds\)$/);
-    expect(traceLine(trace, 'calls')).toBe('  calls: narrator script:default 0.0s');
+    expect(callLines(trace)).toHaveLength(1);
+    expect(callLines(trace)[0]).toMatch(callRow('narrator', '0\\.0'));
     expect(saidFor(3, '/memory recall', 2)).toMatch(/\n {2}read: 2 by name\n {2}1 call in the background, without the player's message · \d+\.\ds · 1204 in \/ 12 out tokens\n$/);
     // The prefetch's request: the A5 line last, the conversation up to A10 (U11 was not typed yet).
     const [, user] = texts(`p_${msg('A10')}_recall_0.json`);

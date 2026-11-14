@@ -14,6 +14,9 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
   story names, and [recall](#recall) has a model pick the ones the next answer needs. A Story
   Director can plan the story before each answer (off by default). A story begun in RoleCall
   [goes on here](#continuing-a-rolecall-story) from its export.
+  On a local server the narrator and the agents keep their own llama.cpp slots, and
+  `rp-core bench ttft` checks that the narrator's prompt stays cached
+  ([details](#local-servers-speed-and-caching)).
   Besides the line chat there is a [full-screen TUI](#the-full-screen-tui) with the models, the chat
   and the agents side by side. Other UIs can drive rp-core over [`--stdio`](STDIO.md) (JSON-RPC),
   and a program can embed it through the [host API](M9-HOST.md).
@@ -43,14 +46,16 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
     [the /memory commands](#the-memory-commands), [the keys](#the-compendium-keys)
 14. [The Story Director](#the-story-director)
 15. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
-16. [Active probes](#active-probes)
-17. [config.toml reference](#configtoml-reference)
-18. [One-shot commands and scripting](#one-shot-commands-and-scripting)
-19. [Recording and replaying a chat](#recording-and-replaying-a-chat)
-20. [Where your data lives](#where-your-data-lives)
-21. [Troubleshooting](#troubleshooting)
-22. [Command reference](#command-reference)
-23. [Development](#development)
+16. [Local servers: speed and caching](#local-servers-speed-and-caching): [server setups](#server-setups),
+    [the notices](#the-notices), [`bench ttft`](#rp-core-bench-ttft)
+17. [Active probes](#active-probes)
+18. [config.toml reference](#configtoml-reference)
+19. [One-shot commands and scripting](#one-shot-commands-and-scripting)
+20. [Recording and replaying a chat](#recording-and-replaying-a-chat)
+21. [Where your data lives](#where-your-data-lives)
+22. [Troubleshooting](#troubleshooting)
+23. [Command reference](#command-reference)
+24. [Development](#development)
 
 ## What works today
 
@@ -70,6 +75,7 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 | Compendium | Typed entries of 11 kinds (characters, places, items, events, plots…) from RoleCall Compendium exports and from your own `/memory new`. Each answer, the entries the story names (and those recall picked) go to the narrator in one block, short or whole by the window; the Director sees the characters and places in the scene. You edit library entries without touching the book, and export the session's entries as a lorebook or a RoleCall file (`/memory`) |
 | Compendium agents | In the background, between turns: a filing agent writes what each accepted answer established into the Compendium, and a historian writes summaries and `[Arc]` overviews of the story. Once old messages leave the prompt, the `{{recap}}` slot gives the narrator those overviews and summaries. Swipes and rewinds take an answer's records off the path, edits file it again; `/memory undo`, `refile`, `retry`, `wait` and `status` steer the work. On a local server they wait until you pause, and a turn never waits for them |
 | Recall (M5c) | Before an answer, a model picks from an index of the Compendium the entries the answer will need, also ones no recent message names: beside the Director on a remote server, or in the background while you type on a local one. Swipes and continues reuse the picks; a slow or failed recall falls back to the names alone. `/memory recall`, `profile` and `mode`, and a `recall` line in `/trace` ([details](#recall)) |
+| Local servers (M5d) | rp-core asks a local server what it is when a session opens. On llama.cpp with two slots it pins the narrator to slot 0 and the agents to slot 1 (`id_slot`), so an agent's call never takes the narrator's cache; notices about Ollama names that reload one model and LM Studio models that evict each other; the prompt's cached and new tokens per call in `/trace`; `rp-core bench ttft` measures the first token and checks the cache ([details](#local-servers-speed-and-caching)) |
 | Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
 | RoleCall stories | `rp-core import <story>.rolecall` continues a story from RoleCall's export: the character, the persona, the preset with the chat's own settings and the lorebooks (identical ones once) go to the library, then each chat you pick (the main one by default) becomes a session with every swipe, the reasoning split off as RoleCall did, the Director's state and the Compendium on from the import. A dry run first, all or nothing, and a warning when the story does not fit the narrator's window ([details](#continuing-a-rolecall-story)) |
 | SillyTavern chats | `rp-core import <chat>.jsonl --card <library id>` continues a solo chat, keeping its messages, swipes, selected versions and hidden lines ([details](#importing-a-sillytavern-chat)) |
@@ -83,7 +89,6 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
 | What | Where it stands |
 |---|---|
-| Latency work on local servers (M5d) | Pinning the narrator and the agents to their own llama.cpp slots (`id_slot`) with a `/slots` check, warnings about Ollama and LM Studio settings that make the server reload or swap the model, and `rp-core bench ttft` to measure the time to the first token. None of it is built ([details](#not-yet-latency-work-m5d)) |
 | Group chats | A session has one character card. A SillyTavern group chat is refused on import ([details](#importing-a-sillytavern-chat)) |
 | Recall from plain lore | Recall picks typed Compendium entries only; a lorebook's plain entries still fire by their keys |
 | The TUI | No external editor and no images; the settings pane (F8) covers only the preset and the lorebooks ([Limits](#limits)) |
@@ -281,7 +286,8 @@ rp-core probe "ollama:magmell-16k:latest"
 `--active` it also tries the model itself: whether it calls tools; see [Active probes](#active-probes).
 
 **First-answer latency.** The first answer after Ollama loads a model takes a few seconds while the
-model loads. Later answers start in well under a second, because Ollama keeps the prompt cached.
+model loads. Later answers start in well under a second, because Ollama keeps the prompt cached
+([Local servers: speed and caching](#local-servers-speed-and-caching)).
 
 ## Playing in the chat
 
@@ -1254,7 +1260,9 @@ trace of 7c1e09ab · ollama:qwen3:14b
   window 16384 · reserve 1024 · prompt ~11840 tok · 31 messages sent
   trimmed: 4f1a2b3c … 9e8d7c6b · prefill: none
   …
-  calls: narrator ollama:qwen3:14b 3.1s, narrator ollama:qwen3:14b 2.4s
+  calls:
+    narrator  +0.0 s  first token 0.6 s  3.1 s  prompt 10 812 cached, 1 028 new
+    narrator  +3.1 s  first token 0.3 s  2.4 s  prompt 11 840 cached, 412 new
   rounds: 2 · native tools · ended: answer · tool room 412 of 3840 tok used
   tool calls: 1
     round 0 · search_history · ok · 380 chars
@@ -1771,9 +1779,12 @@ In the [TUI](#the-agents-pane) the agents pane gives each agent a block. Notices
     total      in 28602 tok · out 3072 tok · cost unknown
   ```
 
-- **On a one-place local server** each pass also pushes the narrator's prompt out of the server's
+- **On a one-place local server** each pass may also push the narrator's prompt out of the server's
   cache, so the next answer processes its prompt again. The idle wait keeps a swipe or a quick reply
-  from paying for that; a second slot or a separate server for the recorder avoids it.
+  from paying for that. A llama.cpp server with two slots of its own (`-np 2 --no-kv-unified`),
+  where rp-core pins the narrator to one and the agents to the other, or a server with a host-RAM
+  prompt cache avoids it; `rp-core bench ttft` tells you which you have
+  ([Local servers: speed and caching](#local-servers-speed-and-caching)).
 
 ### Recall
 
@@ -1967,14 +1978,12 @@ Notices, once per session:
 | `recall_index_truncated` | The index did not fit its budget, so some entries were left out of it | A recall model with a larger window. Entries the messages name still reach the block |
 | `history_crowded` | Fewer than 4 earlier messages fit in the request: the fixed part of the prompt takes almost all of it. Not recall's own; any small window can show it | A narrator with a larger window or a lighter preset ([details](#when-the-story-does-not-fit)) |
 
-### Not yet: latency work (M5d)
+### Not yet in recall
 
-Recall is done; tuning how local servers share their time is not. None of these is built yet:
-pinning the narrator and the agents to their own llama.cpp slots (`id_slot`) with a `/slots` check
-for it, warnings about Ollama and LM Studio settings that make the server reload or swap the model,
-and `rp-core bench ttft` to measure the time to the first token. Also missing: recall does not pick a
-lorebook's plain (untyped) entries, and there is no `/memory recall test <text>` to try recall on a
-message without sending it.
+Recall does not pick a lorebook's plain (untyped) entries, and there is no
+`/memory recall test <text>` to try recall on a message without sending it. A recall call on a
+local server shares it with the narrator like the other agents; how rp-core keeps the narrator's
+cache then is in [Local servers: speed and caching](#local-servers-speed-and-caching).
 
 ### The /memory commands
 
@@ -2478,9 +2487,11 @@ every turn, failed plans included. `/preview` shows it, and a placeholder where 
   loaded, took 110 s. An answer with its plan took 13–14 s; a swipe that reused the plan, 5.1 s.
 - **No shared prompt cache:** the Director's prompt and the narrator's differ from the first token.
   On a server that keeps one prompt in its cache, the Director's call pushes out the narrator's, and
-  the narrator's prompt is processed again.
-- **Where to see it:** `/trace` lists the calls (`calls: director … 7.6s, narrator … 5.6s`); `/usage`
-  adds a row per agent, each priced by its own model.
+  the narrator's prompt is processed again. On llama.cpp with two slots rp-core keeps them apart
+  ([Local servers: speed and caching](#local-servers-speed-and-caching)).
+- **Where to see it:** `/trace` gives each call a line, with its start, first token, time and
+  prompt counts (`director  +0.0 s  first token 0.4 s  8.1 s  prompt 2 595 cached, 1 071 new`);
+  `/usage` adds a row per agent, each priced by its own model.
 
 ### Small windows
 
@@ -2579,6 +2590,9 @@ key_env = "GEMINI_API_KEY"
 - **Context window.** For llama.cpp and LM Studio the window is what you started the server with
   (`-c` / the context slider). `rp-core probe` reads it from llama.cpp's `/props`.
 - **Remote servers** get 4 requests in flight by default; local ones get 1.
+- **Two slots for llama.cpp.** Started with `-np 2 --no-kv-unified`, a llama.cpp server gives the
+  narrator a slot of its own, and the agents' calls stop pushing its prompt out of the cache
+  ([Local servers: speed and caching](#local-servers-speed-and-caching)).
 - **Native Claude:** `rp-core models claude` reads Anthropic's catalog. Use its exact model ID in
   `/model narrator claude:<model id>` or the TUI model picker. The connection uses the Messages API,
   including native tools, prompt cache marks, structured output and signed thinking blocks within
@@ -2597,6 +2611,224 @@ key_env = "GEMINI_API_KEY"
 Fields that look like keys (`api_key`, `token`, `password`, …) are refused. Keys never reach session
 files, events or output. Error messages are fixed sentences, and a server's own words are shown only
 with `--debug`, with keys and header values replaced by `[redacted]`.
+
+## Local servers: speed and caching
+
+A local server keeps the prompt it last processed in a cache. The next answer starts with the same
+text, so the server processes only what is new: the last answer and your message. But the
+narrator is not the only one calling. The [Director](#the-story-director), [recall](#recall) and the
+Compendium's [filing agent and historian](#the-background-agents) send their own prompts to the
+same server between the narrator's answers. When one of them takes the narrator's place in the
+cache, the next answer processes its whole prompt again. In the live runs below, that made the
+first token of a 4 000-token prompt take 0.97 s instead of 0.09 s; on a longer story or a slower
+GPU it is seconds.
+
+### What rp-core does
+
+- **It asks the server what it is when a session opens.** For each local connection of the
+  `openai-chat` dialect that the session's roles use, rp-core reads llama.cpp's `/props` (its slot
+  count and build), else Ollama's `/api/version` and `/api/ps`, else LM Studio's `/api/v1/models`.
+  The read does not hold the open: the first call to that server waits for it at most 3 s, then
+  goes on with or without it. A definite answer is kept until rp-core exits. A server that did not
+  answer (not started yet, still loading, HTTP 5xx, a refused key) is asked again when a later turn
+  begins, at most every 30 s, so a server you start after opening the session still gets its pin
+  and its notices. Nothing is stored. Remote servers, `local = false` connections and the
+  `script:`, `record:` and `replay:` providers are never asked. `RP_CORE_SERVER_INFO=off` turns the
+  read off everywhere.
+- **It pins llama.cpp slots.** Each request then carries `id_slot`: the narrator (and its drafts)
+  slot 0, every other agent (the Director, recall, filing, the historian) slot 1. The narrator's
+  cache stays in its own slot, whatever the agents send. rp-core pins when all of these hold:
+  - the server is llama.cpp;
+  - it has 2 or more slots (llama.cpp takes `id_slot` modulo the slot count, so on one slot both
+    ids land on slot 0);
+  - its build is b11552 or newer, **or** the connection's `max_in_flight` is 1 (the default on a
+    local server). Before b11552, pinning a slot that was busy could load another prompt into it
+    while it generated; at `max_in_flight = 1` rp-core never sends to a busy slot, so any build is
+    safe.
+
+  The agents share slot 1. When two of them want it at once (the Director and a sync recall),
+  llama.cpp queues the second one; it never refuses it. Letting one of them take slot 0 instead
+  would empty the narrator's cache.
+- **`slot_pin` overrides the rule.** Under `[caps."conn:model"]`, `slot_pin = true` pins to slots 0
+  and 1 without asking the server (also for a server rp-core does not read, such as a `local =
+  false` tunnel); `slot_pin = false` never pins.
+- **Your own `id_slot` wins.** An `id_slot` in the connection's or the model's `extra_body` is sent
+  as you wrote it; rp-core never replaces it (one in the model's `extra_body` also turns the pin off,
+  and `slots_detected` says so). `exclude_body = ["id_slot"]` drops it from every request. `rp-core preview <session> --wire` shows the `id_slot` a call would carry.
+
+### Server setups
+
+The numbers are from `rp-core bench ttft` (3 rounds, a 4 000-token narrator prompt, a 1 500-token
+agent prompt, a 200-token tail) on Mag-Mell R1 12B and a 16 GB GPU. "Ratio" is what the narrator's
+next call processed over what was new in it: 1.00 means the agent call left its cache alone. The
+first token is that next call's.
+
+| Server | The narrator's cache after an agent call | Measured |
+|---|---|---|
+| Ollama, one model, default settings (one slot) | Kept: Ollama runs the model with llama.cpp's host-RAM prompt cache on, so the narrator's prompt comes back from RAM after the agent's call | PASS, ratio 1.00 in every round; median first token 0.26 s |
+| `llama-server -np 2 --no-kv-unified`, pinned | Kept in slot 0 | PASS, 1.00 in every round, with `--cache-ram 0` (first token 0.09 s) and with the default host cache (0.23 s) |
+| The same server, not pinned (`slot_pin = false`, or `bench --pin off`) | llama.cpp picks a slot by how much of the prompt it already holds. An agent prompt that starts like the narrator's (the system prompt and the card) often lands in the narrator's slot | With `--cache-ram 0`: FAIL in every round, ratio 14.75–15.07, first token 0.97 s. With the default host cache: FAIL in 1 round of 3 (15.07); in the others the host cache brought the prompt back |
+| `llama-server -np 1 --cache-ram N` | One slot; the narrator's prompt is kept in the host-RAM cache and restored after the agent's call | Not measured here |
+| `llama-server -np 1 --cache-ram 0` | Lost: every answer after an agent call processes its prompt again | Not measured here |
+| `llama-server` with the default `-np auto` | rp-core pins if the server reports 2 or more slots, but the KV cache is unified: an idle slot is moved to host RAM whenever another task starts, so the narrator's prompt comes back from RAM rather than staying in VRAM | Not measured here |
+
+For llama.cpp, start the server with two slots of their own:
+
+```bash
+llama-server -m model.gguf --port 8080 -c 32768 -np 2 --no-kv-unified
+```
+
+With `--no-kv-unified` the window is split between the slots: `-c 32768 -np 2` gives each slot
+16 384 tokens, and that is the narrator's window. Keep `max_in_flight = 1` on the connection (the
+default) unless your build is b11552 or newer.
+
+- **Ollama:** bind every role on one model file to **one name**. Two names built from the same
+  model with different runner options (a 16k and a 32k variant: `num_ctx`, or `num_batch`,
+  `num_gpu`, …) make Ollama reload the model at every switch between them. rp-core warns about it
+  (`ollama_reload_risk`). Two different models may or may not stay loaded together, depending on
+  your VRAM and `OLLAMA_MAX_LOADED_MODELS`; rp-core cannot see that and says nothing.
+- **LM Studio:** load every model the roles use with `lms load` before you play. With JIT loading
+  and Auto-Evict on (LM Studio's defaults), loading one model unloads the other, every time
+  (`lmstudio_autoevict`). LM Studio reports no prompt counts, so `/trace` and `bench ttft` show only
+  the timings.
+
+### The notices
+
+Each is told once per session: when the session opens and the server's answer arrives, after
+`/model` changes a role, or at a later turn when the server first answers then. The roles that
+count are the narrator, the Director when it is on, and, while the Compendium is on, the recorder
+and recall unless its mode is `lexical` or `off`.
+
+| Notice | When | What it says |
+|---|---|---|
+| `slots_pinned` | rp-core pins a llama.cpp server | The slot count and build, which slot the narrator keeps and which the agents use, and that the cache stays in VRAM only with `-np 2 --no-kv-unified` |
+| `slots_detected` | A llama.cpp server with 2 or more slots that rp-core does not pin (`slot_pin = false`, your own `id_slot` in `extra_body`, or an old or unknown build at `max_in_flight` 2 or more) | Why it does not pin and, unless you set that yourself, how to: `slot_pin = true`, a newer build, or `max_in_flight = 1` |
+| `ollama_reload_risk` (warning) | Two roles on one Ollama server name two models built from one model file with different runner options | The two names, the options that differ (`num_ctx 16384 vs 32768`), and to bind both roles to one name |
+| `lmstudio_autoevict` (warning) | The roles on one LM Studio server name two or more models and one of them is not loaded | That a JIT load with Auto-Evict on unloads the other model each time; load both with `lms load`, or bind the agents to the narrator's model |
+
+From the live run on `llama-server -np 2 --no-kv-unified` (`<blob>` stands for the model's path):
+
+```
+! The llama.cpp server at http://127.0.0.1:8090 (2 slots, build b1) is pinned: the narrator keeps slot 0 and the agents use slot 1 (2 slots, capacity 1 (build b1)). The narrator's cache stays in VRAM only with -np 2 --no-kv-unified: with the default -np auto the KV is unified and an idle slot is moved to host RAM whenever another task starts. (slots_pinned)
+```
+
+That server was the `llama-server` that comes with Ollama. It reports its build as `b1`, older than
+b11552 as far as rp-core can tell, so it was pinned because `max_in_flight` was 1 (`capacity 1`).
+
+### The prompt counts in /trace
+
+`/trace` gives each model call of the answer's turn a line: who called, when it started (seconds
+into the turn), its first token, its total time, and how much of its prompt the server had cached
+and how much it processed anew. From the live session, turn 2 with the Director on:
+
+```
+  calls:
+    director  +0.0 s  first token 0.4 s  8.1 s  prompt 2 595 cached, 1 071 new
+    director  +8.1 s  first token 0.1 s  7.6 s  prompt 3 937 cached, 62 new
+    narrator  +15.7 s  first token 0.5 s  5.9 s  prompt 595 cached, 248 new
+```
+
+The Director called twice: its plan could not be decoded, and the correction (the second call)
+failed too, so this answer came without a directive. Both calls found most of their prompt in
+slot 1. The narrator then found 595 tokens of its prompt in slot 0. Its prompt differs from the
+first turn's from where that turn's directive sat, so the 248 new tokens are mostly the first
+answer and your messages. A narrator line with most of the prompt `new` after an agent's call is
+the sign that the agent took its cache.
+
+The counts come from the server's usage (`cached_tokens`, as llama.cpp and Ollama's `/v1` report
+it) or from llama.cpp's `timings`. A server that reports neither (LM Studio) gets the timings only.
+A row names its model when it is not the answer's. Sessions from before M5d show only the agent
+and the time.
+
+### rp-core bench ttft
+
+`bench ttft` checks that a server keeps the narrator's prompt cached across an agent's call, and
+times the first token while it does:
+
+```
+Usage: rp-core bench ttft [connection:model] [--rounds N] [--prompt-tokens N] [--tail-tokens N] [--agent-tokens N] [--agent-shared PCT] [--pin auto|on|off] [--json]
+```
+
+```
+  --rounds N         rounds (default 3)
+  --prompt-tokens N  size of P (default 4000, o200k estimate)
+  --tail-tokens N    size of T (default 200)
+  --agent-tokens N   size of A (default 1500)
+  --agent-shared PCT how much of A is P's own start, as an agent prompt shares the system prompt and
+                     card with the narrator's (default 50; 0 makes A unrelated)
+  --pin auto|on|off  llama.cpp id_slot: auto follows the rule a session uses (2 or more slots and a
+                     build from b11552, or max_in_flight 1); on sends slot 0 for the narrator and 1
+                     for the agent; off sends none
+  --json             print one JSON object on stdout (the call count goes to stderr)
+```
+
+- **It makes real calls.** 3 per round, 9 at the defaults, each with at most 16 output tokens; it
+  says how many before the first. On a paid API they cost money. It never touches a session. The
+  model defaults to the narrator in `[roles]`.
+- **One round** sends a narrator prompt P, an agent prompt A as the filing agent (so pinning sends
+  it to the agents' slot), then P again with a new tail T. By default A starts with half of P's
+  start, as a Director or filing prompt shares the system prompt and the card; `--agent-shared 0`
+  makes it unrelated. The prompts are made-up words from a fixed seed, never story text.
+- **Reading it.** Each round's table gives every call's first token, total time, the server's
+  prompt size and how much it processed and found cached. The verdict is call 3's ratio: what it
+  processed over its new tokens. **PASS** when it is at most 1.5 in every round: the narrator's
+  cache survived. **FAIL** names the rounds and suggests a setup. Exit 0 on a PASS (or when the
+  server reports no counts), 1 on a FAIL, 3 when a call failed.
+- **Run it cold.** Run it on a server nothing else is using. Each run salts its prompts, so a second
+  run is not answered from the first one's cache. The first call may include loading the model
+  (121.62 s on the first Ollama run); only call 3 decides the verdict.
+- **Compare setups.** You start the server; the bench only calls it. Run it once with `--pin auto`
+  and once with `--pin off` on a two-slot server to see what pinning buys.
+
+From the live run on `llama-server -np 2 --no-kv-unified --cache-ram 0`, not pinned, the first round
+and the summary:
+
+```
+bench ttft: 9 real calls to llamacpp:<blob> (3 rounds of narrator P, filing A, narrator P+T; at most 16 output tokens each)
+server info: llama.cpp b1, 2 slots
+slot pinning: off — --pin off
+prompts: P 4 000 tokens, A 1 500 (50 % of it P's start), T 200 (o200k estimate; synthetic words, seeded, salted per run)
+round 1
+  #  agent     prompt  first token   total  prompt tok  processed  cached
+  1  narrator  P            1.09 s  1.35 s       4 215      4 198      17
+  2  filing    A            0.22 s  0.47 s       1 592        801     791
+  3  narrator  P+T          0.97 s  1.24 s       4 464      3 673     791
+  ratio 14.75 (3 673 processed / 249 new): FAIL
+…
+median first token: P 1.09 s · A 0.22 s · P+T 0.97 s
+median total:       P 1.35 s · A 0.47 s · P+T 1.23 s
+median ratio 14.84 (limit 1.5)
+FAIL: call 3 reprocessed more than 1.5× its new tokens (round 1 14.75, round 2 14.84, round 3 15.07): the narrator's cache did not survive the agent call
+try: llama-server -np 2 --no-kv-unified with slot pinning, or -np 1 with --cache-ram
+```
+
+Call 3 found only the 791 tokens that A shared with P: A had taken the narrator's slot. The same
+server pinned:
+
+```
+slot pinning: on — narrator 0, agents 1 (2 slots, capacity 1 (build b1))
+…
+  3  narrator  P+T          0.09 s  0.35 s       4 465        249   4 216
+  ratio 1.00 (249 processed / 249 new): PASS
+…
+median first token: P 1.09 s · A 0.41 s · P+T 0.09 s
+```
+
+### rp-core probe
+
+`rp-core probe <connection>` on a local server adds two lines: what the server said about itself,
+and, for llama.cpp, the pinning a session would get. They are the same two lines `bench ttft`
+prints after its call count, indented under the server; from the live bench run on the two-slot server:
+
+```
+server info: llama.cpp b1, 2 slots
+slot pinning: on — narrator 0, agents 1 (2 slots, capacity 1 (build b1))
+```
+
+For Ollama the first line names the version and the loaded models (`server info: ollama 0.40.12,
+nothing loaded`); for LM Studio, which models are loaded. On a `local = false` connection probe
+notes that a session never reads that server or pins its slots by the rule. `RP_CORE_SERVER_INFO=off`
+leaves both lines out.
 
 ## Active probes
 
@@ -2667,7 +2899,7 @@ the round trip.
 | `[narrator]` | `max_rounds` (rounds of lookups per answer, 1–8, default 4; see [Rounds](#rounds)) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
 | `[director]` | The Story Director for new sessions: `enabled` (default `false`), `profile` (`"auto"`, `"full"`, `"lite"`), `on_swipe` (`"reuse"`, `"replan"`), `instructions` (up to 2 000 characters), `style` (a personality, default `"the-balanced"`), `creativity` (`"subtle"`, `"moderate"`, `"dramatic"`), `timeout_sec` (1–3600); see [The \[director\] keys](#the-director-keys) |
 | `[compendium]` | The Compendium for new sessions: `enabled` (default `true`), `profile` (`"auto"`, `"full"`, `"lite"`), `min_share` (0–1, default 0.4), `language`, `guidance`, `max_attempts` (default 3), `idle_delay_sec` (default 8) and `[compendium.books]` (`<library id> = "read"` or `"off"`); the agents' tables `[compendium.filing]` (`enabled`, `wait`, `every_n`, `allow`, `timeout_sec`) and `[compendium.historian]` (`interval`, `recap_after`, `overlap`); recall's `[compendium.recall]` (`mode`, `on_miss`, `grace_sec`, `max_entries`, `min_entries`, `context_messages`, `timeout_sec`, `on_swipe`, `guidance`); see [The \[compendium\] keys](#the-compendium-keys) |
-| `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, … Override only after checking (`rp-core probe` shows the current values) |
+| `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, `slot_pin` (llama.cpp: `true` pins the narrator to slot 0 and the agents to slot 1, `false` never pins; unset, rp-core [decides](#what-rp-core-does)), … Override only after checking (`rp-core probe` shows the current values) |
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
 
 Dates must be quoted strings (`as_of = "2026-10-26"`): a bare TOML date is refused. A broken file
@@ -2839,6 +3071,11 @@ That is a copy of the M4 live session (6 answers with the Director on). A second
 | `the server refused the API key` / `key_unavailable` | Wrong key, unset `key_env`, or a failing `key_cmd` | Check the variable or command; `--debug` shows the server's words, redacted |
 | `/e` opens vi and keys do nothing | A terminal editor inside the chat in a terminal like Warp | Unset `$EDITOR` to edit in place, or use a graphical editor ([details](#using-an-editor)) |
 | The first answer takes several seconds | The server is loading the model | Normal; later answers start fast |
+| The first token is slow after the Director, recall or filing ran; in `/trace` the narrator's line has most of its prompt `new` | The agent's call took the narrator's place in the server's cache | On llama.cpp: `-np 2 --no-kv-unified` (rp-core pins the slots), or `-np 1` with `--cache-ram`. `rp-core bench ttft` checks the setup ([details](#local-servers-speed-and-caching)) |
+| Ollama loads the model again before most answers; notice `ollama_reload_risk` | Two roles name two variants of one model (a 16k and a 32k name on one model file) with different runner options, so every switch reloads it | Bind both roles to one name (`/model director <conn:model>`) ([details](#server-setups)) |
+| LM Studio swaps models between the narrator and an agent; notice `lmstudio_autoevict` | The roles name two models and JIT loading with Auto-Evict (LM Studio's default) unloads one to load the other | Load both with `lms load`, or bind the agents to the narrator's model |
+| notice `slots_detected` | A llama.cpp server with 2 or more slots that rp-core does not pin; the notice says why | `slot_pin = true` under `[caps."conn:model"]`, a build from b11552, or `max_in_flight = 1` |
+| `bench ttft` says `FAIL` | The narrator's prompt did not survive the agent's call on this server | Follow its `try:` line; run it again with `--pin auto` on a two-slot server |
 | The character answers in English to a Russian message | The card and the model, not rp-core | Write the card in Russian, or say so in the first message or in `/note` |
 | `⋯ director: failed (undecodable)` | The Director's plan was cut off at its reply limit or its JSON was broken, also after the correction. The answer still came, without a directive | One now and then is harmless: the next turn plans again. On every turn the model does not manage the plan's format: give the Director a larger model (`/model director <conn:model>`), or `/director off` |
 | `⋯ director: failed (no_room)` and notice `director_no_room` | The Director's window cannot hold its shortened prompt and 600 tokens for a plan; nothing was sent | Give its model a bigger window and set `context_length` ([Small windows](#small-windows)); 4 096 is too small |
@@ -2879,7 +3116,8 @@ redacted.
 | `import <story.rolecall> [--chat main\|all\|<prefix>[,…]] [--model conn:model] [--compendium on\|off] [--as title] [--dry-run] [--new] [--keep-raw] [--json]` | Imports a RoleCall story export: its library items, then one session per chosen chat (the main one by default); prints a line per item and session, the warnings and the hints ([details](#continuing-a-rolecall-story)) |
 | `send <session> [text] [--kind reply\|swipe\|continue] [--guidance t] [--json] [--provider …]` | One turn. `reply` needs text (`-` reads stdin); `swipe` and `continue` take none |
 | `preview <session> [--draft t] [--turn id] [--wire] [--verdicts] [--json] [--provider …]` | The request a turn would send, never sent: the next turn's, a reply to a draft, or a past answer's |
-| `probe [conn[:model]] [--active] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only) and the caps a model gets; `--active` also tries one model with a few tiny calls ([details](#active-probes)); `--write` stores what was learned |
+| `probe [conn[:model]] [--active] [--write] [--json]` | The server's catalog: kind, models, windows, slots (advice only), on a local server what it said about itself and the [slot pinning](#rp-core-probe) a session would get, and the caps a model gets; `--active` also tries one model with a few tiny calls ([details](#active-probes)); `--write` stores what was learned |
+| `bench ttft [conn:model] [--rounds N] [--prompt-tokens N] [--tail-tokens N] [--agent-tokens N] [--agent-shared PCT] [--pin auto\|on\|off] [--json]` | Times the first token and checks that the server keeps the narrator's prompt cached across an agent's call; makes 3 real calls per round ([details](#rp-core-bench-ttft)). Exit 1 on a FAIL |
 | `models <conn> [--json]` | The connection's model ids |
 | `sessions [--json]` | Sessions, newest first |
 | `show <session> [--json]` | The active path with markers `[interrupted]`, `[stopped]`, `[hidden]`, `[edited]`. Never takes the lock |
@@ -2898,6 +3136,13 @@ work only at `/memory wait` (the tests set it). The default, `auto`, runs it bet
 
 **`RP_CORE_RECALL=lexical`** (or `off`) makes every session that sets no recall mode make no
 recall calls ([details](#recall)).
+
+**`RP_CORE_SERVER_INFO=off`** stops rp-core from asking local servers what they are: no slot pinning
+by the rule (`slot_pin = true` still pins), no server notices, no `server info` lines in `probe`,
+and in `bench` a `server info` line that says it was not read ([details](#what-rp-core-does)). The tests set it.
+
+**`RP_CORE_BENCH_SALT`** replaces the random salt `bench ttft` puts in its prompts on each run (the
+tests set it to an empty string, so the prompts are the same every time).
 
 **Global flags** may go anywhere on the line: `--home <dir>`, `--sandbox`, `--debug`, `--help`
 (also `rp-core help <command>`) and `--version`.
@@ -2934,6 +3179,7 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 | `bun test test/demo-m5c` | The M5c demo on a scripted model (14 tests, about 12 seconds): the real CLI recalls a summary no message names, runs recall beside the Director, reuses its picks on a swipe and a continue (also after a restart), falls back on a timeout and on a missed prefetch, adopts a prefetch with no call in the turn, and prints `/memory recall`, `profile` and `mode` ([`docs/M5C-DEMO.md`](M5C-DEMO.md)) |
 | `bun test test/{sched,lane,filing,historian,recap,fold,language,repl}-m5b` | M5b's own tests besides the demo (447 tests in 38 files, a few seconds), on scripted models and fake clocks: the scheduler (37) and the background lane (70: preemption without an attempt, the idle wait, retries, parking, recovery after a crash), the filing prompts against Bunraku's text, reading and staging (85), the historian (100), the `{{recap}}` slot (66), the fold with the agents' rows (38), the language names (3) and the REPL's commands and lines (48). 64 more sit beside older tests: `test/memory/fold-m5b*.test.ts`, `test/structured/{review-m5b,ruling-k}.test.ts`, `test/session/fork-recap.test.ts`, `test/cli/lane-m5b.test.ts` and `test/tui/lane-*.test.ts` |
 | `bun test test/rcimport` | The RoleCall story import (135 tests in 5 files, a few seconds) on a synthetic export built in memory by `test/rcimport/kit.ts` (every name and line in it invented): the ZIP reader on good and hostile archives, the converters, RoleCall's reasoning splitter (also in linear time on texts that made RoleCall's own regexes quadratic), the Director's state, and the CLI end to end, 1 200 messages in about a tenth of a second. `RP_CORE_RC_EXPORT=<file> bun test test/rcimport/zip.test.ts` adds one read-only check that your own export opens and matches its manifest; nothing of it is printed or kept. `test/engine-fit` and `test/repl/preview-imported.test.ts` (8 more) cover a turn that cannot fit and `/preview n` on an imported answer |
+| `bun test test/demo-m5d` | The M5d demo against fake llama.cpp, Ollama and LM Studio servers: `probe` with the pinning line, a chat whose calls are pinned, `slot_pin = false`, `bench ttft` with and without pinning, a notice over `--stdio`, and the Ollama and LM Studio notices. `RP_CORE_DEMO_PRINT=1` prints the transcript ([`docs/M5D-DEMO.md`](M5D-DEMO.md)). Beside it: `test/{serverinfo,pin,trace,bench}-m5d` |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
 | `bunx tsc --noEmit -p .` | The typecheck |
 | `RP_CORE_LIVE=1 bun test test/adapter/live-ollama.test.ts` | One short call to a real Ollama. Set the model with `RP_CORE_OLLAMA_MODEL` and the URL with `RP_CORE_OLLAMA_URL` |
@@ -2966,11 +3212,13 @@ run).
 
 The design and its decisions (D-1…D-195; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
 D-140…D-169, M5b's D-170…D-184, the RoleCall story import's D-185…D-195) are in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md); M5c's
-D-196…D-208 are in [`.notes/m5c-decisions.md`](../.notes/m5c-decisions.md). The
+D-196…D-208 are in [`.notes/m5c-decisions.md`](../.notes/m5c-decisions.md), M5d's D-209…D-218 in
+[`.notes/m5d-decisions.md`](../.notes/m5d-decisions.md). The
 milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](M1A-DEMO.md),
 [`docs/M1B-DEMO.md`](M1B-DEMO.md), [`docs/M2-DEMO.md`](M2-DEMO.md),
 [`docs/M3-DEMO.md`](M3-DEMO.md), [`docs/M4-DEMO.md`](M4-DEMO.md),
-[`docs/M5A-DEMO.md`](M5A-DEMO.md), [`docs/M5B-DEMO.md`](M5B-DEMO.md) and [`docs/M5C-DEMO.md`](M5C-DEMO.md).
+[`docs/M5A-DEMO.md`](M5A-DEMO.md), [`docs/M5B-DEMO.md`](M5B-DEMO.md), [`docs/M5C-DEMO.md`](M5C-DEMO.md)
+and [`docs/M5D-DEMO.md`](M5D-DEMO.md).
 The `--stdio` protocol is in [`docs/STDIO.md`](STDIO.md), the host API in [`docs/M9-HOST.md`](M9-HOST.md).
 How rp-core differs
 from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](PARITY-RC.md),

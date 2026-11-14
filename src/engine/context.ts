@@ -12,6 +12,7 @@ import type { HostHooks } from './hooks.ts';
 import type { CallTimeouts } from './narrate.ts';
 import type { ToolSets } from './request.ts';
 import type { Scheduler } from './sched.ts';
+import type { ServerInfoMemo } from './server-notices.ts';
 import type { TokenCounter } from '../prompt/tokens.ts';
 import type { Event } from '../protocol/events.ts';
 import type { RandomBytes } from '../session/ids.ts';
@@ -52,6 +53,12 @@ export interface EngineCtx {
    * `/memory mode` sets wins (engine/recall.ts recallModeOf).
    */
   recallDefault?: 'lexical' | 'off';
+  /**
+   * M5d (D-210): what each local openai-chat server said, read once per origin; absent under
+   * EngineOptions.serverInfo 'off' (or RP_CORE_SERVER_INFO=off), and then nothing is ever read or pinned
+   * by the engine's own rule (a slot_pin in config still pins).
+   */
+  serverInfo?: ServerInfoMemo;
   /**
    * M2: how every prompt of this engine is counted (assemble's budgets, trace.tokens, the EMA's
    * samples, D-50). defaultCounter() unless a test pins another (engine.ts EngineSeams).

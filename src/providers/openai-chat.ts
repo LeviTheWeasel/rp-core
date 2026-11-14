@@ -2,6 +2,8 @@
 // toWireMessages, buildWireRequest), Bunraku:src/stage/provider/openai-compatible-reply.ts@702d8120
 // (createStreamReader, extractContent / contentArrayReasoning) and Bunraku:src/stage/provider/
 // openai-compatible.ts + provider-send.ts@702d8120 (the send loop: build, fetch, classify, read, abort).
+// Adapted from Bunraku:src/core/tokens/usage.ts@702d8120 (readTokenReport: timings without cache_n never give
+// the prompt total; Coneja-Chibi e95d90db, 4cd5b724).
 // Copyright (C) 2026 Coneja-Chibi; changes Copyright (C) 2026 the rp-core authors.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
@@ -38,7 +40,7 @@
 //   SillyTavern's dummy reasoning_content for DeepSeek tool calls (Cohee, 9aff57c9c; no code taken).
 
 import { ProviderError, PROVIDER_ERROR_CATEGORY, providerMessage } from './types.ts';
-import type { ModelCaps, ModelRequest, PromptMsg, Provider, ProviderEnv, ProviderErrorCode, Replay, StreamEv, ToolSpec, Usage } from './types.ts';
+import type { ModelCaps, ModelRequest, PromptCounts, PromptMsg, Provider, ProviderEnv, ProviderErrorCode, Replay, StreamEv, ToolSpec, Usage } from './types.ts';
 import type { Block } from '../session/entries.ts';
 import { bodyBytes, classifyHttpFailure, guardedFetch, isModerationError, originOf, type HttpRequest } from './http.ts';
 import { sseEvents } from './sse.ts';
@@ -334,6 +336,10 @@ export function buildChatRequest(req: ModelRequest, o: OpenAIChatOptions, key: s
   // The session's thinking setting, after the data defaults (deep: chat_template_kwargs may hold more).
   const control = reasoningControl(req);
   if (Object.keys(control).length > 0) body = applyOverrides(body, {}, { extraBody: control }).body;
+  // [D-211] the slot by agent; before the connection's overrides, so extra_body / exclude_body still win.
+  // An id_slot the user put in the model's own extra_body wins too: the pin never replaces it.
+  const pin = caps.slotPin;
+  if (pin && !('id_slot' in body)) body.id_slot = req.agent === 'narrator' ? pin.narrator : pin.agents;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (key) headers.Authorization = `Bearer ${key}`;
@@ -368,15 +374,35 @@ function usageOf(raw: Rec): Usage {
   return u;
 }
 
-/** llama.cpp `timings`: prompt_n tokens evaluated, cache_n reused from the slot's KV, predicted_n generated. */
+/**
+ * llama.cpp `timings`: prompt_n tokens evaluated, cache_n reused from the slot's KV, predicted_n
+ * generated. Without cache_n (older builds, forks, Ollama) prompt_n is no total: it stays unknown.
+ */
 function usageOfTimings(t: Rec): Usage {
   const u: Usage = {};
   const evaluated = count(t.prompt_n);
   const cached = count(t.cache_n);
-  if (evaluated !== undefined) u.inputTotal = evaluated + (cached ?? 0);
+  if (evaluated !== undefined && cached !== undefined) u.inputTotal = evaluated + cached;
   put(u, 'inputCacheRead', cached);
   put(u, 'outputTotal', count(t.predicted_n));
   return u;
+}
+
+/** [D-213] prompt counts from OpenAI usage: only when it names the cached part. */
+function promptOfUsage(raw: Rec): PromptCounts | undefined {
+  const pd = isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
+  const cached = count(pd.cached_tokens);
+  if (cached === undefined) return undefined;
+  const total = count(raw.prompt_tokens);
+  return total === undefined ? { cached } : { processed: Math.max(0, total - cached), cached };
+}
+
+/** [D-213] prompt counts from llama.cpp timings: only with cache_n (Ollama's prompt_n is the whole prompt). */
+function promptOfTimings(t: Rec): PromptCounts | undefined {
+  const cached = count(t.cache_n);
+  if (cached === undefined) return undefined;
+  const processed = count(t.prompt_n);
+  return processed === undefined ? { cached } : { processed, cached };
 }
 
 /** An HTTP status from a number or a three-digit string (OpenRouter puts the upstream status in error.code). */
@@ -508,6 +534,9 @@ export function createChatReader(req: ModelRequest): ChatReader {
   let model: string | undefined;
   let usage: Usage | undefined;
   let timings: Usage | undefined;
+  /** [D-213] the prompt counts each source gave; usage first. */
+  let promptU: PromptCounts | undefined;
+  let promptT: PromptCounts | undefined;
   let last: 'text' | 'reasoning' | 'tool' | null = null;
   let nextSlot = 0;
   const calls: ToolCallState[] = [];
@@ -648,10 +677,11 @@ export function createChatReader(req: ModelRequest): ChatReader {
     // usage fields win; llama.cpp timings fill what usage lacks (the cache split).
     const u: Usage = { ...(timings ?? {}), ...(usage ?? {}) };
     if (Object.keys(u).length === 0) return;
-    const key = JSON.stringify(u);
+    const prompt = promptU ?? promptT;
+    const key = JSON.stringify([u, prompt ?? null]);
     if (key === usageSent) return;
     usageSent = key;
-    out.push({ t: 'usage', u });
+    out.push(prompt ? { t: 'usage', u, prompt: { ...prompt } } : { t: 'usage', u });
   }
 
   /** Close what is open: text held by the splitter, tool calls, a reasoning segment. */
@@ -705,10 +735,12 @@ export function createChatReader(req: ModelRequest): ChatReader {
     if (isRecord(chunk.usage)) {
       const u = usageOf(chunk.usage);
       if (Object.keys(u).length > 0) usage = u; // cumulative where servers repeat it; {} is "unknown"
+      promptU = promptOfUsage(chunk.usage) ?? promptU;
     }
     if (isRecord(chunk.timings)) {
       const t = usageOfTimings(chunk.timings);
       if (Object.keys(t).length > 0) timings = t;
+      promptT = promptOfTimings(chunk.timings) ?? promptT;
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (isRecord(choice)) {

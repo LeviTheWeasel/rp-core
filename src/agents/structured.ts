@@ -56,14 +56,15 @@
 import { abortableDelay, abortWith, childController, reasonOf, type AbortReason, type DelayTimers } from '../engine/abort.ts';
 import type { Connection, EngineOptions } from '../engine/api.ts';
 import { priceFor, usageCost } from '../engine/cost.ts';
-import { streamCall, type CallResult, type CallTimeouts } from '../engine/narrate.ts';
+import { callTiming, streamCall, type CallResult, type CallTimeouts } from '../engine/narrate.ts';
 import { isRetryable, modelLabel, retryDelayMs } from '../engine/route.ts';
 import type { Priority, Scheduler } from '../engine/sched.ts';
+import type { ServerInfoMemo } from '../engine/server-notices.ts';
 import type { Samplers } from '../formats/native.ts';
 import type { EventBody } from '../protocol/events.ts';
 import { MESSAGE_OVERHEAD_TOKENS } from '../prompt/tokens.ts';
 import { createReasoningSplitter, DEFAULT_REASONING_TAGS, tagPairs } from '../providers/reasoning-tags.ts';
-import type { JSONSchema, ModelCaps, ModelRequest, PromptMsg, ProviderError, Usage } from '../providers/types.ts';
+import type { JSONSchema, ModelCaps, ModelRequest, PromptCounts, PromptMsg, ProviderError, Usage } from '../providers/types.ts';
 import type { RandomBytes } from '../session/ids.ts';
 import { looseJson } from '../tools/args.ts';
 import { balancedEnd, parsePromptedCalls, type OfferedTool } from '../tools/prompted.ts';
@@ -112,7 +113,7 @@ export interface Attempt {
   tokens?: number;
 }
 
-/** A Trace.calls row (§5.7): one per model call, retried ones included. */
+/** A Trace.calls row (§5.7): one per model call, retried ones included. M5d (D-213): at, ttftMs, prompt. */
 export interface TraceCall {
   callKey: string;
   agent: StructuredAgent;
@@ -120,6 +121,11 @@ export interface TraceCall {
   model: string;
   ms: number;
   usage?: Usage;
+  /** ms from the turn's start to the call's start. */
+  at?: number;
+  /** The first token, from the call's own start (queue wait included). */
+  ttftMs?: number;
+  prompt?: PromptCounts;
 }
 
 /** The events an agent call sends through its env (the engine stamps the session id and time). */
@@ -144,6 +150,13 @@ export interface AgentCallEnv {
   onProviderError?(info: { callKey: string; model: string; error: ProviderError }): void;
   /** M5a (D-164, --keep-requests): handed each request right before the provider gets it. */
   keepRequest?(req: ModelRequest): void;
+  /**
+   * M5d (D-213): the turn's start (clock ms) when the calls are a turn's (Director, sync recall): their
+   * rows then carry at / ttftMs / prompt. Absent off a turn (the lane), whose records keep their shape.
+   */
+  turnStart?: number;
+  /** M5d (D-210, D-211): the engine's server-info memo (EngineCtx.serverInfo), for the slot pin. */
+  serverInfo?: ServerInfoMemo;
 }
 
 export interface StructuredInput<T> {
@@ -836,6 +849,7 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
       agent: input.agent,
       ...(transport === 'structured' ? { responseSchema: input.schema } : {}),
       ...(env.keepRequest ? { keepRequest: env.keepRequest } : {}),
+      ...(env.serverInfo ? { serverInfo: env.serverInfo } : {}),
       ...(input.priority !== undefined ? { priority: input.priority } : {}),
       ...(input.idleDelaySec !== undefined ? { idleDelaySec: input.idleDelaySec } : {}),
       onSlot,
@@ -858,7 +872,14 @@ export async function structuredCall<T>(input: StructuredInput<T>): Promise<Stru
 
   /** The trace row, the usage event (with the agent) and the debug tap of one call. */
   const record = (callKey: string, res: CallResult): void => {
-    calls.push({ callKey, agent: input.agent, model: label, ms: res.ms, ...(res.usage ? { usage: res.usage } : {}) });
+    calls.push({
+      callKey,
+      agent: input.agent,
+      model: label,
+      ms: res.ms,
+      ...(res.usage ? { usage: res.usage } : {}),
+      ...(env.turnStart !== undefined ? callTiming(res, env.turnStart) : {}),
+    });
     if (res.usage) {
       const cost = usageCost(res.usage, priceFor(env.prices, route.conn.id, route.model));
       env.emit({ type: 'usage', callKey, agent: input.agent, model: label, usage: res.usage, costUsd: cost.costUsd, priceSource: cost.priceSource });

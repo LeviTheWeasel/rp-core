@@ -132,6 +132,7 @@ const PATCHABLE: ReadonlySet<string> = new Set([
   'cacheMinTokens',
   'stopMax',
   'extraBody',
+  'slotPin',
 ]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

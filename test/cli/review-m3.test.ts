@@ -8,6 +8,7 @@ import { main } from '../../src/cli/main.ts';
 import type { Io } from '../../src/cli/io.ts';
 import { ACTIVE_PROBE_MAX_TOKENS, ACTIVE_PROBE_TOKENS } from '../../src/providers/probe-active.ts';
 import { parseScriptFile, scriptCapsWith } from '../../src/providers/scripted.ts';
+import { traceCallLines } from '../../src/cli/repl-render.ts';
 import { fakeClock, tmpHome } from '../helpers.ts';
 import { mockServer, nativeCaller } from '../probe-m3/mock.ts';
 import { CARDS, collect, MAIN, ROOT, until } from './kit.ts';
@@ -170,8 +171,12 @@ describe('README examples are what rp-core prints', () => {
     }
   });
 
-  test("/trace's calls line names the connection and the model, as the trace renders it", () => {
-    expect(README).toContain('  calls: narrator ollama:qwen3:14b 3.1s, narrator ollama:qwen3:14b 2.4s\n');
+  test("/trace's calls lines are the ones traceCallLines renders (M5d: one line per call)", () => {
+    const rows = [
+      { callKey: 'a', agent: 'narrator', model: 'ollama:qwen3:14b', ms: 3100, at: 0, ttftMs: 600, prompt: { cached: 10812, processed: 1028 } },
+      { callKey: 'b', agent: 'narrator', model: 'ollama:qwen3:14b', ms: 2400, at: 3100, ttftMs: 300, prompt: { cached: 11840, processed: 412 } },
+    ];
+    expect(README).toContain(`${traceCallLines(rows, 'ollama:qwen3:14b').join('\n')}\n`);
     expect(README).not.toMatch(/calls: narrator qwen3/);
   });
 

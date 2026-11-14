@@ -192,14 +192,24 @@ function ollamaTrainedContext(show: Record<string, unknown>): number | undefined
   return undefined;
 }
 
+/**
+ * Every value of one option in /api/show's `parameters` text (`name   value` per line), in order.
+ * Shared with server-info.ts, which reads the runner options from it.
+ */
+export function ollamaParameter(show: Record<string, unknown>, name: string): string[] {
+  const text = typeof show['parameters'] === 'string' ? show['parameters'] : '';
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const m = /^\s*(\S+)\s+(.*?)\s*$/.exec(line);
+    if (m && m[1] === name) out.push(m[2]!);
+  }
+  return out;
+}
+
 /** `PARAMETER num_ctx N` of a Modelfile, from /api/show's `parameters` text. */
 function ollamaNumCtx(show: Record<string, unknown>): number | undefined {
-  const text = typeof show['parameters'] === 'string' ? show['parameters'] : '';
-  for (const line of text.split('\n')) {
-    const m = /^\s*num_ctx\s+(\d+)\s*$/.exec(line);
-    if (m) return posInt(Number(m[1]));
-  }
-  return undefined;
+  const v = ollamaParameter(show, 'num_ctx').find((x) => /^\d+$/.test(x));
+  return v === undefined ? undefined : posInt(Number(v));
 }
 
 /**
@@ -237,6 +247,44 @@ export function ollamaShowCaps(
     } as ModelCaps['reasoning'];
   }
   return { caps, notes };
+}
+
+// Readers of the local servers' own endpoints, shared with server-info.ts.
+
+/** A llama.cpp /props answer: it has default_generation_settings or total_slots. */
+export function isLlamaCppProps(json: unknown): json is Record<string, unknown> {
+  return isRecord(json) && ('default_generation_settings' in json || 'total_slots' in json);
+}
+
+/** What rp-core reads from llama.cpp /props. `build` is N of build_info `b<N>-<commit>`; 0 or a missing field is null. */
+export interface LlamaCppProps {
+  nCtx?: number;
+  totalSlots?: number;
+  build: number | null;
+  endpointSlots?: boolean;
+}
+
+export function readLlamaCppProps(props: Record<string, unknown>): LlamaCppProps {
+  const gen = isRecord(props['default_generation_settings']) ? props['default_generation_settings'] : {};
+  const out: LlamaCppProps = { build: null };
+  const nCtx = posInt(gen['n_ctx']) ?? posInt(props['n_ctx']);
+  if (nCtx !== undefined) out.nCtx = nCtx;
+  const slots = posInt(props['total_slots']);
+  if (slots !== undefined) out.totalSlots = slots;
+  const b = typeof props['build_info'] === 'string' ? /^b(\d+)(?:-|$)/.exec(props['build_info']) : null;
+  if (b && Number(b[1]) > 0) out.build = Number(b[1]);
+  if (typeof props['endpoint_slots'] === 'boolean') out.endpointSlots = props['endpoint_slots'];
+  return out;
+}
+
+/** An Ollama /api/version answer: {version: string}. */
+export function isOllamaVersion(json: unknown): json is { version: string } {
+  return isRecord(json) && typeof json['version'] === 'string';
+}
+
+/** The model entries of an LM Studio /api/v1/models answer (those with a string key); [] for anything else. */
+export function lmStudioV1Models(json: unknown): Record<string, unknown>[] {
+  return isRecord(json) && Array.isArray(json['models']) ? json['models'].filter(isRecord).filter((m) => typeof m['key'] === 'string') : [];
 }
 
 /** Which kind a /v1/models owned_by names, when it is distinctive. */
@@ -515,17 +563,17 @@ export async function fetchCatalog(
         getJson(s, `${root}/api/v0/models`),
         getJson(s, `${root}/api/version`),
       ]);
-      const lmV1Models = isRecord(lmV1) && Array.isArray(lmV1['models']) ? lmV1['models'].filter(isRecord).filter((m) => typeof m['key'] === 'string') : [];
+      const lmV1Models = lmStudioV1Models(lmV1);
       const lmV0Models = isRecord(lmV0) && Array.isArray(lmV0['data']) ? lmV0['data'].filter(isRecord).filter((m) => 'max_context_length' in m || 'state' in m) : [];
       if (isRecord(kobold) && (typeof kobold['version'] === 'string' || kobold['result'] === 'KoboldCpp')) server = 'koboldcpp';
-      else if (isRecord(props) && ('default_generation_settings' in props || 'total_slots' in props)) {
+      else if (isLlamaCppProps(props)) {
         server = 'llama.cpp';
         found.props = props;
       } else if (lmV1Models.length > 0 || lmV0Models.length > 0) {
         server = 'lmstudio';
         found.lmV1 = lmV1Models;
         found.lmV0 = lmV0Models;
-      } else if (isRecord(ollama) && typeof ollama['version'] === 'string') server = 'ollama';
+      } else if (isOllamaVersion(ollama)) server = 'ollama';
     }
   }
 
@@ -553,9 +601,8 @@ export async function fetchCatalog(
     case 'llama.cpp': {
       const props = found.props ?? (await getJson(s, `${root}/props`, false));
       if (isRecord(props)) {
-        const gen = isRecord(props['default_generation_settings']) ? props['default_generation_settings'] : {};
-        const nCtx = posInt(gen['n_ctx']) ?? posInt(props['n_ctx']);
-        slots = posInt(props['total_slots']);
+        const { nCtx, totalSlots } = readLlamaCppProps(props);
+        slots = totalSlots;
         if (nCtx !== undefined) for (const id of targets) put(id, { contextLength: nCtx });
         else s.notes.push('llama.cpp: /props has no n_ctx');
       }

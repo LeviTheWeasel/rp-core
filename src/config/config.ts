@@ -257,6 +257,7 @@ prefill_vs_tools = "prefill"     # prefill | tools: which wins when a turn wants
 # context_length = 16384         # the window the server really runs (Ollama: num_ctx)
 # tools = "native"               # native | prompted | none
 # reasoning.tags = ["<think>"]
+# slot_pin = true                # llama.cpp: narrator on slot 0, agents on slot 1; false never pins
 
 # ---- Prices, USD per million tokens, for the cost in usage reports -----------------------
 # [prices."openrouter:vendor/model"]
@@ -1075,7 +1076,7 @@ const CAPS_FIELDS = [
   'tools', 'tool_choice', 'tool_choice_honored', 'parallel_tool_calls', 'strict_tools', 'tool_id_format',
   'structured_output', 'mid_system', 'alternation', 'prefill', 'context_length', 'max_output',
   'max_tokens_field', 'reasoning', 'samplers', 'samplers_accepted', 'samplers_fixed', 'samplers_wire',
-  'stream_usage', 'caching', 'max_in_flight', 'cache_min_tokens', 'stop_max', 'extra_body',
+  'stream_usage', 'caching', 'max_in_flight', 'cache_min_tokens', 'stop_max', 'extra_body', 'slot_pin',
 ] as const;
 
 /** snake_case caps fields → Partial<ModelCaps>; `dialect` and `source` are not the user's to set. */
@@ -1103,6 +1104,9 @@ function parseCaps(t: Table, path: string[]): Partial<ModelCaps> {
   set('maxInFlight', f.int('max_in_flight', 1, 64));
   set('cacheMinTokens', f.int('cache_min_tokens', 1, 1_000_000));
   set('stopMax', f.int('stop_max', 0, 1024));
+  // [D-211] true pins without asking the server; false is kept as null so the engine never pins.
+  const pin = f.bool('slot_pin');
+  if (pin !== undefined) out.slotPin = pin ? { narrator: 0, agents: 1 } : null;
 
   // structured_output = "json_schema" or { mode = "json_schema" }; an override is confirmed by the user.
   const so = f.raw('structured_output');
