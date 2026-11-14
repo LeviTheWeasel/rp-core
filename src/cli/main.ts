@@ -75,7 +75,7 @@ const COMMANDS: Record<string, Command> = {
   stdio: {
     flags: { provider: 'string' },
     usage: `rp-core --stdio [--home <dir>] [${PROVIDER_FLAG}]`,
-    summary: 'JSON-RPC 2.0 over JSONL for external UIs (M6 in progress)',
+    summary: 'JSON-RPC 2.0 over JSONL for external UIs',
     help: `Reads one JSON-RPC 2.0 request per UTF-8 line from stdin. Writes responses and live event
 notifications to stdout, one JSON object per line. Send initialize with protocol:1 first.
 shutdown or EOF closes every open session. Methods cover sessions, turns, conflict decisions,
@@ -328,7 +328,7 @@ const GLOBAL_HELP = `Global flags:
 function generalHelp(): string {
   const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
   const rows = Object.entries(COMMANDS).map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
-  return `rp-core — headless roleplay agent core (milestone M5b)
+  return `rp-core — headless roleplay agent core (milestone M9)
 
 Usage: rp-core <command> [flags]
 

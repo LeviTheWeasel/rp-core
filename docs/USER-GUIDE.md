@@ -4,17 +4,19 @@ A headless roleplay agent core, with a terminal chat on top. You give it a chara
 model (local or remote); it keeps the story as a tree of messages with swipes, branches and crash
 recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
-- **Status:** milestone **M8**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
+- **Status:** milestone **M9**. You can play in the terminal against Ollama, llama.cpp, LM Studio,
   koboldcpp, vLLM, OpenRouter or DeepSeek (any OpenAI-compatible server), or native Claude and Gemini, with SillyTavern presets
   and lorebooks. The narrator can search the story and the lore before it answers, and you can give
   it notes to remember. The [Compendium](#the-compendium) keeps typed world knowledge (characters,
   places, items…) from RoleCall exports, from your own entries and, in the background, from the
   story itself: a filing agent writes down what each answer established, and a historian summarises
   the story for the narrator once old messages leave its prompt. The narrator gets the entries the
-  story names. A Story Director can plan the story before each answer (off by default). A story
-  begun in RoleCall [goes on here](#continuing-a-rolecall-story) from its export.
+  story names, and [recall](#recall) has a model pick the ones the next answer needs. A Story
+  Director can plan the story before each answer (off by default). A story begun in RoleCall
+  [goes on here](#continuing-a-rolecall-story) from its export.
   Besides the line chat there is a [full-screen TUI](#the-full-screen-tui) with the models, the chat
-  and the agents side by side.
+  and the agents side by side. Other UIs can drive rp-core over [`--stdio`](STDIO.md) (JSON-RPC),
+  and a program can embed it through the [host API](M9-HOST.md).
 - **Built with:** TypeScript on [Bun](https://bun.sh), with four runtime dependencies: `re2js`
   (regex lorebook keys), `gpt-tokenizer` (token counts), `jsonrepair` (broken tool-call arguments)
   and `@opentui/core` (the full-screen TUI only).
@@ -37,7 +39,8 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 11. [Tools and search](#tools-and-search)
 12. [Notes](#notes)
 13. [The Compendium](#the-compendium): [its background agents](#the-background-agents), the
-    [`{{recap}}` slot](#the-recap-slot), [the /memory commands](#the-memory-commands), [the keys](#the-compendium-keys)
+    [`{{recap}}` slot](#the-recap-slot), [recall](#recall) and [its model](#the-recall-model),
+    [the /memory commands](#the-memory-commands), [the keys](#the-compendium-keys)
 14. [The Story Director](#the-story-director)
 15. [Other servers: llama.cpp, LM Studio, OpenRouter and friends](#other-servers)
 16. [Active probes](#active-probes)
@@ -51,36 +54,39 @@ recovery, builds the prompt with SillyTavern semantics, and streams the answers.
 
 ## What works today
 
-**Works now (M5b, the M4.5 TUI and the RoleCall story import):**
+**Works now (milestones M1 to M9):**
 
 | Area | What you get |
 |---|---|
 | Characters | Character cards from PNG or JSON (CCv1/V2/V3), with alternate greetings, the embedded lorebook, `system_prompt`, `post_history_instructions` and `depth_prompt` |
 | Presets | SillyTavern chat-completion presets: prompt order, markers, samplers, prefill, formats (`/preset`) |
 | Lorebooks | SillyTavern world info and card books, activated as in SillyTavern: keys and `/regex/` keys, secondary keys, recursion, inclusion groups, probability, sticky, cooldown, delay, positions and depths, the budget (`/lore`) |
-| Chat | A streaming chat in the terminal |
+| Chat | A streaming chat in the terminal; `/impersonate` drafts your next line without saving it |
 | Full-screen TUI | `rp-core tui`: the models and the hotkeys, the chat, and the agents with their tool calls in three columns; the same commands as the chat, plus hotkeys, mouse scrolling and copying, `**bold**` and `*italic*` in answers without their asterisks, colours from your terminal's theme |
 | Story tree | Swipes and guided re-rolls, continue, edit, hide, rewind, branches (tails) and forks |
-| Models | Switch the model in the middle of a session (`/model`) |
+| Models | Any OpenAI-compatible server (Ollama, llama.cpp, LM Studio, koboldcpp, vLLM, OpenRouter, DeepSeek…), and native Claude (the Anthropic Messages API, M7) and Gemini (`generateContent`, M8) with their own tool calls (and, for Claude, prompt cache marks) ([details](#other-servers)). Switch the model in the middle of a session (`/model`) |
 | Tools and search | The narrator looks up earlier messages and lore before it answers, with the server's own tool calling or with calls written as text; `/search` runs the same search for you |
 | Notes | Author's note; your own notes for the narrator (`/memory add`), sent when their keys come up |
-| Compendium | Typed entries of 11 kinds (characters, places, items, events, plots…) from RoleCall Compendium exports and from your own `/memory new`. Each answer, the entries the story names go to the narrator in one block, short or whole by the window; the Director sees the characters and places in the scene. You edit library entries without touching the book, and export the session's entries as a lorebook or a RoleCall file (`/memory`) |
+| Compendium | Typed entries of 11 kinds (characters, places, items, events, plots…) from RoleCall Compendium exports and from your own `/memory new`. Each answer, the entries the story names (and those recall picked) go to the narrator in one block, short or whole by the window; the Director sees the characters and places in the scene. You edit library entries without touching the book, and export the session's entries as a lorebook or a RoleCall file (`/memory`) |
 | Compendium agents | In the background, between turns: a filing agent writes what each accepted answer established into the Compendium, and a historian writes summaries and `[Arc]` overviews of the story. Once old messages leave the prompt, the `{{recap}}` slot gives the narrator those overviews and summaries. Swipes and rewinds take an answer's records off the path, edits file it again; `/memory undo`, `refile`, `retry`, `wait` and `status` steer the work. On a local server they wait until you pause, and a turn never waits for them |
+| Recall (M5c) | Before an answer, a model picks from an index of the Compendium the entries the answer will need, also ones no recent message names: beside the Director on a remote server, or in the background while you type on a local one. Swipes and continues reuse the picks; a slow or failed recall falls back to the names alone. `/memory recall`, `profile` and `mode`, and a `recall` line in `/trace` ([details](#recall)) |
 | Story Director | Before each answer, a second model call plans chapters, arcs, seeds and hidden arcs and gives the narrator a directive for this turn. Off by default; `/director on` turns it on, `/director` shows its plan |
 | RoleCall stories | `rp-core import <story>.rolecall` continues a story from RoleCall's export: the character, the persona, the preset with the chat's own settings and the lorebooks (identical ones once) go to the library, then each chat you pick (the main one by default) becomes a session with every swipe, the reasoning split off as RoleCall did, the Director's state and the Compendium on from the import. A dry run first, all or nothing, and a warning when the story does not fit the narrator's window ([details](#continuing-a-rolecall-story)) |
 | SillyTavern chats | `rp-core import <chat>.jsonl --card <library id>` continues a solo chat, keeping its messages, swipes, selected versions and hidden lines ([details](#importing-a-sillytavern-chat)) |
+| Other UIs (M6) | `rp-core --stdio`: JSON-RPC 2.0, one JSON object per line, for a UI written in any language. Sessions, turns with streamed events, edits while a turn runs and their conflicts, history, the Compendium and recall, lore, the Director, models and probes, with a JSON Schema of the protocol ([`docs/STDIO.md`](STDIO.md)) |
+| Host API (M9) | For a program that embeds rp-core (TypeScript on Bun): hooks before the prompt is built and on the request and the reply, gates that let the host review or change a request before it is sent (over `--stdio` too), one-shot drafts that write nothing (a quiet prompt, or `/impersonate`), and session and record storage the host can plug in ([`docs/M9-HOST.md`](M9-HOST.md)) |
 | Safety | Ctrl+C stops an answer and keeps what arrived; after a crash or `kill -9` the answer comes back as `[interrupted]` |
-| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, which Compendium entries were picked, what the `{{recap}}` slot held, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
+| Inspection | `/trace` shows what went into the prompt, which lore fired and why the rest did not, what recall picked, which Compendium entries were picked, what the `{{recap}}` slot held, and the tool rounds; `/preview` prints the exact request before it is sent; `--keep-requests` keeps every request of a turn as a file; `/lore test` explains every lore entry; `/usage` shows tokens and cost; `rp-core probe --active` tests what a model can do |
 | Scripting | One-shot commands with JSON events, a scripted fake model for tests, and recording and replaying real model calls; `rp-core compact` shrinks a session's journal |
 
 **Not yet:**
 
-| Milestone | Arrives |
+| What | Where it stands |
 |---|---|
-| M5c | Recall: a model picks the Compendium entries before each answer (or ahead of it, between turns, on a local server); `/memory recall`, `profile`, `mode`; slot pinning on llama.cpp and latency measurements ([details](#not-in-m5b-yet)) |
-| M6 | `--stdio` for other UIs: the first JSON-RPC methods work on the M6 branch; the full protocol is still in progress ([current methods](STDIO.md)) |
-| M7 | Native Anthropic Messages API |
-| M8 | Native Gemini generateContent API |
+| Latency work on local servers (M5d) | Pinning the narrator and the agents to their own llama.cpp slots (`id_slot`) with a `/slots` check, warnings about Ollama and LM Studio settings that make the server reload or swap the model, and `rp-core bench ttft` to measure the time to the first token. None of it is built ([details](#not-yet-latency-work-m5d)) |
+| Group chats | A session has one character card. A SillyTavern group chat is refused on import ([details](#importing-a-sillytavern-chat)) |
+| Recall from plain lore | Recall picks typed Compendium entries only; a lorebook's plain entries still fire by their keys |
+| The TUI | No external editor and no images; the settings pane (F8) covers only the preset and the lorebooks ([Limits](#limits)) |
 
 ## Install
 
@@ -337,7 +343,7 @@ Maren Vell › …
 | `/rewind n` | Go back to message *n*; your next message starts a new branch |
 | `/tails` | List the branches that leave the current path; `/goto <id>` switches to one |
 | `/fork [n]` | Copy the story (up to message *n*) into a new session and open it |
-| `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session. `/model director narrator` makes the Director follow the narrator again; `/model recorder <conn:model>` gives the Compendium's agents a model of their own ([details](#the-recorder-their-model)) |
+| `/model [role] [connection:model]` | Show the models, or change one: `/model narrator ollama:magmell-16k:latest`. The change is saved in the session. `/model director narrator` makes the Director follow the narrator again; `/model recorder <conn:model>` gives the Compendium's agents a model of their own ([details](#the-recorder-their-model)), `/model recall <conn:model>` gives recall one ([details](#the-recall-model)) |
 | `/note <text> [@depth]`, `/note off` | The author's note, inserted *depth* messages from the end (default 4) |
 | `/think show`, `/think hide` | Show the model's reasoning, or fold it |
 | `/preset [id\|file]` | Show the preset, or switch it ([details](#presets-and-lorebooks)) |
@@ -346,14 +352,16 @@ Maren Vell › …
 | `/lore test <text>` | Which lore entries a message would wake, and why; nothing is sent |
 | `/preview [n] [--wire] [--verdicts]` | The exact request of the next answer (or of answer *n*), without sending it; `--verdicts` adds the lore test |
 | `/usage` | Tokens and cost of the current path (cost needs `[prices]` or a server that reports it) |
-| `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, the tool rounds and calls |
+| `/trace` | What the last answer's prompt held: window, reserve, size, what was trimmed, the lore that fired and why the rest did not, what recall picked, the Compendium block, the tool rounds and calls |
 | `/search <words> [before=n]` | Find earlier messages of this path, newest first ([details](#tools-and-search)) |
 | `/memory`, `/memory list\|show\|tree\|new\|edit\|retire\|restore\|export\|on\|off` | The Compendium of this path: list its entries, write and change them, export them ([details](#the-compendium)) |
 | `/memory undo\|refile <n>`, `/memory retry\|wait\|status` | The Compendium's background work: take back or redo what the agents wrote from message *n*, run failed tasks again, wait for the work, see it ([details](#the-memory-commands)) |
+| `/memory recall\|profile\|mode` | What recall picked for an answer, the profile each Compendium agent runs, and how recall runs (or set it: `/memory mode lexical`) ([details](#seeing-what-recall-did)) |
 | `/memory add <title> \| <keys> \| <text>` | A note for the narrator ([details](#notes)) |
 | `/director`, `/director show` | The Story Director's plan at this point of the story: chapter, arcs, seeds, hidden arcs, and the last directive in full, as the narrator got it ([details](#the-story-director)) |
 | `/director on`, `/director off` | Let the Director plan every reply from the next turn, or stop it. Its plan is kept |
 | `/probe --active [--write]` | Test the narrator's model with a few tiny calls ([details](#active-probes)) |
+| `/impersonate` | The narrator's model drafts your next line and prints it. Nothing is saved: copy what you like into your message |
 | `/sessions`, `/open <id>` | List sessions, switch to one |
 | `/help`, `/quit` | Help, leave |
 
@@ -560,6 +568,9 @@ still shows on palette grey.
   `idle`; below it the time of the last pass and its last change, as `memory: created character
   "Фрол"`. A session that opens with work queued shows it at once. The REPL's `⋯ memory:` lines go
   to the chat as well.
+- **Recall**, once it has run: `recalled (n)`, `adopted (n)` (a prefetch the answer used),
+  `reused (n)`, `prefetched (n)` (ready for the next answer), `fallback [<code>]`, `skipped [<code>]`
+  or `failed [<code>]`, with where the picks came from and the time ([Recall](#recall)).
 - **Usage** above Context: calls, tokens in and out, and the cost (as `/usage`), the agents' calls
   included.
 - **Context** below Usage: the narrator's effective window and a bar for the **last** prompt, against
@@ -602,7 +613,8 @@ Director · planned · 42.2s
   VS16 and skin-tone marks from the text it shows.
 - **Size.** OpenTUI brings a native library of about 5 MB per platform and about 28 MB on disk in
   all (see [Install](#install)). No other command loads it.
-- **No external editor**, no images and no settings screen in this version.
+- **No external editor** and no images in this version. The settings pane (F8) covers only the
+  preset and the lorebooks; the rest is set with commands.
 
 ## Editing messages and choosing an editor
 
@@ -1098,6 +1110,11 @@ it fit. What to do:
 - **See the parts:** `rp-core preview <session>` (or `/preview` in the chat) refuses with the
   parts and their sizes: the preset's blocks with the lore, the in-chat inserts, the Director's
   contract and your message. `/director off` saves the Director's part.
+- **Fits, but barely.** When a turn fits but fewer than 4 earlier messages are left in its request,
+  the notice `history_crowded` says so once a session: `Only 3 of the 11 earlier messages fit in the
+  request: the fixed part of the prompt (everything but the chat history) takes about 796 of the 2048
+  tokens a request may use …` (from the M5c demo, a 4 096-token window). The same two fixes give the
+  history room.
 
 A turn that cannot fit is refused before the Director plans, so it costs no Director call. The
 check needs the written session, so a dry run does not make it.
@@ -1171,7 +1188,7 @@ Small local models often do not look anything up in a roleplay prompt, even when
 demo and its reruns, Mag-Mell 12B (prompted) and gemma4:26b (native) answered from the visible chat,
 often with a made-up name ([`docs/M3-DEMO.md`](M3-DEMO.md)). For local models the
 [Compendium](#the-compendium) does not wait for the model to ask: the entries a message names are
-sent with it (M5a), and a model that picks entries before the answer comes in M5c. To see the same
+sent with it, and [recall](#recall) has a model pick more before the answer. To see the same
 demo on a hosted model, see [`docs/M3-DEMO.md`](M3-DEMO.md#on-a-hosted-model).
 
 ### Rounds
@@ -1311,8 +1328,9 @@ ports it; [`PROVENANCE.md`](../PROVENANCE.md) lists what was taken and what chan
 [`docs/COMPENDIUM-DEVIATIONS.md`](COMPENDIUM-DEVIATIONS.md) lists every place where it differs
 on purpose, for her review.
 
-M5a built the data and the manual part; M5b adds the agents that write by themselves. Entries come
-from:
+M5a built the data and the manual part, M5b the agents that write by themselves, and M5c recall.
+Each has a step-by-step demo: [`docs/M5A-DEMO.md`](M5A-DEMO.md), [`docs/M5B-DEMO.md`](M5B-DEMO.md)
+and [`docs/M5C-DEMO.md`](M5C-DEMO.md). Entries come from:
 
 - **library books:** a RoleCall Compendium export, added to the session like any lorebook;
 - **you:** `/memory new` writes an entry in your editor, `/memory edit` changes one;
@@ -1320,8 +1338,8 @@ from:
 - **the agents:** in the background, the filing agent writes what each answer established, and the
   historian writes summaries and `[Arc]` overviews of the story ([below](#the-background-agents)).
 
-Picking the entries before the answer with a model (recall) is still to come ([Not in M5b
-yet](#not-in-m5b-yet)).
+Before each answer, the narrator gets the entries the story names, and [recall](#recall) can add
+the ones a model picks from the whole Compendium.
 
 **Notes and typed entries.** `/memory` lists both, with one numbering, but they reach the narrator
 differently. A note is lore: it fires by its keys, 4 messages from the end.
@@ -1364,11 +1382,13 @@ take the file itself and import it on the way.
 
 ### What the narrator gets
 
-Before each answer a selector picks the entries the story names. It calls no model. In this order:
+Before each answer a selector picks the entries for the narrator. It calls no model itself. In this
+order:
 
 1. **`mention`:** entries your message names;
-2. **`window`:** entries named in the 4 messages before it;
-3. **`constant`:** a book's entries marked constant.
+2. **`model`:** entries [recall](#recall) picked, in the order it gave them (only when recall ran);
+3. **`window`:** entries named in the 4 messages before it;
+4. **`constant`:** a book's entries marked constant.
 
 - **Names.** An entry is named by its name, by an alias, or, for a book's entry, by one of its
   lorebook keys (not a `/regex/` one). Words match by their roots, ignoring case. A name matches
@@ -1682,6 +1702,9 @@ you   › /model
   recall   narrator (follows)
 ```
 
+That run predates recall. Today an unset `recall` shows `recorder (follows)`: it follows the recorder
+([The recall model](#the-recall-model)).
+
 ### The language they write in
 
 `language` under `[compendium]` names it for new sessions (`language = "Russian"`): both agents'
@@ -1752,6 +1775,207 @@ In the [TUI](#the-agents-pane) the agents pane gives each agent a block. Notices
   cache, so the next answer processes its prompt again. The idle wait keeps a swipe or a quick reply
   from paying for that; a second slot or a separate server for the recorder avoids it.
 
+### Recall
+
+Recall is one more model call that reads the story and an index of the Compendium and picks the
+entries the next answer will need. Matching names finds only what the story names; recall can also
+bring back an entry nobody named lately. In the M5c demo the player asks «Но ведь кто-то видел, как
+его увозили той ночью?», which names no entry. Recall picks «Переправа к маяку», a summary of
+messages long trimmed from the prompt and the only text that still mentions the salt boat seen that
+night, and the narrator gets it ([`docs/M5C-DEMO.md`](M5C-DEMO.md)).
+
+- **What it reads.** The last messages (6 on lite, 20 on full) and an index: one line per entry, its
+  handle for this request, its name, aliases and one line about it:
+  `[e12] Переправа к маяку - Фрол везёт Яна к тёмному маяку.` On full the index is the Compendium's
+  tree, at most 20 000 tokens and a quarter of the recall model's window; on lite a shortlist of up
+  to 40 entries, those the recent messages name first and then those whose words come up in the
+  last 6 messages, at most 2 000 tokens and 15 % of the window. An index too long for that is cut
+  (notice `recall_index_truncated`).
+- **What it leaves out.** Notes, `[Arc]` overviews, retired entries, a book's plain (untyped) entries,
+  what the `{{recap}}` slot already sends, and what the agents filed from messages the prompt still
+  shows (held back as in [the block](#what-the-narrator-gets)). With nothing left to pick from, or
+  with the Compendium off, no call is made.
+- **What it answers.** A JSON list of handles, `{"entry_ids": ["e12", "e6"]}`, at most 4 picks on
+  lite and 10 on full. It is read leniently: a fence, a bare list, names instead of handles, or
+  handles in prose all count; unknown and repeated picks are dropped and counted.
+- **The opening.** When the model takes a reply prefill, rp-core writes the start of the answer,
+  `{"entry_ids": [`, so the model only has to add handles. The filing agent and the historian get
+  `{"filings": [` the same way. On the structured transport the schema does that job instead.
+- **Where the picks go.** Into [the block](#what-the-narrator-gets), right after the entries your
+  message names, in recall's order (`(model)` in `/trace`). The block keeps its limits: a pick that
+  does not fit is cut like any other entry.
+- **When it fails.** A timeout, a server error or an answer that names nothing: the answer still
+  comes, with the names alone (`⋯ recall: fallback [timeout]`). Recall never stops a turn.
+
+**Modes.** `/memory mode <mode>` sets one for the session; `mode` under `[compendium.recall]` sets
+it for new sessions.
+
+| Mode | What it does |
+|---|---|
+| `auto` (default) | `prefetch` when the recall model's server is local (`localhost`, a private address, a `.local` name, or `local = true` on the connection), `sync` otherwise |
+| `sync` | Recall runs in the turn, before the narrator and beside the Director. The answer waits for it. On a server with one place the Director goes first |
+| `prefetch` | Recall runs in the background after each answer, while you type; your next message uses what it picked. A message that comes while it still runs waits for it at most `grace_sec` (4 s), then `on_miss` decides |
+| `lexical` | No recall call: the block holds the entries the story names, as without recall |
+| `off` | The same, and `/trace` says `recall: off` |
+
+`on_miss` says what a message does when no prefetch is ready for it: `lexical` (the names alone),
+`sync` (recall runs in the turn), or `auto` (the default): lexical on a local server, sync on a
+remote one. It also decides for `send`, for a session that just opened before its first prefetch,
+and under `RP_CORE_LANE=manual`, where nothing is prefetched.
+
+**The prefetch.** After each answer (and after the greeting), once the server has been quiet for
+`idle_delay_sec`, the [background lane](#when-they-run) asks recall what the *next* answer will need,
+before any filing or historian pass. Its request ends with the line «The player has not answered
+yet; pick what the narrator will most likely need for the next reply.» When your message arrives and
+the prefetch is ready, the turn uses it with no recall call of its own (`⋯ recall: adopted (2)`).
+
+- **It cannot know your next message.** It picks from the story so far. When your message turns to
+  something new, its picks may miss it; the names in your message still reach the block. `sync`
+  reads your message, and costs the wait.
+- **It gives way.** A message you send while it runs takes the server: a prefetch still running is
+  moved to the front and waited for at most `grace_sec`; after that it is cancelled, the turn goes
+  on per `on_miss`, and the notice `prefetch_missed` says so once.
+- **It is kept in memory only.** Closing the session drops it. An edit, a hide, a swipe or a rewind
+  after it makes it stale, and it is not used.
+- **Cost.** A prefetch the next answer used counts in `/usage`; one that was never used does not.
+
+**Swipes and continues.** A swipe (`/r`) or a continue (`/c`) reuses the picks of the answer it
+replaces or extends, with no call (`⋯ recall: reused (2)`), also after a restart: the picks are
+stored with the answer. When that answer's recall failed or did not run, recall runs as the mode
+says. A guided re-roll (`/regen <direction>`: the direction may need other entries) and every swipe
+with `on_swipe = "rerun"` recall again, in the turn.
+
+**One-shot commands and previews.** `send` never prefetches, so `auto` on a local server acts as
+`on_miss`; a sync recall does run in `send`. `preview` and `/preview` never call recall: the preview
+of the next answer shows the names alone, and the preview of a past answer uses the picks stored
+with it.
+
+**`RP_CORE_RECALL=lexical`** (or `off`) in the environment is the mode of every session that sets
+none: no recall calls. A mode from `config.toml` or `/memory mode` wins over it. The tests set it.
+
+### The recall model
+
+- **By default** recall follows [the recorder](#the-recorder-their-model), which follows the
+  narrator. `/model recall <conn:model>` gives it a model of its own, `/model recall recorder` or
+  `/model recall narrator` makes it follow again; `recall = "conn:model"` under `[roles]` does the
+  same for new sessions. `/model` and `/memory profile` show the binding.
+- **Its window** decides its profile: with `profile = "auto"` under `[compendium]`, lite below
+  24 576 tokens.
+- **Its answer** is short: temperature 0.3, at most 200 tokens on lite and 2 000 on full, plus 1 024
+  for a model that cannot turn its reasoning off.
+- **Its time:** 30 s on a local server and 20 s on a remote one in the turn, 60 s for a prefetch
+  (`timeout_sec` sets one value for all three).
+
+**Choose an instruction-following model.** Recall must answer with a list of handles, and a model
+tuned for roleplay may not. In the live runs on Ollama (a 12B roleplay fine-tune, a 16 384-token
+window, lite):
+
+- Before the opening was prefilled, the model answered the recall prompt in character, with prose
+  and no handles, so recall failed. That run is why rp-core now writes `{"entry_ids": [` itself.
+- With the opening, sync recall returned valid JSON in 0.4–0.6 s, about 4 output tokens, but the
+  model picked the first line of the index almost every time. The answers could be read; the picks
+  were poor.
+- The greeting's prefetch missed while Ollama was still loading the model. A prefetch between turns
+  was used with no recall call in the turn (2.6 s in the background), but it could not know the
+  player's next question.
+
+So when the narrator is a roleplay fine-tune, bind recall to an instruction-following model
+(`/model recall <conn:model>`), or use `/memory mode lexical`: no call, and the block holds the
+entries the story names, as before recall.
+
+### Seeing what recall did
+
+During a turn recall prints one dim line, before the answer: `⋯ recall: recalled (2)` (sync),
+`adopted (2)` (a prefetch), `reused (2)` (a swipe or a continue), or `fallback [<code>]` when the
+names alone filled the block. A prefetch prints its own line between turns, like the agents' lines:
+
+```
+⋯ recall: prefetched after #21 → 2: C17 "Переправа к маяку", C6 "Серый маяк"
+```
+
+`/trace` has a `recall:` line right before the `compendium:` line. From the demo (a scripted model,
+a 4 096-token window), a sync recall, a timeout, a reuse and an adopted prefetch:
+
+```
+  recall: sync · 2 picked: C17 "Переправа к маяку", C5 "Фонарный ряд" · 1 call 1.2s
+  recall: sync · failed [timeout] → lexical · 1 call 4.0s
+  recall: reused from c159ea56 (another version of #17) · 2 picked: C17 "Переправа к маяку", C5 "Фонарный ряд" · 0 calls
+  recall: prefetch after #21 · 2 picked: C17 "Переправа к маяку", C6 "Серый маяк" · 0 calls in this turn (the prefetch: 1 call 0.2s)
+```
+
+Without recall the line says `recall: lexical (no recall call; the selector picked alone)` or
+`recall: off (no recall call)`.
+
+**`/memory recall`** shows what recall did for the last answer, or with `--turn <#n|id>` for another:
+how it ran, the picks in its order with their handles, what the reader dropped, the calls, the time
+and the tokens. From the demo:
+
+```
+you        › /memory recall
+recall for #17: sync · recalled 2 · lite · script:default · tagged
+  picks, in recall's order:
+    1. C17 "Переправа к маяку"
+    2. C5 "Фонарный ряд"
+  read: 1 unknown, 1 repeated
+  1 call · 1.3s · 1162 in / 31 out tokens
+```
+
+A failure says why (`recall did not answer within its deadline: the selector picked alone
+(lexical)`), and an adopted prefetch says `1 call in the background, without the player's message`.
+
+**`/memory profile`** shows the profile each Compendium agent runs, on whose window and with what
+model:
+
+```
+you        › /memory profile
+Compendium profiles (compendium.profile auto: lite below a 24576-token window, full from it):
+  block     lite: the narrator's window 4096 < 24576 · script:default
+  recall    lite: the recall model's window 4096 < 24576 · script:default (follows the recorder, which follows the narrator) · up to 4 picks, reading the last 6 messages
+  filing    lite: the recorder's window 4096 < 24576 · script:default (follows the narrator) · not running: compendium.filing.enabled is false
+  historian lite: the recorder's window 4096 < 24576 · script:default (follows the narrator)
+```
+
+**`/memory mode`** alone shows the mode, where it comes from and what it does on this server;
+`/memory mode <mode>` sets it for the session, from the next answer:
+
+```
+you        › /memory mode auto
+recall mode: auto (set for this session, from the next reply)
+  here: sync (the recall model's server is not local): recall (script:default) picks the entries the narrator needs beside the Director, before each reply
+you        › /memory mode
+recall mode: auto (this session's compendium.recall.mode)
+  here: prefetch (the recall model's server is local): recall (script:default) picks in the background after each answer, while you type; a reply waits for it at most 1 s, then the selector picks alone (lexical)
+```
+
+(The second is a session on a local server with `grace_sec = 1`.) `/memory status` adds a line for
+the prefetch: `recall: prefetched after #23, ready for the next reply: 2 picked: …`, or that it is
+queued or running. `/usage` has a `recall` row. In the [TUI](#the-agents-pane) recall has a block in
+the agents pane.
+
+The codes in `fallback [<code>]`, `failed [<code>]` and `skipped [<code>]`: `timeout`,
+`provider_error` (the server failed), `no_output` (an empty answer), `undecodable` (an answer with no
+selection in it), `transport_unsupported`, `aborted` (stopped), `no_connection` (the recall model's
+connection is not in `config.toml`), `prefetch_missed`, `empty_index` (nothing to pick from) and
+`no_room` (the request does not fit the recall model's window).
+
+Notices, once per session:
+
+| Notice | When | Do |
+|---|---|---|
+| `recall_slow` | 3 sync recalls took more than 8 s | `/memory mode prefetch`, or a faster recall model (`/model recall`) |
+| `prefetch_missed` | A message waited `grace_sec` for a prefetch that was still running, and went on without it | A longer `grace_sec`, or a second slot on the server |
+| `recall_index_truncated` | The index did not fit its budget, so some entries were left out of it | A recall model with a larger window. Entries the messages name still reach the block |
+| `history_crowded` | Fewer than 4 earlier messages fit in the request: the fixed part of the prompt takes almost all of it. Not recall's own; any small window can show it | A narrator with a larger window or a lighter preset ([details](#when-the-story-does-not-fit)) |
+
+### Not yet: latency work (M5d)
+
+Recall is done; tuning how local servers share their time is not. None of these is built yet:
+pinning the narrator and the agents to their own llama.cpp slots (`id_slot`) with a `/slots` check
+for it, warnings about Ollama and LM Studio settings that make the server reload or swap the model,
+and `rp-core bench ttft` to measure the time to the first token. Also missing: recall does not pick a
+lorebook's plain (untyped) entries, and there is no `/memory recall test <text>` to try recall on a
+message without sending it.
+
 ### The /memory commands
 
 | Command | What it does |
@@ -1770,7 +1994,10 @@ In the [TUI](#the-agents-pane) the agents pane gives each agent a block. Notices
 | `/memory refile <n> [file\|hist]` | Run the passes bound to message *n* again, or only the one you name; an accepted answer that was never filed gets its filing pass. The new pass replaces the old one, an undo too. A refile lasts while the session is open |
 | `/memory retry [n]` | Run the parked tasks again (those that failed every attempt), or only message *n*'s. It also wakes a paused agent |
 | `/memory wait [sec]` | Wait until the background work is done, at most *sec* seconds (up to 24 h). Ctrl+C stops the waiting, not the work |
-| `/memory status` | The background work: what runs, what is queued, held or parked, and how many accepted answers are not filed yet |
+| `/memory status` | The background work: what runs, what is queued, held or parked, and how many accepted answers are not filed yet; the recall prefetch |
+| `/memory recall [--turn <#n\|id>]` | What recall did for the last answer (or answer *n*): how it ran, its picks, the calls and the time ([details](#seeing-what-recall-did)) |
+| `/memory profile` | The profile (full or lite) of the block, recall, filing and the historian, on whose window, with which model |
+| `/memory mode [auto\|sync\|prefetch\|lexical\|off]` | How recall runs here; with a mode, set it for this session ([modes](#recall)) |
 
 `<ref>` is the entry's handle (`C16`), its key (`character:мира`), or a name or alias only one entry
 has. `<n>` is a message: its number as `/show` prints it (`5` or `#5`), or its id. `undo`, `refile`
@@ -1957,7 +2184,8 @@ Imported again, that file gives the same types, names, aliases and fields.
 ### The [compendium] keys
 
 `[compendium]` in `config.toml` sets new sessions only: a session keeps the values it was created
-with, as with `[director]`. M5b reads these:
+with, as with `[director]`. In the chat, `/memory on`, `/memory off` and `/memory mode` change a
+session's own.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -1988,6 +2216,20 @@ with, as with `[director]`. M5b reads these:
 | `recap_after` | `24` | It also runs once this many messages (1–1000) after its last pass were trimmed from the narrator's prompt |
 | `overlap` | 10 full, 6 lite | Messages (1–100) of the part it already summarised that it reads again for context |
 
+`[compendium.recall]`, [recall](#recall):
+
+| Key | Default | What it does |
+|---|---|---|
+| `mode` | `"auto"` | `auto`, `sync`, `prefetch`, `lexical` or `off` ([modes](#recall)) |
+| `on_miss` | `"auto"` | `auto`, `lexical` or `sync`: what a message does when no prefetch is ready for it; `auto` is lexical on a local server, sync on a remote one |
+| `grace_sec` | `4` | How long (0–60 s) a message waits for a prefetch that is still running |
+| `max_entries` | 4 lite, 10 full | Picks kept (1–30); `0` means by profile |
+| `min_entries` | `0` | Full only: the fewest picks (0–20) the prompt asks for; with fewer, a second call asks for more |
+| `context_messages` | 6 lite, 20 full | Messages recall reads (5–100); `0` means by profile |
+| `timeout_sec` | 30 local, 20 remote, 60 a prefetch | One run's time (1–3600 s), its second call included; when set, it holds for all three |
+| `on_swipe` | `"reuse"` | `reuse` keeps the answer's picks for a plain swipe, `rerun` recalls again |
+| `guidance` | `""` | Your standing instructions to recall, up to 8 000 characters (lite sends the first 1 000). They can say what matters, not widen what it may pick |
+
 ```toml
 [compendium]
 profile = "lite"
@@ -2001,10 +2243,10 @@ every_n = 2
 
 [compendium.historian]
 interval = 10
-```
 
-The `[compendium.recall]` table is checked, so a typo is still an error, but nothing uses it yet:
-it is for recall (M5c), as is the `recall` role.
+[compendium.recall]
+mode = "lexical"
+```
 
 ### Keeping the requests
 
@@ -2018,29 +2260,13 @@ file:
 In the live run, one answer with the Director on left `t_89099cd6_director_0.json` and
 `t_89099cd6_narrator_0.json`; its swipe reused the plan and left only a narrator file. The
 background agents' requests are kept too, by their job: the third M5b live run left
-`j_2dbb27cd_filing_0.json` and `j_8b2fcecd_historian_0.json` among them. A call key that comes again
+`j_2dbb27cd_filing_0.json` and `j_8b2fcecd_historian_0.json` among them. Recall's are kept under
+the turn when it ran in the turn (`t_<turn>_recall_0.json`) and under the answer a prefetch followed
+(`p_<answer>_recall_0.json`). A call key that comes again
 (a retry, a fallback) gets `-2`, `-3`. The file is the engine's request (messages,
 tools, samplers), not the HTTP body (`/preview --wire` shows that), and never holds headers or keys.
 It holds your story, so keep it where you keep sessions. Off by default; `send` and `preview` refuse
 the flag.
-
-### Not in M5b yet
-
-M5c, the last part of the Compendium, is **recall**:
-
-- **A model picks the entries.** Today the block holds the entries the story names, found by their
-  words. Recall asks a model which entries the next answer needs, from an index of the Compendium
-  (its tree on full, a short list found by words on lite). On a local server it can run ahead, between
-  turns, so the answer does not wait for it; without a model the word match stays (`lexical`).
-- **Its commands and keys:** `/memory recall`, `profile` and `mode`, the `[compendium.recall]` table
-  and the `recall` role (`/model recall`). The commands already answer that they come with M5c.
-- **Local servers:** pinning the narrator and the agents to their own slots on llama.cpp
-  (`id_slot`), warnings about Ollama and LM Studio settings that make the server reload or swap the
-  model, and
-  `rp-core bench ttft` to measure the time to the first token.
-
-The demos of the Compendium, step by step: [`docs/M5A-DEMO.md`](M5A-DEMO.md) (the data and the
-manual part) and [`docs/M5B-DEMO.md`](M5B-DEMO.md) (the agents and the slot).
 
 ## The Story Director
 
@@ -2436,11 +2662,11 @@ the round trip.
 
 | Table | Holds |
 |---|---|
-| `[connections.<name>]` | One per server. Fields: `dialect` (`"openai-chat"`), `base_url`, `key_env`, `key_cmd`, `max_in_flight` (1–64), `local` (overrides the guess from the URL), `headers` (header name → *name of the env variable* holding its value), `extra_body` (fields added to every request; `model`, `messages`, `stream`, `tools`, `tool_choice` are protected), `exclude_body`. Names may hold letters, digits, `_` and `-`, never `:` |
-| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), `recorder` (the Compendium's agents; unset or `"narrator"` likewise; see [The recorder](#the-recorder-their-model)) and `recall` (M5c; it may say `"narrator"` or `"recorder"`). A session keeps its own copy; `/model` changes it there |
+| `[connections.<name>]` | One per server. Fields: `dialect` (`"openai-chat"`, the default; `"anthropic"` or `"gemini"` for the native APIs, which may leave `base_url` out), `base_url`, `key_env`, `key_cmd`, `max_in_flight` (1–64), `local` (overrides the guess from the URL), `headers` (header name → *name of the env variable* holding its value), `extra_body` (fields added to every request; `model`, `messages`, `stream`, `tools`, `tool_choice` are protected), `exclude_body`; for `anthropic` only, `api_version` and `cache_ttl` (`"5m"` or `"1h"`). Names may hold letters, digits, `_` and `-`, never `:` |
+| `[roles]` | Defaults for new sessions: `narrator = "conn:model"`, `narrator_fallback`, `director` (unset or `"narrator"`: the narrator's connection and model), `recorder` (the Compendium's agents; unset or `"narrator"` likewise; see [The recorder](#the-recorder-their-model)) and `recall` (unset or `"recorder"`: it follows the recorder; `"narrator"`, or a `"conn:model"` of its own; see [The recall model](#the-recall-model)). A session keeps its own copy; `/model` changes it there |
 | `[narrator]` | `max_rounds` (rounds of lookups per answer, 1–8, default 4; see [Rounds](#rounds)) and `prefill_vs_tools` (`"prefill"` or `"tools"`: which wins when a preset prefill meets tools) |
 | `[director]` | The Story Director for new sessions: `enabled` (default `false`), `profile` (`"auto"`, `"full"`, `"lite"`), `on_swipe` (`"reuse"`, `"replan"`), `instructions` (up to 2 000 characters), `style` (a personality, default `"the-balanced"`), `creativity` (`"subtle"`, `"moderate"`, `"dramatic"`), `timeout_sec` (1–3600); see [The \[director\] keys](#the-director-keys) |
-| `[compendium]` | The Compendium for new sessions: `enabled` (default `true`), `profile` (`"auto"`, `"full"`, `"lite"`), `min_share` (0–1, default 0.4), `language`, `guidance`, `max_attempts` (default 3), `idle_delay_sec` (default 8) and `[compendium.books]` (`<library id> = "read"` or `"off"`); the agents' tables `[compendium.filing]` (`enabled`, `wait`, `every_n`, `allow`, `timeout_sec`) and `[compendium.historian]` (`interval`, `recap_after`, `overlap`). `[compendium.recall]` is checked and kept for M5c; see [The \[compendium\] keys](#the-compendium-keys) |
+| `[compendium]` | The Compendium for new sessions: `enabled` (default `true`), `profile` (`"auto"`, `"full"`, `"lite"`), `min_share` (0–1, default 0.4), `language`, `guidance`, `max_attempts` (default 3), `idle_delay_sec` (default 8) and `[compendium.books]` (`<library id> = "read"` or `"off"`); the agents' tables `[compendium.filing]` (`enabled`, `wait`, `every_n`, `allow`, `timeout_sec`) and `[compendium.historian]` (`interval`, `recap_after`, `overlap`); recall's `[compendium.recall]` (`mode`, `on_miss`, `grace_sec`, `max_entries`, `min_entries`, `context_messages`, `timeout_sec`, `on_swipe`, `guidance`); see [The \[compendium\] keys](#the-compendium-keys) |
 | `[caps."conn:model"]` | Your corrections to what rp-core believes about a model: `context_length`, `max_output`, `tools`, `prefill`, `mid_system`, `alternation`, `reasoning`, `samplers_accepted`, `stream_usage`, `max_in_flight`, `extra_body`, … Override only after checking (`rp-core probe` shows the current values) |
 | `[prices."conn:model"]` | `in_per_m`, `out_per_m` (USD per million tokens) and `as_of` (a quoted date) for the cost in `/usage` |
 
@@ -2471,8 +2697,8 @@ rp-core send "$id" "Hello there"
 | `rp-core preview "$id" --draft "Hi"` | The request a reply to "Hi" would send; nothing is sent |
 
 - **`--json`** prints events: `start`, then `text`… deltas (and `tool` events when the narrator looks
-  something up), then `changed` and `done`, or `stopped` / `failed`. These are the events a UI will
-  consume. In text mode the lookups are one line each on stderr.
+  something up), then `changed` and `done`, or `stopped` / `failed`. These are the events a UI gets
+  over [`--stdio`](STDIO.md) too. In text mode the lookups are one line each on stderr.
 - **The Director** on a session that has it on: `send` prints its line on stderr like a lookup
   (`⋯ director: planned — seeds +1 · chapter 1`, `reused`, `failed (<code>)`); with `--json` these are
   `director` events with `status` `planning`, `planned`, `reused` or `failed` (the code in `reason`).
@@ -2626,6 +2852,9 @@ That is a copy of the M4 live session (6 answers with the Director on). A second
 | notice `memory_backlog`, or `memory_starved` | Answers come faster than the recorder files them, or turns keep taking the server away from a pass | A separate connection for the recorder (`/model recorder <conn:model>`), a second slot on the server, or a larger `every_n` under `[compendium.filing]` (new sessions). `/memory wait` lets it catch up |
 | `the background lane cannot run: …` (`/memory wait`), notice `recorder_unavailable` | The recorder's connection is not in `config.toml`, so nothing runs | `/model recorder <conn:model>` with a connection you have, or add the connection |
 | The historian writes English summaries of a story in another language | A small model does not follow the general language line | Set `language` under `[compendium]` for new sessions. A story in Cyrillic, Greek, CJK, Arabic, Hebrew or Thai script is named without it ([details](#the-language-they-write-in)) |
+| `⋯ recall: fallback [undecodable]` on most turns, or recall's picks look random (`/memory recall`: the first entries of the index every time) | The recall model is a roleplay fine-tune: it answers in character, or picks by position | Bind recall to an instruction-following model (`/model recall <conn:model>`), or `/memory mode lexical` ([details](#the-recall-model)) |
+| `⋯ recall: fallback [prefetch_missed]`, notice `prefetch_missed` | Your message came while the prefetch still ran (often while the server was loading the model); the answer went on with the names alone | Nothing, now and then. Often: a longer `grace_sec` under `[compendium.recall]`, a second slot, or `/memory mode sync` |
+| notice `history_crowded` | Fewer than 4 earlier messages fit in the request: the card, preset and lore take almost the whole window | A narrator with a larger window, or `/preset builtin` ([details](#when-the-story-does-not-fit)) |
 | A piped chat ends before its last answers are filed | The background lane never holds the process | End the script with `/memory wait`; otherwise the next `chat` on the session files them |
 | `rp-core tui needs a terminal; use rp-core chat` (exit 64) | `tui` or `new --tui` was run with stdin or stdout not a terminal (a pipe or a script) | Run it in a terminal window, or use `rp-core chat` |
 | TUI: white text on a white background, or text missing on a light theme | An early build of the TUI drew text in OpenTUI's bright white | Update rp-core. The TUI now takes every colour from the terminal's theme ([Colours](#colours)) |
@@ -2655,6 +2884,7 @@ redacted.
 | `sessions [--json]` | Sessions, newest first |
 | `show <session> [--json]` | The active path with markers `[interrupted]`, `[stopped]`, `[hidden]`, `[edited]`. Never takes the lock |
 | `compact <session> [--json]` | Shrinks the session's journal: drops the checkpoint and request lines of finished turns; the story and the Director's plans stay ([details](#compacting-a-session)) |
+| `--stdio [--provider …]` | JSON-RPC 2.0 over stdin and stdout, one JSON object per line, for another UI ([`docs/STDIO.md`](STDIO.md)) |
 
 **`--provider`** takes `script:<file>` (a scripted fake model), `record:<file>` or `replay:<file>`
 ([details](#recording-and-replaying-a-chat)).
@@ -2665,6 +2895,9 @@ redacted.
 **`RP_CORE_LANE=manual`** in the environment makes `chat` and `tui` run the Compendium's background
 work only at `/memory wait` (the tests set it). The default, `auto`, runs it between turns
 ([details](#when-they-run)); `send`, `preview` and `compact` never run it.
+
+**`RP_CORE_RECALL=lexical`** (or `off`) makes every session that sets no recall mode make no
+recall calls ([details](#recall)).
 
 **Global flags** may go anywhere on the line: `--home <dir>`, `--sandbox`, `--debug`, `--help`
 (also `rp-core help <command>`) and `--version`.
@@ -2693,11 +2926,12 @@ newline. With `--json` it carries events as JSONL instead: the session's open ev
 
 | Command | What it runs |
 |---|---|
-| `bun test` | The full suite: 5717 tests in 306 files (5713 pass); the 3 live tests below are skipped without `RP_CORE_LIVE=1`, and the real-export check without `RP_CORE_RC_EXPORT`. Three timing tests can fail on a busy machine; run alone, they pass |
+| `bun test` | The full suite, in about 350 files; the 3 live tests below are skipped without `RP_CORE_LIVE=1`, and the real-export check without `RP_CORE_RC_EXPORT`. Three timing tests can fail on a busy machine; run alone, they pass |
 | `bun test test/tui` | The full-screen TUI (279 tests in 17 files, about 12 seconds) on a headless OpenTUI renderer with a scripted model: the layout at several widths, typing and streaming, Ctrl+C, every slash command, hotkeys (also on a Russian layout), the mouse and copying, colours, signals and the lock, and the Compendium agents' blocks. The frame-time checks run only with `RP_CORE_PERF=1` |
 | `bun test test/demo-m4` | The M4 demos on a scripted model (5 tests, a few seconds): 30 turns with chapters, arcs, seeds and hidden arcs; swipe reuse, `/regen` and rollback; a broken plan on a small window; 300 verbose Russian turns under the state cap. They print what they did ([`docs/M4-DEMO.md`](M4-DEMO.md)) |
 | `bun test test/demo-m5a` | The M5a demo on a scripted model (9 tests, about a second): the real CLI imports a RoleCall Compendium, writes an entry in an editor, sends its brief in the block, edits a book entry as an overlay, swipes, rewinds and forks, exports and imports again, and keeps the Director's request with `[COMPENDIUM CONTEXT]`. It prints the transcript ([`docs/M5A-DEMO.md`](M5A-DEMO.md)) |
 | `bun test test/demo-m5b` | The M5b demo on a scripted model (16 tests in 3 files, about 7 seconds): the real CLI, with the background lane in auto mode, files answers once they are accepted (also from fenced or loosely shaped JSON), takes a swipe's entries off the path and brings them back, files an edited answer again, undoes and refiles a pass, runs the historian twice, shows the `{{recap}}` slot once trimming starts and keeps it while the cut holds, and after a `kill -9` during filing reopens with exactly one record per pass. It prints the transcript ([`docs/M5B-DEMO.md`](M5B-DEMO.md)) |
+| `bun test test/demo-m5c` | The M5c demo on a scripted model (14 tests, about 12 seconds): the real CLI recalls a summary no message names, runs recall beside the Director, reuses its picks on a swipe and a continue (also after a restart), falls back on a timeout and on a missed prefetch, adopts a prefetch with no call in the turn, and prints `/memory recall`, `profile` and `mode` ([`docs/M5C-DEMO.md`](M5C-DEMO.md)) |
 | `bun test test/{sched,lane,filing,historian,recap,fold,language,repl}-m5b` | M5b's own tests besides the demo (447 tests in 38 files, a few seconds), on scripted models and fake clocks: the scheduler (37) and the background lane (70: preemption without an attempt, the idle wait, retries, parking, recovery after a crash), the filing prompts against Bunraku's text, reading and staging (85), the historian (100), the `{{recap}}` slot (66), the fold with the agents' rows (38), the language names (3) and the REPL's commands and lines (48). 64 more sit beside older tests: `test/memory/fold-m5b*.test.ts`, `test/structured/{review-m5b,ruling-k}.test.ts`, `test/session/fork-recap.test.ts`, `test/cli/lane-m5b.test.ts` and `test/tui/lane-*.test.ts` |
 | `bun test test/rcimport` | The RoleCall story import (135 tests in 5 files, a few seconds) on a synthetic export built in memory by `test/rcimport/kit.ts` (every name and line in it invented): the ZIP reader on good and hostile archives, the converters, RoleCall's reasoning splitter (also in linear time on texts that made RoleCall's own regexes quadratic), the Director's state, and the CLI end to end, 1 200 messages in about a tenth of a second. `RP_CORE_RC_EXPORT=<file> bun test test/rcimport/zip.test.ts` adds one read-only check that your own export opens and matches its manifest; nothing of it is printed or kept. `test/engine-fit` and `test/repl/preview-imported.test.ts` (8 more) cover a turn that cannot fit and `/preview n` on an imported answer |
 | `RP_CORE_SKIP_SLOW=1 bun test` | Without the ~30 s fetch long-pause tests |
@@ -2717,24 +2951,28 @@ run).
 
 | Folder | Holds |
 |---|---|
-| `src/engine` | Turns, the Director's call before the narrator, the narrator's tool loop, recovery, scheduling with priorities, the Compendium's background lane (`lane.ts`) |
+| `src/engine` | Turns, the Director's call and recall before the narrator, the narrator's tool loop, recovery, scheduling with priorities, the Compendium's background lane (`lane.ts`), the host API with its hooks, gates and pluggable session stores (`api.ts`, `hooks.ts`) |
 | `src/session` | The journal, tree and views |
 | `src/prompt` | Assembly, macros, shaping, budget |
-| `src/providers` | Transport, the openai-chat adapter, capability data, the scripted, recording and replay providers |
+| `src/providers` | Transport, the openai-chat, Anthropic and Gemini adapters, capability data, the scripted, recording and replay providers |
 | `src/formats` | Cards, presets, world info, RoleCall Compendium files, RoleCall story exports (with a small ZIP reader), library |
 | `src/lore` | Lorebook activation: keys, timers, recursion, groups, budget |
 | `src/tools` | The narrator's tools, their arguments, prompted calls and leak recovery |
 | `src/text` | Word folding and light stemming for search and note keys |
 | `src/agents` | The Story Director (`agents/director`), the agents' structured calls (`agents/structured.ts`), and the Compendium (`agents/compendium`: the fold of its journal lines, merge, render, tree, the selector and the block, the Director's world snapshot, export, the filing agent, the historian and the `{{recap}}` slot) |
 | `src/config` | Config and keys |
+| `src/protocol` | The `--stdio` JSON-RPC server, its commands and events, and the generated JSON Schema |
 | `src/cli` | Commands and the chat; the full-screen TUI in `src/cli/tui` |
 
 The design and its decisions (D-1…D-195; the M4 ones are D-98…D-124, the TUI's D-125…D-139, M5a's
-D-140…D-169, M5b's D-170…D-184, the RoleCall story import's D-185…D-195) are in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md). The
+D-140…D-169, M5b's D-170…D-184, the RoleCall story import's D-185…D-195) are in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md); M5c's
+D-196…D-208 are in [`.notes/m5c-decisions.md`](../.notes/m5c-decisions.md). The
 milestone demos with transcripts and timings are [`docs/M1A-DEMO.md`](M1A-DEMO.md),
 [`docs/M1B-DEMO.md`](M1B-DEMO.md), [`docs/M2-DEMO.md`](M2-DEMO.md),
 [`docs/M3-DEMO.md`](M3-DEMO.md), [`docs/M4-DEMO.md`](M4-DEMO.md),
-[`docs/M5A-DEMO.md`](M5A-DEMO.md) and [`docs/M5B-DEMO.md`](M5B-DEMO.md). How rp-core differs
+[`docs/M5A-DEMO.md`](M5A-DEMO.md), [`docs/M5B-DEMO.md`](M5B-DEMO.md) and [`docs/M5C-DEMO.md`](M5C-DEMO.md).
+The `--stdio` protocol is in [`docs/STDIO.md`](STDIO.md), the host API in [`docs/M9-HOST.md`](M9-HOST.md).
+How rp-core differs
 from RoleCall and SillyTavern on purpose: [`docs/PARITY-RC.md`](PARITY-RC.md),
 [`docs/COMPENDIUM-DEVIATIONS.md`](COMPENDIUM-DEVIATIONS.md) (the Compendium, for Chi's review) and
 [`test/golden/st/README.md`](../test/golden/st/README.md).
