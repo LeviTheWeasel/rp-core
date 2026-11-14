@@ -1,6 +1,8 @@
 # rp-core — итоговая архитектура
 
-*Документ для Леви, 28.10.2026, ревизия 18.*
+*Документ для Леви, 14.11.2026, ревизия 19.*
+
+*Ревизия 19: построены все вехи до M9. M5c — recall: перед ответом модель выбирает записи Compendium — на удалённом сервере рядом с Директором, на локальном фоновым prefetch, пока игрок пишет, — с лексическим откатом. M5d — задержка на локальных серверах: ядро читает, что за сервер перед ним, закрепляет слоты llama.cpp (рассказчик — 0, агенты — 1), предупреждает о схемах Ollama и LM Studio, которые перезагружают или выгружают модель, а `/trace` показывает счёт промпта каждого вызова; `rp-core bench ttft` проверяет, выживает ли кэш рассказчика. M6 — `--stdio`, JSON-RPC 2.0 поверх JSONL (`docs/STDIO.md`). M7 и M8 — нативные Anthropic и Gemini; живых тестов на настоящем API у них нет, только записанные вручную события SSE. M9 — сторона ядра в стыке с Bunraku: хуки и гейты хоста, `draft`, асинхронный `RecordStore` (`docs/M9-HOST.md`); адаптера Bunraku нет. Вне вех — импорт одиночного чата SillyTavern и окна TUI: выбор модели, подключение OpenRouter, обзор историй и веток, новая история, персона, настройки истории, заполнение окна в панели агентов. Живой прогон M5d поправил документ: у Ollama кэш хоста есть (`--cache-ram 8192` по умолчанию), и её единственный слот переживает вызов агента; закрепление важнее всего без кэша хоста — там незакреплённый рассказчик терял кэш в каждом раунде. Новые решения D-196…D-218 (M5c и M5d) ждут подтверждения — вопрос 27; D-219…D-244 (M6, M7, M8, M9 и работа вне вех) — вопрос 28. Вопросы 21–26 тоже ещё открыты.*
 
 *Ревизия 18: импорт истории RoleCall готов. `rp-core import <story.rolecall>` переносит экспорт одной истории RoleCall в библиотеку и сессии: карточку, персону, пресет с настройками чата, лорбуки, сообщения со свайпами и рассуждениями, состояние Директора. Compendium включается после импортированного прошлого и его не переписывает. Импорт проверяет, помещается ли история в окно рассказчика, а движок теперь отказывает в ходе, который не помещается, ещё до вызовов Директора. Новые решения D-185…D-195 ждут подтверждения — вопрос 26. Вопросы 21–25 тоже ещё открыты.*
 
@@ -44,7 +46,7 @@
   - REPL — для человека.
   - *Рев. 15:* `rp-core tui` — тот же REPL на весь экран, в три колонки (§12.4.1).
   - One-shot `rp-core send [--json]` — с первой вехи.
-  - `--stdio` (JSON-RPC 2.0 поверх JSONL) — для любого UI, с M6.
+  - `--stdio` (JSON-RPC 2.0 поверх JSONL) — для любого UI, с M6; *рев. 19:* построен (§12.2, `docs/STDIO.md`).
   - Вплоть до M1 включительно у ядра ноль рантайм-зависимостей.
 - **Сессия — один append-only JSONL-файл.**
   - Сообщения образуют дерево (`id`, `parent`), голова у сессии одна.
@@ -65,10 +67,13 @@
   *Рев. 17 (M5b):* построены агенты, которые пишут: filing, historian со слотом `{{recap}}` и фоновая полоса с планировщиком по origin (§7.4.3, §7.4.4, §7.4.7). До первого токена они вызовов не добавляют. Recall — M5c.
 
   *Рев. 18:* ход с Директором сначала проверяет, помещается ли запрос рассказчика; не помещается — отказ до вызовов Директора [D-195].
+
+  *Рев. 19 (M5c, M5d):* построен recall. На удалённом сервере он идёт рядом с Директором, на локальном — prefetch, пока игрок пишет; промах или режим `lexical` — выбор без модели (§7.4.2). На llama.cpp с двумя слотами и больше рассказчик и агенты закреплены за разными слотами, так что агент не выбивает кэш рассказчика (§7.4.7) [D-211].
 - **API рассчитан на Scenes в Bunraku, но строится по вехам.**
   - С M1: `send`/`runTurn` с `expectedVersion`, swipe, continue, stop, восстановление после краша, форки.
   - С M6: `conflict` с `commitAnyway`/`discard`.
   - С M9: хуки и гейты хоста (`review`, `transform`, fail-closed), `draft`, порт записей.
+  - *Рев. 19:* всё это построено. Порт записей — две границы: синхронный `SessionStore` и асинхронный `RecordStore` через фасад [D-235]. Адаптера Bunraku нет.
 
   Чего Bunraku не хватит и после M9 и где ядро сознательно ведёт себя иначе — §12.5.
 - **Провайдеры подключаются в порядке Леви: OpenAI-совместимый → Anthropic → Gemini.**
@@ -76,12 +81,13 @@
   - Возможности модели описаны записью-данными.
   - Принудительный `tool_choice` не используется нигде.
   - Транспорт тулов и JSON выбирается до вызова и молча не меняется.
+  - *Рев. 19:* все три построены. Нативные Anthropic (M7) и Gemini (M8) проверены только на событиях SSE, написанных руками (§15).
 - **Лицензия и происхождение кода (решено 25.10, §2).**
   - Ядро выходит под **AGPL-3.0-or-later**, как Bunraku.
   - Это совместный проект команды RoleCall: Chi и Nemo подключатся позже.
   - Из RoleCall берётся всё, что работает, включая Директора, Compendium и Plan C. Из Bunraku — по ситуации.
   - Код **портируется** в форму ядра с сохранением копирайтов и записью в `PROVENANCE.md`, а не импортируется.
-- **Вехи по умолчанию [D-8], рев. 4:** M1a ядро хода на скриптовом провайдере → M1b локальная RP в терминале → M2 пресеты и лорбуки → M3 тулы и поиск → M4 Директор → M4.5 TUI (рев. 15) → M5 Compendium (между M5b и M5c — импорт истории RoleCall, рев. 18) → M6 `--stdio` → M7 Anthropic → M8 Gemini → M9 стык с Bunraku.
+- **Вехи по умолчанию [D-8], рев. 4:** M1a ядро хода на скриптовом провайдере → M1b локальная RP в терминале → M2 пресеты и лорбуки → M3 тулы и поиск → M4 Директор → M4.5 TUI (рев. 15) → M5 Compendium (между M5b и M5c — импорт истории RoleCall, рев. 18; *рев. 19:* за M5c — M5d, задержка на локальных серверах) → M6 `--stdio` → M7 Anthropic → M8 Gemini → M9 стык с Bunraku.
 - **Объём и источники (рев. 4, §19).**
   - ≈ 19 тыс. строк кода ядра (рев. 6, с Compendium; в рев. 4 — ≈ 16 тыс.) плюс 3,9 тыс. строк личностей Директора.
   - Источник есть примерно у 65 % логики. Оболочка (журнал-дерево, движок, CLI) пишется с нуля. Провайдеры, Директор, тулы и лор в основном адаптируются из Bunraku и RoleCall.
@@ -92,17 +98,19 @@
   - *Рев. 16:* после M5a в `src` ≈ 57 тыс. строк, в тестах — ≈ 70 тыс.
   - *Рев. 17:* после M5b в `src` ≈ 64 тыс. строк, в тестах — ≈ 81 тыс.
   - *Рев. 18:* после импорта RoleCall в `src` ≈ 70 тыс. строк, в тестах — ≈ 86 тыс.
-- **Статус (рев. 18, 28.10).** Реализованы M1a, M1b, M2, M3, M4, этап M4.5 — TUI, — M5a и M5b: данные, ручная память и агенты Compendium; *рев. 18:* и импорт истории RoleCall (§10.6; §15; «Примечания к ревизии», п. 32–95). D-1…D-89 приняты, кроме D-27. Ждут подтверждения пакетом шесть наборов технических решений: решения M3 — D-90…D-97 и правка D-59 (вопрос 21 в §18), решения M4 — D-98…D-124 (вопрос 22), решения TUI — D-125…D-139 (вопрос 23), решения M5a — D-140…D-169 (вопрос 24), решения M5b — D-170…D-184 (вопрос 25) и решения импорта RoleCall — D-185…D-195 (вопрос 26). Что ещё открыто:
-  - **D-27** — судьба существующих сцен Bunraku при переходе на ядро. Решается с Chi, до M9.
+  - *Рев. 19:* после M5d в `src` ≈ 79 тыс. строк, в тестах — ≈ 97 тыс.
+- **Статус (рев. 19, 14.11).** Реализованы все вехи: M1a, M1b, M2, M3, M4, этап M4.5 — TUI, — M5a и M5b: данные, ручная память и агенты Compendium; *рев. 18:* импорт истории RoleCall (§10.6; §15; «Примечания к ревизии», п. 32–95); *рев. 19:* M5c — recall, M5d — задержка на локальных серверах, M6 — `--stdio`, M7 и M8 — нативные Anthropic и Gemini, M9 — сторона ядра в стыке с Bunraku, а вне вех — импорт чата SillyTavern и новые окна TUI (§15). D-1…D-89 приняты, кроме D-27. Ждут подтверждения пакетом восемь наборов технических решений: решения M3 — D-90…D-97 и правка D-59 (вопрос 21 в §18), решения M4 — D-98…D-124 (вопрос 22), решения TUI — D-125…D-139 (вопрос 23), решения M5a — D-140…D-169 (вопрос 24), решения M5b — D-170…D-184 (вопрос 25), решения импорта RoleCall — D-185…D-195 (вопрос 26), *рев. 19:* решения M5c и M5d — D-196…D-218 (вопрос 27) и решения M6–M9 и работы вне вех — D-219…D-244 (вопрос 28). Что ещё открыто:
+  - **D-27** — судьба существующих сцен Bunraku при переходе на ядро. Решается с Chi. *Рев. 19:* план ставил решение до M9, но M9 собрана без него: сторона ядра готова, адаптера Bunraku нет.
   - **`docs/TEAM-LICENSING.md`** [D-34] — написать и подписать до первого внешнего коммита.
   - **Разговоры с Chi:**
     - предупредить о rp-core и согласовать коды выхода и флаги с Kintsu [D-14];
-    - показать список отступлений Compendium [D-88]. По D-166 он ведётся в `docs/COMPENDIUM-DEVIATIONS.md`, на английском; *рев. 17:* в нём теперь и строки M5b — промпты filing и historian, терпимое чтение, полоса, слот. D-88 просил показать список до M5b;
+    - показать список отступлений Compendium [D-88]. По D-166 он ведётся в `docs/COMPENDIUM-DEVIATIONS.md`, на английском; *рев. 17:* в нём теперь и строки M5b — промпты filing и historian, терпимое чтение, полоса, слот; *рев. 19:* и раздел F — решения M5c (recall). D-88 просил показать список до M5b;
     - M5a и M5b сделаны без неё (D-88 предлагал ей M5a): это порт её кода из Bunraku. Показать вместе со списком отступлений;
     - карта алиасов для ключей вне схемы в примерах личностей [D-111];
-    - сказать ли о TUI сейчас: он пересекается со Stage из плана Kintsu [D-14] (вопрос 23).
+    - сказать ли о TUI сейчас: он пересекается со Stage из плана Kintsu [D-14] (вопрос 23);
+    - *рев. 19:* хранение. M9 построила две границы — синхронный `SessionStore` и асинхронный `RecordStore` через фасад с conformance [D-235]; хранит ли Bunraku записи ядра в своём SQLite через `RecordStore`, по-прежнему решается с ней [D-13].
   - **TUI в Warp** — смотрит Леви: сам Warp мы не запускали (§15, M4.5).
-  - **Дальше** — M5c: recall и задержка (§15). *Рев. 18:* импорт сохранённой истории RoleCall (файл `.rolecall`, клиентский экспорт [D-9]) сделан (§10.6).
+  - **Дальше** — *рев. 19:* вехи плана кончились. Не проверено вживую: нативные Anthropic и Gemini (живых тестов на настоящем API нет), recall на модели, которая следует инструкциям, `--stdio` с настоящим клиентом (§15). Схема протокола 1 отстала от провода [D-225]. Адаптер Bunraku ждёт разговора с Chi (D-13, D-27). *Рев. 18:* импорт сохранённой истории RoleCall (файл `.rolecall`, клиентский экспорт [D-9]) сделан (§10.6).
 
 ---
 
@@ -224,6 +232,8 @@
                     session/fold, tools/prompted
 ```
 
+*Рев. 19:* на схеме построено всё, кроме ACP-адаптера: `--stdio` — на M6, хуки хоста и порт записей — на M9. Порт записей — две границы: синхронный `SessionStore` и асинхронный `RecordStore` через фасад [D-235]. Самого Bunraku в процессе ещё нет: его адаптер не начат. Prerecall на полосе — слот prefetch, а не задача полосы [D-202].
+
 Зависимости направлены строго в одну сторону: клиенты → Engine → журнал, провайдеры, чистые библиотеки. В чистые библиотеки часы и seed передаются снаружи, ввода-вывода в них нет.
 
 Систему держат простой три правила:
@@ -250,20 +260,32 @@ rp-core/
   package.json          # "exports": {".": "./src/index.ts", "./testing": "./src/testing/index.ts"}, "bin": {"rp-core": "./src/cli/main.ts"}
   LICENSE               # [D-11]
   PROVENANCE.md         # реестр портированных файлов: источник, коммит, что изменено (§2)
+  tools/                # рев. 19: generate-protocol-schema.ts — схема протокола (M6, `bun run schema`) [D-225];
+                        # stdio-demo.py — пример клиента `--stdio` на Python
   src/
     index.ts            # Engine, типы, Event/Command (публичный API)
     engine/
       engine.ts         # сессии, идущие ходы, полосы
-      turn.ts           # машина состояний хода; точки хуков (пустые до M9)
+      turn.ts           # машина состояний хода; точки хуков (рев. 19: с M9 работают — beforeAssemble, transformRequest,
+                        # transformReply, гейты review и transform [D-236, D-237])
                         # (рев. 18: ход с Директором сначала проверяет, помещается ли запрос [D-195])
       narrate.ts        # цикл тулов поверх провайдера
       recover.ts        # разбор открытых ходов и задач при открытии
+      recall.ts         # рев. 19, M5c: recall в ходе и в полосе — режим, маршрут, база prefetch, runRecall, уведомления
+                        # [D-201…D-204]; слот prefetch живёт в lane.ts, повышение и «Директор первым» — в sched.ts
+                        # (createBoost, boosted, ordered) [D-202, D-203]
       lane.ts           # фоновая очередь сессии: попытки, вытеснение, парковка, задержка фона
                         # (рев. 17, M5b: задачи filing и historian выводятся из пути, восстановление, глаголы [D-171, D-180])
       sched.ts          # семафор на origin (scheme://host:port): interactive / background
                         # (рев. 17: вытеснение фона, правило локального origin, задержка фона [D-172])
       abort.ts          # дерево AbortSignal, типизированные причины
+      server-notices.ts # рев. 19, M5d: ответы локальных серверов — одно чтение на origin, закрепление слота
+                        # на копии caps вызова, четыре уведомления о сервере [D-210…D-212]
       hooks.ts          # M9: гейты review/transform, beforeAssemble, transformReply
+                        # (рев. 19: раннер хуков — beforeAssemble, transformRequest, transformReply, HostHookError;
+                        # гейты review и transform ждут в turn.ts, answerGate — в session.ts [D-237])
+      record-engine.ts  # рев. 19, M9: фасад Engine.openWithRecordStore (сам метод — в engine.ts): AsyncEngineHandle, AsyncSessionHandle;
+                        # каждая операция сессии ждёт своих записей в RecordStore [D-235]
     session/
       entries.ts        # объединение Entry (формат на диске)
       log.ts            # append, fsync/fdatasync, чтение по LF, рваные строки, lock, compact
@@ -271,6 +293,10 @@ rp-core/
       fold.ts           # PathView: путь, Директор, Compendium (рев. 16: foldViewAt с затравкой книг), заметки, vars, fires
       fork.ts           # копия пути в новый файл-сессию
       port.ts           # M9: порт записей RecordStore + in-memory реализация
+                        # (рев. 19: RecordStore, Lease, FileRecordStore, MemoryRecordStore, checkRecordStoreConformance)
+      backend.ts        # рев. 19, M9: синхронный SessionStore — FileSessionStore (по умолчанию), MemorySessionStore [D-235]
+      record-backend.ts # рев. 19, M9: RecordSessionStore — зеркало сессии в памяти, очередь записей в RecordStore,
+                        # продление lease раз в 10 с [D-235]
     prompt/
       assemble.ts       # чистая assemble(input) → {messages, tools, prefill, trace, varsDiff, toolRoom, kept}
       assemble/gap.ts   # заметка о пропуске и напоминание для тулов истории [D-96]
@@ -292,19 +318,25 @@ rp-core/
       rolecall-story.ts # рев. 18: экспорт истории RoleCall → чаты, сообщения, персона, пресет, книги; чистые функции [D-187, D-188]
       rolecall-think.ts # рев. 18: порт splitThinkingFromContent RoleCall — рассуждения из текста, за линейное время [D-188]
       rolecall-import.ts # рев. 18: план импорта — элементы библиотеки и готовый журнал на чат [D-185…D-194]
+      st-chat.ts        # рев. 19: чат ST в JSONL → строки журнала: свайпы, выбранная версия, рассуждения, скрытые [D-240]
     providers/
       types.ts  caps.ts  caps-data/{hosts,models}.json  probe.ts
       probe-active.ts   # активные пробы `rp-core probe --active` (M3)
       http.ts           # fetch с замком на хост, таймауты первого байта и простоя
+      server-info.ts    # рев. 19, M5d: что говорит о себе локальный сервер — /props llama.cpp, /api/version,
+                        # /api/ps и /api/show Ollama, /api/v1/models LM Studio; правило закрепления pinVerdict [D-210, D-211]
       sse.ts  reasoning-tags.ts
       openai-chat.ts    # M1
-      anthropic.ts      # M7
-      gemini.ts         # M8
+      anthropic.ts      # M7 (рев. 19: Messages API — system-блоки, mid-system §8.5, thinking, кэш-метки,
+                        # pause_turn; написан заново [D-227…D-231])
+      gemini.ts         # M8 (рев. 19: streamGenerateContent — подписанные части, санитайзер схем, safety OFF;
+                        # написан заново [D-232…D-234]). Каталоги обоих — в probe.ts
       scripted.ts       # script:
       record.ts         # record: / replay: (M2)
     tools/     types.ts handles.ts run.ts args.ts prompted.ts leaks.ts builtin/{index,history,lore}.ts
     agents/
       structured.ts     # structuredCall: общий транспорт JSON для Директора и агентов Compendium
+                        # (рев. 19: rawRead для агентов tag: null, начало ответа префиллом [D-199, D-208])
       director/         # state, plan, momentum, reduce, prompt, render, call, personalities/ [D-61]
                         # рев. 18: import-rc — состояние Директора из dm-context RoleCall [D-190]
       compendium/       # M3: types, notes (заметки как книга лора), apply.
@@ -314,18 +346,31 @@ rp-core/
                         # M5b (рев. 17) [D-170]: filing (промпт, снимок и ростер, терпимое чтение, постановка),
                         # historian (триггеры, окно, промпт, чтение, операции), recap (содержимое слота),
                         # language (язык истории по письменности [D-183]).
-                        # M5c: recall/{index,prompt,parse,run}, lexical
-    protocol/  events.ts commands.ts rpc.ts jsonl.ts coalesce.ts
+                        # M5c (рев. 19) [D-196…D-200]: recall — индекс, промпты, чтение и запись, чистые функции, одним
+                        # файлом вместо recall/{index,prompt,parse,run}; запуск — engine/recall.ts; lexical.ts не нужен:
+                        # шорт-лист — в recall.ts, history_crowded — в engine/request.ts [D-205]
+    protocol/
+      events.ts         # объединение Event и applyDelta (с M1a; M9 добавила agent 'host')
+      commands.ts       # рев. 19 (M6): RPC_METHODS, RpcCommandParams — формы params для схемы, разбор params → -32602 [D-221]
+      rpc.ts            # рев. 19 (M6): runRpc — JSON-RPC 2.0 поверх jsonl.ts, запросы параллельно, сессии соединения,
+                        # снимок, held, gate/request (M9) [D-219, D-220, D-226]; сигналы --stdio — в cli/main.ts
+      jsonl.ts  coalesce.ts   # один сплиттер по LF и склейка дельт (с M1a) [D-36]
+      protocol.schema.json    # рев. 19: JSON Schema протокола 1, строится из commands.ts [D-225]
     config/    config.ts secrets.ts
-    testing/   index.ts # M9: script/record/replay, describeRecordStoreConformance
-    cli/       main.ts repl.ts render.ts oneshot.ts signals.ts bench.ts   # bench — rp-core bench ttft (M5c)
+    testing/   index.ts # M9: помощники скриптового провайдера, MemoryRecordStore, FileRecordStore, checkRecordStoreConformance
+                        # (рев. 19: в плане — describeRecordStoreConformance и record/replay; record/replay не экспортируются [D-235])
+    cli/       main.ts repl.ts render.ts oneshot.ts signals.ts bench.ts   # bench — rp-core bench ttft (план M5c; рев. 19: построен на M5d [D-214])
       repl-view.ts      # M4.5: порт вывода REPL — ReplView, TurnView, BannerInfo; LineView — построчный REPL
       repl-memory.ts    # M5a: JSON для /memory new и /memory edit — шаблон, разбор, дифф в set/unset [D-160]
       import-story.ts   # рев. 18: rp-core import <story.rolecall> — ввод-вывод, запись «всё или ничего»,
                         # проверка помещения, отчёт [D-185, D-192, D-195]
+      import-st-chat.ts # рев. 19: rp-core import <chat.jsonl> --card <id> — сессия из чата ST [D-240]
       tui/              # M4.5: rp-core tui на OpenTUI — run, app, source, keys, io, view, theme, transcript,
                         # turn-view, sgr, sanitize, models-pane, agents-pane, agents, types [D-125…D-139]
-  test/  fixtures/{sse,assemble,sessions,scripts,cards,presets,lore,ru}
+                        # рев. 19, вне вех [D-241…D-244]: model-picker (F4), openrouter (F9), story-picker (F5),
+                        # new-story (F6), persona-picker (F7), settings-picker (F8), context-pane (блок Context),
+                        # speech (цвет реплик в кавычках)
+  test/  fixtures/{sse,assemble,sessions,scripts,cards,presets,worlds,ru,cli-m2,rc-recorder}   # рев. 19: книги лора — в worlds/, каталога lore/ нет
          rcimport/kit.ts  # рев. 18: синтетический экспорт .rolecall и писатель ZIP для тестов [D-194]
 ```
 
@@ -338,7 +383,7 @@ rp-core/
 | M3 | `jsonrepair` (только в `tools/args.ts`) |
 | M4.5 | `@opentui/core` ровно 0.7.0, с нативной библиотекой; грузят его только `rp-core tui` и `new --tui` [D-126] |
 
-Dev-зависимость — пермиссивный генератор JSON Schema из TS-типов; выбирается на M6.
+Dev-зависимость — пермиссивный генератор JSON Schema из TS-типов; выбирается на M6. *Рев. 19:* отдельной зависимости нет. Схему строит свой скрипт `tools/generate-protocol-schema.ts` на компиляторе TypeScript: `typescript` 5.9.3 и так стоит в dev-зависимостях ради `tsc` [D-225].
 
 ---
 
@@ -405,8 +450,8 @@ interface SessionConfig {
 ```
 
 - **Файлы.** Хранятся обычные файлы, без базы данных [D-13].
-- **`--sandbox`** переводит `--home` во временный каталог, заполняет его из `--seed <file>` и удаляет при выходе.
-- **Каст сессии** (карточка и персона) замораживается при создании, поэтому правка библиотеки не меняет идущую историю молча. Перезагрузить каст можно явной командой `/card reload`: она пишет запись `config`.
+- **`--sandbox`** переводит `--home` во временный каталог, заполняет его из `--seed <file>` и удаляет при выходе. *Рев. 19:* `--seed` не построен (формат seed не определён): `--sandbox` даёт пустой временный дом и с `--home` не сочетается.
+- **Каст сессии** (карточка и персона) замораживается при создании, поэтому правка библиотеки не меняет идущую историю молча. Перезагрузить каст можно явной командой `/card reload`: она пишет запись `config`. *Рев. 19:* команды `/card reload` нет: карточку идущей сессии не перечитать. Персону меняет `/persona` (глагол `setPersona`) строкой `persona`, а не `config` [D-241].
 - **Пресет и лорбуки** читаются из библиотеки на каждом ходу. Их хеши попадают в трассу.
 
 ### 5.3 Журнал сессии: append-only JSONL-дерево
@@ -417,7 +462,8 @@ interface SessionConfig {
 type Entry =
   | { t: 'session'; v: 1; id: string; created: string; title?: string;
       fork?: { from: string; at: string };                          // форк: исходная сессия и сообщение
-      imported?: { from: 'rolecall'; chat: string; exportedAt: string };   // рев. 18 [D-192]: откуда импортирована
+      imported?: { from: 'rolecall'; chat: string; exportedAt: string }    // рев. 18 [D-192]: откуда импортирована
+               | { from: 'sillytavern'; hash: string; file: string };     // рев. 19 [D-240]: чат ST — sha256 файла и его имя
       cast: { character: Character; persona?: Persona }; config: SessionConfig; vars0?: VarsDiff }
   | { t: 'config'; seq: number; ts: string; patch: Partial<SessionConfig> }   // версию НЕ меняет
   | MsgEntry
@@ -427,17 +473,23 @@ type Entry =
   | { t: 'head'; seq: number; ts: string; leaf: string }           // явный перенос головы
   | { t: 'turn'; seq: number; ts: string; turn: string; kind: TurnKind; parent: string;
       target?: string; msgId: string; seed: number; now: string; base: number }
-  | { t: 'prep'; seq: number; turn: string; dir?: DirectorRecord; recall?: RecallRecord; vars?: VarsDiff; trace: Trace } // до отправки
+  | { t: 'prep'; seq: number; turn: string; dir?: DirectorRecord; recall?: RecallRecord; vars?: VarsDiff; trace: Trace;
+      cont?: { mode: 'prefill' | 'cue'; base: string }; prefill?: string;   // continue: стык и текст цели; посланный префилл
+      model?: { connection: string; model: string } } // до отправки; рев. 19: cont, prefill, model — с M1a, для восстановления
   | { t: 'chk'; seq: number; turn: string; text: string }          // дельта текста
-  | { t: 'held'; seq: number; turn: string; body: CommitBody }     // ответ готов, но конфликт (M6)
+  | { t: 'held'; seq: number; turn: string;                        // ответ готов, но конфликт (M6)
+      body: CommitBody & { addition?: string; cont?: { mode: 'prefill' | 'cue'; base: string } } }   // рев. 19: addition и cont — для continue [D-223]
   | { t: 'end'; seq: number; ts: string; turn: string; code?: string;
       outcome: 'failed' | 'stopped-empty' | 'dropped' | 'discarded' | 'abandoned' }
   | { t: 'job'; seq: number; ts: string; job: string; key: string; task: 'file' | 'hist';
       on: string; state: 'begin' | 'failed' | 'retry'; attempt: number; code?: string;   // 'retry' — рев. 17 [D-171]
       calls?: TraceCall[] }                                         // рев. 17: usage вызовов неудачной попытки
+  | { t: 'persona'; seq: number; ts: string; persona: Persona }    // рев. 19 [D-241]: смена персоны сессии
+  | { t: 'name'; seq: number; ts: string; title: string; leaf?: string }   // рев. 19 [D-242]: название истории; с leaf — ветки
   | MemEntry;                                                       // строка Compendium, §5.8
 // зарезервировано, в v1 не пишется: { t: 'dirEdit' } (правки Директора человеком),
-// поле branch в msg/head (именованные ветки; записи без него принадлежат 'main')
+// поле branch в msg/head (именованные ветки; записи без него принадлежат 'main').
+// Рев. 19: имя ветки — строка `name` с `leaf`; голова по-прежнему одна, поле branch не понадобилось [D-242]
 
 interface MsgEntry extends Partial<CommitBody> {
   t: 'msg'; seq: number; ts: string;
@@ -473,15 +525,16 @@ type TurnKind = 'reply' | 'swipe' | 'continue';
 **Голова и версия.**
 
 - У сессии одна голова — лист активного пути. Новое `msg` переносит голову на себя, кроме `msg` с `tail:true`. Явный перенос (выбор свайпа, откат) — это запись `head`.
-- `version(session)` — это `seq` последней записи `msg`, `edit`, `hide` или `head`.
-- Записи `config`, `turn`, `prep`, `chk`, `held`, `end`, `job` и `mem` версию **не** меняют. Поэтому `expectedVersion` у UI остаётся годным, пока идёт стриминг, пока пишут агенты Compendium и пока меняются настройки.
+- `version(session)` — это `seq` последней записи `msg`, `edit`, `hide`, `head` или (рев. 19) `persona`.
+- Записи `config`, `turn`, `prep`, `chk`, `held`, `end`, `job`, `mem` и (рев. 19) `name` версию **не** меняют. Поэтому `expectedVersion` у UI остаётся годным, пока идёт стриминг, пока пишут агенты Compendium и пока меняются настройки.
+- *Рев. 19 [D-241, D-242].* Заголовок журнала по-прежнему не переписывается. Текущие персона и название — свёртка строк `persona` и `name` без `leaf` поверх заголовка (`currentHeader`); её видят `header()`, сборка, `listSessions` и форк.
 
 **Хвосты.** Листья вне активного пути — это хвосты. Их показывают `/tails` и `history/tails`. На хвост переходят через `history/select`.
 
 **Форк** (`session/fork {at}`) создаёт новый файл.
 
-- В заголовке — `fork` и текущая `config`.
-- Копируются записи `msg`, `edit`, `hide` и `mem`, относящиеся к сообщениям пути до `at` включительно, а также `mem` с `on:null`.
+- В заголовке — `fork` и текущая `config`. *Рев. 19:* и текущие название и персона (свёртка строк `name` и `persona`).
+- Копируются записи `msg`, `edit`, `hide` и `mem`, относящиеся к сообщениям пути до `at` включительно, а также `mem` с `on:null`. *Рев. 19:* и строки `name` веток, чей `leaf` лежит на этом пути.
 - `seq` перенумеровываются, id сообщений сохраняются.
 - Задачи полосы Compendium на форке выводятся заново по ключам и покрытию (§6.7).
 - *Рев. 17 (M5b):* строки `job` не копируются; момент включения форка стоит перед самым ранним ответом, ещё не принятым в точке форка (§6.7). Копируя трассы, форк переводит ревизии обзоров в `trace.recap` на новые `seq` их строк; ревизия строки, которая не скопирована, выпадает (раздел K).
@@ -582,7 +635,8 @@ interface Trace {
   prefill: 'sent' | 'tools_off' | 'skipped_for_tools' | 'unsupported' | null;   // [D-28]
   macros: { unknown: string[] };
   trimmed: { from: string; to: string } | null;
-  calls: { callKey: string; agent: string; model: string; ms: number; usage?: Usage }[];   // строка на вызов модели
+  calls: { callKey: string; agent: string; model: string; ms: number; usage?: Usage;      // строка на вызов модели
+           at?: number; ttftMs?: number; prompt?: { processed?: number; cached?: number } }[];   // рев. 19 (M5d) [D-213]
   agents: Record<string, { status: 'done' | 'reused' | 'skipped' | 'failed'; code?: string; transport?: string }>;
   tools?: { round: number; callId: string; name: string; ok: boolean; repaired?: string[];       // строка на вызов тула (M3)
             refused?: 'final_round' | 'unknown_tool' | 'bad_args' | 'cancelled'; ms?: number; chars?: number; cut?: true }[];
@@ -603,15 +657,25 @@ interface Trace {
   - Повторный callKey (повтор или запасная модель раунда 0) файл не перезаписывает: файл создаётся эксклюзивно, второй запрос идёт в `<callKey>-2.json`, третий — в `-3.json`.
   - Если записать не удалось, приходит одно уведомление `keep_requests_failed`; ход идёт дальше. `send` и `preview` флаг не принимают.
   - *Рев. 17 (M5b) [D-171]:* флаг пишет и запросы фоновой полосы. callKey прохода — `<job>:filing:0` или `<job>:historian:0`, файл — `j_<8 hex>_filing_0.json`, `j_<8 hex>_historian_0.json`.
+  - *Рев. 19 (M5c):* и запросы recall. Sync — под своим ходом (`<turn>:recall:N`, добор — `:more:N`; файл `t_<turn>_recall_0.json`), prefetch — под ответом, после которого он посчитан (`p_<ответ>:recall:N`; файл `p_<ответ>_recall_0.json`). Запрос prefetch пишется, даже если ход его не принял.
 - **`recap`** (рев. 17, M5b) [D-178]. Что стоит в слоте `{{recap}}` этого запроса: `ids` — ключи пересказов в порядке рендера, `arcs` — ключи обзоров арок и их ревизии (`rev` — `seq` строки, которая записала показанный текст обзора; 0 — текст книги), `boundary` — id первого сообщения истории, отправленного после обрезки. *Раздел K:* ещё `profile` и `share` (⌊10 % окна⌋), при которых слот выбран: закрепление действует, только пока оба те же. Пустой слот пишет `{ids: [], arcs: [], boundary: null}` без `profile` и `share`. Трассы до M5b хранят `boundary: null` и ничего не закрепляют. `/trace` печатает это строкой `recap:` (§12.4), `/preview --turn` пересобирает слот по трассе предыдущего ответа, а изменившийся слот называет «the {{recap}} slot» (раздел H).
 - **`compendium`** (рев. 16, M5a) [D-155]. Ключ есть, когда у запроса был вход Compendium: Compendium включён, и на пути есть хотя бы одна живая типизированная запись. Тогда и ход, в котором ничего не выбрано, пишет `picks: []`. Без входа ключа нет, и трасса такая же, как на M4.
   - `source` на M5a всегда `lexical`: выбирает селектор без модели. `profile` — профиль блока. `via: 'constant'` — ярус 3 (§7.4.1).
+  - *Рев. 19 (M5c) [D-203]:* `source` — источник записи recall этого запроса: `sync`, `prefetch` (принятый prefetch), `reused` (свайп, continue) или `lexical` (сбой или промах, селектор выбрал один). Без записи — `lexical` или `off`, по режиму. `via: 'model'` — ярус 1, в порядке recall. `agents.recall` — статус записи: `done`, `reused`, `skipped` или `failed`, с `code` и `transport`. Сама запись — не в трассе, а рядом с ней: `prep.recall` и `CommitBody.recall` (§7.4.2).
   - `injected.mode` — полный или краткий рендер. `hidden` — скрытые записи плюс выброшенные элементы массивов (свежесть).
   - `budget` — в токенах бюджета: `share` — вся доля лора, `lore` — что взял движок лора, `block` — что взял блок.
   - `/trace` печатает это одной строкой `compendium:` (§12.4).
 - **Ход с тулами.** `blocks` и `tokens.estimated` описывают запрос раунда 0: `/preview --turn` сверяет их один в один. `tokens.reported` — prompt-токены, которые сервер насчитал за раунд 0; только они идут в EMA [D-50] и в проверку окна сервера. В `calls` — строка на каждый вызов модели; `callKey` рассказчика — `<turn>:narrator:<раунд>`, у повтора и запасной модели раунда 0 — тоже `:0`.
+- **Время и счёт промпта вызова** (рев. 19, M5d) [D-213]. Три необязательных поля строки `calls`:
+  - `at` — мс от начала хода до начала вызова; `ttftMs` — первый токен от начала самого вызова, ожидание очереди включено; `prompt` — что сервер сделал с промптом: `processed` обработал заново, `cached` взял из своего KV-кэша.
+  - `prompt` берётся только из счёта, который это говорит (§8.4): `prompt_tokens_details.cached_tokens` в usage OpenAI или `timings` llama.cpp с `cache_n`. Нет поля — неизвестно, а не ноль. LM Studio счёта не даёт.
+  - Поля пишут вызовы хода: рассказчик и агенты, которые идут в ходе, — Директор и sync recall (`structuredCall` с `turnStart`). Вызовы полосы (filing, historian) их не получают: их записи прежней формы.
+  - Страж журнала строки `calls` не проверяет — это диагностика. Строки до M5d читаются как раньше; читатели проверяют каждое поле перед тем, как его взять.
+  - `/trace` печатает строку на вызов: `narrator  +2.1 s  first token 0.4 s  1.8 s  prompt 3 412 cached, 96 new`. Часть есть, только если есть поле; модель стоит в конце, когда она не модель ответа. Строка до M5d — агент и время.
+  - Запись `record:` хранит usage как `{t, u}`, без счёта, так что у прогона `replay:` счёта промпта нет (§15, M5d).
 - **`tools`** — строка на вызов тула, без аргументов и текста результата: раунд, id, имя, исход, время, длина результата и `cut`, если результат обрезан. `refused` — почему вызов не выполнялся: `final_round` (вызов на финальном раунде, §7.1), `unknown_tool`, `bad_args` (цепочка D-56 сдалась), `cancelled` (Stop).
 - **`rounds`** есть, только если ход предлагал тулы. `n` — вызовы модели в цикле, финальный раунд включён. `ended` — почему цикл перестал звать тулы (§7.1). `room` — комната тулов, которую оставила сборка [D-93], `roomLeft` — что от неё осталось, в токенах бюджета.
+- **`hooks`** (рев. 19, M9) [D-236…D-238]. Строка на вызов хука или гейта: `name` — `beforeAssemble`, `transformRequest`, `transformGate`, `transformReply`, у запасной модели — `transformRequest:fallback` и `transformGate:fallback`; `ok` — удался ли вызов. Без хуков и без гейта `transform` ключа нет. В `prep` — только то, что было до него (`beforeAssemble`), в ответе — все. Гейт `review` строки не пишет, и его правки в трассе не видны. `note` из `transformReply` в типе есть, но не записывается. `blocks` и `tokens` описывают запрос до правок хоста; ушедший запрос пишет `--keep-requests`.
 - **Чего в трассе нет никогда:** секретов и значений пользовательских заголовков (только имена).
 
 ### 5.8 Записи Compendium на пути (рев. 6)
@@ -777,7 +841,7 @@ effective  = newestActionPerKey(fresh)                              // стро�
 view       = fold(seed, effective по seq, applyOp)
 ```
 
-- **`compendiumAt` — не поле `PathView`** (рев. 16, раздел A заметки M5a): `PathView` остаётся данными для M6, как с `directorAt` [D-103]. Вид пути до другого сообщения строит `foldViewAt(header, idx, leaf, {library})` с той же затравкой книг. `FoldOptions` получил `path` (id от корня к листу), `touched` и `library`.
+- **`compendiumAt` — не поле `PathView`** (рев. 16, раздел A заметки M5a): `PathView` остаётся данными для M6, как с `directorAt` [D-103]. *Рев. 19:* снимок M6 `PathView` целиком не сериализует: он шлёт `head`, `path`, `tails` и только счёты Директора и Compendium [D-222]. Вид пути до другого сообщения строит `foldViewAt(header, idx, leaf, {library})` с той же затравкой книг. `FoldOptions` получил `path` (id от корня к листу), `touched` и `library`.
 - **Новейшее действие по ключу.** Действия ключа K — строки с `key === K` и каждая операция `revert{key:K}` (из любой строки в `fresh`). Считается только новейшее по `seq`. Если это `revert`, ни одна строка K не применяется: ключ закрыт, его диапазон покрыт. Иначе применяется новейшая строка с K, а старые заменены. Остальные операции строки с `revert` применяются: это строка человека. Сама операция `revert` поглощается фильтром: `applyOp` её пропускает без причины в `issues`.
 - **Порядок.** Затравка — первой, в порядке конфига и книг; затем строки по `seq`. Так задаются хэндлы `C<n>` (D-150). *Рев. 17:* строки идут в порядке истории, а хэндлы — по строке создания; см. «Свёртка на M5b».
 - **Стоимость [раздел G].** Свёртка с нуля 5 000 типизированных строк поверх затравки в 1 500 записей идёт 45–70 мс на этой машине — больше цели в 30 мс. Поэтому свёртка хранит чекпоинты состояния: в конце (если применённых строк ≥ 256) и каждые 2 048 строк. Ключ чекпоинта — сами объекты строк и объект затравки. Следующая свёртка, чьи строки начинаются с тех же объектов, продолжает с самого длинного чекпоинта (до 6 на цепочку, LRU). Повторная свёртка после одной новой строки — ≈ 7 мс, вид на более раннем листе — ≈ 5 мс (тест требует < 30); с нуля тест сторожит < 150 мс. Результат тот же, что у свёртки с нуля (`test/memory/checkpoint.test.ts`). Отсюда два правила для вызывающих: пока книги не менялись, передавать тот же объект `LibrarySeed`; свёрнутые строки и виды никогда не менять на месте.
@@ -909,7 +973,7 @@ view       = fold(seed, effective по order, applyOp)
 - заметки идут в Unsorted, обзоры арок — в Narrative, обзор первым; сюжеты Narrative сортируются с `'en'`;
 - категории — по первому появлению, `sort_order` RoleCall не сохраняется (раздел I); категория «general» в любом регистре — это General.
 
-`/memory tree` показывает дерево сессии, затем по дереву на каждую читаемую книгу, с оверлеями. `entryIds` узлов — ключи записей (их прочтёт индекс recall M5c). Пока в сессии меньше 5 записей, её дерево — одна группа General: это правило Bunraku, порт его не меняет. `narrativeBucket(entries)` строит узел Narrative для historian и `{{recap}}` M5b.
+`/memory tree` показывает дерево сессии, затем по дереву на каждую читаемую книгу, с оверлеями. `entryIds` узлов — ключи записей (их прочтёт индекс recall M5c). Пока в сессии меньше 5 записей, её дерево — одна группа General: это правило Bunraku, порт его не меняет. `narrativeBucket(entries)` строит узел Narrative для historian и `{{recap}}` M5b. *Рев. 19:* M5b его не взяла: historian и слот `{{recap}}` выбирают пересказы и обзоры сами (`historian.ts`, `recap.ts`); `narrativeBucket` вызывает только тест.
 
 **Рендер.**
 - **`renderContent(type, data)`** — порт `BR:render.ts` дословно:
@@ -1028,6 +1092,7 @@ interface PathView {
   pathSet: Set<string>; tails: string[];
                                         // состояние Директора — не поле: его даёт чистая функция directorAt(tree, fromId),
                                         // agents/director/state.ts (рев. 14, D-103; §5.9). PathView остаётся данными для M6
+                                        // (рев. 19: снимок M6 шлёт head, path, tails и счёты, а не PathView [D-222])
   compendium: CompendiumView;           // свёртка на голове (§5.8); рев. 16: с затравкой книг
   compendiumAt(msgId: string): CompendiumView;   // рев. 16: поля нет — вид пути до другого сообщения строит
                                         // foldViewAt(header, idx, leaf, {library}) с той же затравкой (§5.8)
@@ -1063,15 +1128,22 @@ interface RecordStore {
 
 `checkRecordStoreConformance(make, header, entries, reopen?)` проверяет:
 
-- монотонный `seq`;
-- атомарность записи;
-- что записи с `durable` переживают краш;
+- монотонный `seq`: повтор старого `seq` — отказ;
+- атомарность записи: пачка с дырой в `seq` отклоняется целиком, без префикса;
+- *рев. 19:* атомарность `create` с первыми строками;
+- что записи с `durable` переживают краш. *Рев. 19:* как построено — их читает новый экземпляр хранилища (`reopen`); настоящий обрыв процесса conformance не устраивает;
 - эксклюзивность lease;
-- порядок чтения.
+- порядок чтения: заголовок, затем строки по `seq`.
 
-Тесты гоняются на файловой реализации и на второй, in-memory, написанной по этой спецификации. Это доказывает, что порт не завязан на файлы.
+Тесты гоняются на файловой реализации и на второй, in-memory, написанной по этой спецификации. Это доказывает, что порт не завязан на файлы. *Рев. 19:* обе — в `test/session/port.test.ts`, `reopen` — у файловой.
 
 *Примечание реализации M9.* Синхронный `Engine.open` принимает `SessionStore` (`create/open/fork/list`, возвращает `SessionLog`) для существующих клиентов. `Engine.openWithRecordStore` принимает асинхронный `RecordStore` и возвращает асинхронный фасад сессии. Он ждёт долговечной записи `turn` до вызовов агентов, `prep` до вызова рассказчика и ответа до итогового события. Так прежний синхронный API не ломается, а асинхронный хост получает тот же движок. Подробности — `docs/M9-HOST.md`.
+
+*Рев. 19 — как устроено [D-235].*
+- **Две границы вместо одной.** План ставил `RecordStore` прямо под движок. Построено иначе: движок пишет синхронно, через `SessionStore`. `FileSessionStore` — прежний журнал, по умолчанию. `MemorySessionStore` — журнал в памяти хоста: открытие эксклюзивное, журнал переживает `engine.close()` и новый `Engine.open`. Асинхронный `RecordStore` подключает `RecordSessionStore`: он держит зеркало открытой сессии в `MemorySessionStore` и ставит каждую строку в очередь записи этой сессии — по `append` на строку, `chk` тоже; `chk` уходит с `durable: false`, остальные строки — с `durable: true`.
+- **Барьеры.** Ход ждёт очереди до вызовов агентов (строка `turn`), до вызова рассказчика (`prep`) и в конце. Фасад ждёт её после каждой операции сессии и перед каждым событием. Сбой записи отравляет очередь сессии: следующие записи не идут, провайдер не вызывается, из событий проходит только `failed`. Очереди разных сессий друг друга не ждут. Lease берётся при создании и открытии, продлевается раз в 10 с и отпускается при закрытии — и после сбоя.
+- **Чего нет.** Хранилища на SQLite и адаптера Bunraku (§12.5); срока у lease `MemoryRecordStore`. `home` нужен и с `RecordStore`: библиотека и `--keep-requests` остаются файлами.
+- Conformance — обычная асинхронная функция, а не набор тестов `bun:test` (`describeRecordStoreConformance` из плана): адаптер зовёт её из своего раннера.
 
 ---
 
@@ -1082,11 +1154,11 @@ interface RecordStore {
 | Глагол | Что пишет | Веха | Примечание |
 |---|---|---|---|
 | `send(text, expectedVersion, {greetingIndex?})` | одно user-`msg` | M1 | Во время хода — отказ `session_busy`. Очереди в движке нет: REPL держит набранную строку у себя |
-| `runTurn(kind, expectedVersion, {guidance?, fallback?, onError?, emptyReply?, inspect?})` | `turn`, `prep`, `chk*`, затем `msg`/`edit`, `held` или `end` | M1 (`inspect` — M9) | `reply` отвечает на голову-сообщение пользователя; `swipe` делает сиблинга головы-ответа; `continue` продолжает его |
-| `submit(text, expectedVersion)` | send + reply | M1 | удобство для REPL и простых клиентов |
+| `runTurn(kind, expectedVersion, {guidance?, fallback?, onError?, emptyReply?, inspect?, transformGate?, consumerSignal?})` | `turn`, `prep`, `chk*`, затем `msg`/`edit`, `held` или `end` | M1 (`inspect` — M9; *рев. 19:* `transformGate` и `consumerSignal` — тоже M9) | `reply` отвечает на голову-сообщение пользователя; `swipe` делает сиблинга головы-ответа; `continue` продолжает его |
+| `submit(text, expectedVersion, {onError?, transformGate?})` | send + reply | M1 | удобство для REPL и простых клиентов. *Рев. 19:* `transformGate` (M9) — как у `runTurn` |
 | `stop(turnId)` | частичный ответ или `end` | M1 | §6.5 |
-| `edit` / `hide` / `select` / `fork` | одна запись / новый файл | M1 | Во время хода REPL их отклоняет сам. В `--stdio` движок их принимает, и ход кончается `conflict` |
-| `commitAnyway(turnId)` / `discard(turnId)` | `msg`/`edit` / `end{discarded}` | M6 | §6.6 |
+| `edit` / `hide` / `select` / `fork` | одна запись / новый файл | M1 | *Рев. 19 (M6):* во время хода движок принимает `edit`, `hide` и `select` от любого вызывающего, и ход кончается `conflict` (§6.6). `fork` во время хода — `session_busy`, как и `configure`. REPL отклоняет все четыре сам [D-223] |
+| `commitAnyway(turnId)` / `discard(turnId)` | `msg`/`edit` или `end{dropped}`/`end{discarded}` / `end{discarded}` | M6 | §6.6. *Рев. 19:* `commitAnyway` возвращает `{outcome: 'committed' \| 'dropped' \| 'discarded', version, message?}`, `discard` — `{discarded}`. Ответ не держится — `not_found`; идёт ход — `session_busy`. Пока ответ держится, `send`, `submit` и `runTurn` отказывают `held_pending` |
 | `preview({draft?, turn?, explain?})` | ничего | M2 | Тот же путь сборки. Вместо директивы — заглушка, Директор не вызывается (*рев. 14:* свайп, который повторит план, показывает повторённую директиву, а `turn` — сохранённую директиву того ответа [D-106]). `turn` пересобирает прошлый ответ, `explain` даёт вердикты лора. В памяти резервируется seed следующего хода. С тулами — тот же выбор тулов, что у хода, и запрос раунда 0 |
 | `search({query, before?, limit?})` | ничего | M3 | Тот же поиск, что у `search_history`, по активному пути (§7.5). Работает и во время хода |
 | `notes()` | ничего | M3 | Заметки пути по порядку создания, живые и списанные (§5.8) |
@@ -1096,8 +1168,10 @@ interface RecordStore {
 | `memoryExport({name, format, force?})` | файл в библиотеке или в `<home>/exports/` | M5a | Копия записей сессии и оверлеев (§7.4.8) [D-163]. Строки не пишет; во время хода — `session_busy` |
 | `memoryUndo({messageId, task?})` / `memoryRefile(…)` / `memoryRetry({messageId?})` | `revert` / ничего (задача по имени) / `job{retry}` | M5b | Полоса Compendium (§7.4.9) [D-180]. Во время хода — `session_busy`; ещё `not_found` и `invalid_params` словами. Возвращают `MemoryLaneWrite` |
 | `memoryWait({timeoutMs?})` / `memoryStatus()` | ничего | M5b | Дождаться, пока полоса опустеет (в `manual` — прогнать её); очередь, идущая задача, парковка, долг, что держит полосу (§7.4.9). Работают и во время хода |
-| `answerGate(turnId, gateId, answer)` | — | M9 | гейты `review` и `transform` (§12.5) |
-| `draft({kind:'impersonate'} \| {kind:'quiet', prompt})` | ничего | M9 | Разовая генерация без чекпоинта, тулов и записей. `impersonate` пишет реплику за пользователя; `quiet` — ответ на произвольную инструкцию поверх собранного промпта, как quiet prompt в ST |
+| `answerGate(turnId, gateId, answer)` | — | M9 | гейты `review` и `transform` (§12.5). *Рев. 19 [D-237]:* `answer` — `{action: 'send' \| 'cancel', edits?}`; `false`, если такого гейта нет или он уже отвечен. Ход ждёт один гейт за раз; `gateId` — `<turnId>:review` или `<turnId>:transform` |
+| `draft({kind:'impersonate'} \| {kind:'quiet', prompt})` | ничего | M9 | Разовая генерация без чекпоинта, тулов и записей. `impersonate` пишет реплику за пользователя; `quiet` — ответ на произвольную инструкцию поверх собранного промпта, как quiet prompt в ST. *Рев. 19 [D-239]:* модель рассказчика, не больше 1024 токенов, без Директора; инструкция — непосланное сообщение игрока поверх `preview({draft})`. Во время хода — `session_busy`. `impersonate` берёт свою строку, а не `impersonation_prompt` пресета |
+| `setPersona(persona)` | одна строка `persona` | рев. 19, вне вех | Персона сессии со следующего хода; прошлые сообщения не меняются. Версию меняет, событие `changed{change:'persona'}`. Во время хода — `session_busy` [D-241] |
+| `name(title, leaf?)`; `engine.nameSession(id, title, leaf?)` | одна строка `name` | рев. 19, вне вех | Название истории или, с `leaf`, ветки: 1–120 знаков в одну строку. Версию не меняет. Во время хода — `session_busy`. `nameSession` сам открывает и закрывает сессию, которая не открыта [D-242] |
 | `resume` | — | M1 | автоматически при открытии (§6.7) |
 
 **Отказы** происходят **до** записи `turn`. Они возвращаются синхронно как ошибки: в протоколе — JSON-RPC error, в one-shot — код выхода 5. Событием отказ не приходит никогда. Коды:
@@ -1106,7 +1180,10 @@ interface RecordStore {
 - `no_connection`, `preset_missing`;
 - `nothing_to_reply`, `nothing_to_swipe`, `nothing_to_continue`;
 - `continue_target_hidden`, `continue_target_blank`;
-- `gate_unsupported` (`inspect` без объявленного гейта).
+- `gate_unsupported` (`inspect` без объявленного гейта);
+- *рев. 19:* `session_not_found` — сессии нет, а в `--stdio` её не открыло это соединение [D-219];
+- *рев. 19:* `invalid_params` — неверные аргументы глагола: опции хода, заметка памяти, персона, название, повтор задачи полосы и другие;
+- *рев. 19:* `not_found` — нет цели: отложенного хода у `commitAnyway` и `discard`, сообщения у `preview({turn})`, приветствия у `send` с `greetingIndex`, записи или книги у глаголов памяти.
 
 Всё, что происходит после `start`, приходит событиями.
 
@@ -1120,15 +1197,17 @@ interface RecordStore {
    - Нет открытого `held`.
    - Привязки ролей и записи возможностей разрешаются, пресет существует.
 2. **Начало.**
-   - Дописать `turn{turn, kind, parent, msgId, seed, now, base}` и сделать fsync. `seed` берётся из `crypto.getRandomValues`, `now` — из часов Engine.
+   - Дописать `turn{turn, kind, parent, msgId, seed, now, base}` и сделать fsync. `seed` берётся из `crypto.getRandomValues`, `now` — из часов Engine. *Рев. 19:* `seed` — из случайности Engine (`EngineOptions.random`, по умолчанию `randomFillSync` в `engine/system.ts`); `preview` вытягивает его заранее, и ход берёт тот же.
    - Создать AbortController хода.
    - Отправить событие `start{turnId, kind, messageId, parentId}`.
 3. **Предварительные проходы.**
    - Если Директор включён и `kind ≠ continue`, он запускается с дочерним сигналом и своим таймаутом (§7.3).
    - *Рев. 18 [D-195]:* перед этим ход проверяет, можно ли собрать запрос без директивы: директива только добавляет к части, которую не режут. Сначала — дешёвая оценка (проход A без прогона лора, блока Compendium и слота `{{recap}}`, но со всей долей лора в резерве); если не помещается и она — проход A самого запроса. Его отказ кончает ход так же, как шаг 4, но до вызовов Директора и рассказчика.
    - **Recall Compendium** на `reply` (§7.4.2): готовый prefetch, свой sync-вызов или выбор без модели — по режиму. Sync запускается вместе с Директором; если оба на одном origin с одним местом, семафор выполняет их по очереди, Директор первым. Prefetch, который ещё в полёте, ход ждёт не дольше `graceSec`. На свайпе и continue выбор повторяется без вызова.
+   - *Рев. 19 (M5c) [D-203]:* что делает recall, ход решает до любого вызова, ничего не сообщая. Проверка помещения D-195 идёт и тогда, когда Директор выключен, а recall может вызвать модель (sync или ожидание prefetch): ход, который не помещается, не тратит и вызов recall. Guided re-roll и свайп при `onSwipe = 'rerun'` вызывают recall заново, в ходе, при любом режиме (§6.3).
    - Ни Директор, ни recall не могут провалить ход. Задержать его они могут не дольше своих таймаутов плюс ожидание очереди.
    - На M9 параллельно с ними идёт хук хоста `beforeAssemble`.
+   - *Рев. 19 — как построено [D-236]:* `beforeAssemble` идёт не параллельно, а первым — сразу после того как `turn` стал долговечным, до проверки помещения, recall и Директора: его вставки входят и в проверку D-195, и в запрос. Статус — события `agent{agent:'host', status:'started'|'done'|'failed'}`. Ошибка, неверный результат или срок дают `notice{code:'host_before_assemble_failed'}`, и ход идёт без вставок. Stop во время хука кончает ход `stopped` без сообщения.
 4. **Сборка — чистая функция.**
    - Вход: `assemble({view, cast, preset, lorebooks, placements, caps, budget, seed, now, kind})`. `placements` — директива и блок Compendium (§7.4.1); заметки Compendium приходят с `view` и становятся книгой `@notes` (§5.8).
    - *Рев. 16 [D-155]:* блок Compendium — не готовая вставка, а отдельный вход `AssembleInput.compendium`: кандидаты селектора с готовыми рендерами. Сборка ставит блок сама, после прогона лора: бюджету блока нужно знать, сколько взял лор. Книги в `lorebooks` уже прошли маршрутизацию `routeBooks` [D-142].
@@ -1138,10 +1217,18 @@ interface RecordStore {
    - Если не помещается одна только обязательная часть — `failed{code:'context_length_exceeded'}` и `end{failed}`, ничего не отправлено. *Рев. 18:* с включённым Директором это обычно выясняется ещё до шага 3, без `prep` и без `dir` [D-195].
 5. **Приведение под модель (shape) — чистая функция.** Роли, системные сообщения посреди диалога, префилл или подсказка continue, кэш-метки — всё по `ModelCaps`. Правки хоста задаются по индексу сообщения.
 6. **Строка `prep`** с `dir`, `recall`, `vars` и трассой до отправки, с fsync.
+   - *Рев. 19 (M9) [D-235]:* с асинхронным `RecordStore` «с fsync» значит «запись подтвердило хранилище хоста»: ход ждёт очереди записей до вызова рассказчика (§5.12).
 7. **Хуки хоста (M9).**
    - `transformRequest` — гейт `transform`, fail-closed.
    - Гейт `review` — только при `inspect`.
    - Ответ `cancel`, Stop или уход потребителя дают `stopped{message:null}` и `end{dropped}`.
+   - *Рев. 19 — как построено [D-237].* Хук `transformRequest` и гейт `transform` — разные шаги, порядок постоянный:
+     1. хук `transformRequest` (в процессе) получает копию приведённых сообщений и возвращает правки по индексу. Ошибка, неверная правка, срок или Stop — `failed{code:'host_transform_failed'}`;
+     2. гейт `transform` — если ход запросили с `transformGate` (в `--stdio` — у клиента, объявившего этот гейт, на каждом ходу, §12.2). Событие `gate{kind:'transform', payload:{messages}}`. `cancel`, срок `hookTimeoutMs` или уход потребителя — тоже `host_transform_failed`; Stop — `stopped`;
+     3. гейт `review` — только при `inspect`. `cancel`, срок, Stop или уход потребителя кончают ход `stopped{message:null}`; в журнале — `end{stopped-empty}`, а не `end{dropped}`, как стояло выше.
+   - Ни в одном из этих исходов запрос не уходит. Правка заменяет сообщение одним текстовым блоком, индекс — не больше одного раза. Гейт `review` видит запрос уже после хука и гейта `transform`.
+   - Запрос запасной модели (§6.6) проходит хук и гейт `transform` заново, гейт `review` — нет.
+   - Срок `hookTimeoutMs` — один на каждый хук и гейт; без него хук и гейт ждут ответа или Stop.
 8. **Рассказ** — цикл тулов (§7.1).
    - Дельты приходят событиями `text`: видимый текст всех раундов с разделителями D-55.
    - Вызовы тулов приходят событиями `tool` (`start`, затем `done`). Каждый вызов модели, о котором сервер сообщил usage, — событием `usage`.
@@ -1153,6 +1240,7 @@ interface RecordStore {
    - `notice{code:'tool_markup_stripped'}` приходит раз за сессию. Он считает вырезанные блоки, спаны, ставшие вызовами, и блоки `<tool_call>` и теги с именем тула [D-97], которые раунд скрыл, не исполнив: в нативном раунде — неисполненные, на финальном — все, так что вызов блоком или тегом на финальном раунде даёт его рядом с `tool_calls_on_final_round`. Блок или тег, из которого вышел вызов раунда тулов (с результатом или с ошибкой), не считается: вырезатель скрыл его ещё в потоке.
    - Если видимого текста не осталось — например, весь текст хода был вызовом в JSON, — ход проваливается как пустой ответ (§7.1).
    - На M9 здесь же хук `transformReply`: он может переписать ответ или наложить вето (§12.5).
+     - *Рев. 19 [D-238]:* хук получает видимый текст после постобработки. На continue и на ответе из одних рассуждений он не вызывается. У ответа с раундами тулов блоки тулов остаются, новый текст — последним блоком. `veto` — `failed{code:'host_veto'}`; ошибка, неверный результат, срок или Stop — `host_transform_failed`. В обоих случаях черновик — сам ответ, и ничего не коммитится.
 10. **Коммит.** Одна строка `msg` с охраной `base`.
     - Версия совпала — fsync и `done{message}`.
     - Версия устарела (M6) — `held{turn, body}`, fsync и `conflict{turnId, draft}` (§6.6).
@@ -1166,6 +1254,7 @@ interface RecordStore {
       - **Пока идёт ход своей сессии, полоса ничего не начинает:** вызовы хода идут первыми, а полоса смотрит снова, когда ход закончился. Иначе задача, начатая между сообщением и его ходом, тут же уступила бы место (и на скриптовой модели съедала строку рассказчика — находка демо). В режиме `auto` полоса ещё и ждёт, пока голова — сообщение игрока моложе max(`idleDelaySec`, 2 с): за `send` идёт `runTurn`. Поэтому и на облаке проход A(n−1) начинается после хода, а не при `send`, — отступление от строки «облако» в §7.4.7.
       - На локальном origin фон, кроме того, ждёт `idleDelaySec` после последнего касания origin: конец хода, перенос головы, правка, скрытие, continue, свайп, открытие сессии и конец любого интерактивного запроса (§7.4.7, D-172).
       - `prerecall` нет: он придёт с recall (M5c). Порядок — file по пути, затем одна проверка historian.
+      - *Рев. 19 (M5c) [D-202, разделы H и I]:* prefetch построен, но не задачей `LaneTask`, а отдельным слотом полосы: он выводится, как задачи, когда голова — ответ ассистента (приветствие тоже), идёт раньше file и hist (кроме голодающей задачи), строк `job` не пишет и не восстанавливается. Подробно — §7.4.2.
       - `idle{background:n}` отправляется при каждом изменении числа задач в очереди и в работе; `n = 0` — полоса пуста.
 
 ### 6.3 Свайп и guided re-roll
@@ -1174,13 +1263,14 @@ interface RecordStore {
 
 - **Директор [D-29].** При `director.onSwipe = 'reuse'` (по умолчанию) копируется `dir` заменяемого ответа, если там `ok:true`. Событие — `director{status:'reused'}`, в записи — `reusedFrom`. Это корректно, потому что обе версии ответа выросли из одного состояния на U. Если прошлый план провалился, а также при guided re-roll и при `onSwipe='replan'` Директор планирует заново, от состояния на U (§5.9).
 - **Recall [D-78].** При `compendium.recall.onSwipe = 'reuse'` (по умолчанию) копируется `RecallRecord` заменяемого ответа — 0 вызовов, `reusedFrom`. На guided re-roll к нему добавляются записи, упомянутые в тексте указания. При `'rerun'` recall работает заново, по режиму.
+  - *Рев. 19 (M5c) [D-203, раздел K]:* построено иначе. Повторяется только запись `recalled` или `empty`; проваленная или отсутствующая — recall работает по режиму. Guided re-roll и `'rerun'` вызывают recall заново, в ходе (sync), при любом режиме: prefetch их базы считала версия, которую они заменяют, и он не видел U. Текст указания в промпт recall не идёт; он по-прежнему даёт ярус 0 селектора.
 - **Seed** берётся новый.
 - **Guided re-roll** передаёт `guidance` (до 10 000 символов). Она рендерится системным блоком на глубине 0 с источником `guidance`. В блок входят текст указания и, если `swipe.showRejected = true` (по умолчанию), отвергнутый ответ, обрезанный до 2 000 символов. Указание сохраняется в `gen.guidance`.
 - **Почему глубина 0:** она стоит после последнего сообщения — сообщения пользователя U — и последней. Поэтому у Anthropic она валидна как нативный system при любой истории (§8.5).
 
 ### 6.4 Continue
 
-На continue нет ни Директора, ни тулов, ни агентов Compendium. Это правило одно для всех агентов. В запросе continue нет ни блока тулов, ни заметки о пропуске истории [D-92, D-96]. *Рев. 14 [D-106]:* контракт Директора в блоке ядра остаётся, а на глубине 1 повторяется сохранённая директива цели (`dir.directive`), если она есть; своего `dir` continue не пишет. Блок Compendium повторяет выбор цели из её `RecallRecord`, без вызова; тексты записей берутся из текущей свёртки (§7.4.2). *Рев. 16:* до recall (M5c) блок continue строит селектор без модели, по тому же U, что у цели (раздел G заметки M5a).
+На continue нет ни Директора, ни тулов, ни агентов Compendium. Это правило одно для всех агентов. В запросе continue нет ни блока тулов, ни заметки о пропуске истории [D-92, D-96]. *Рев. 14 [D-106]:* контракт Директора в блоке ядра остаётся, а на глубине 1 повторяется сохранённая директива цели (`dir.directive`), если она есть; своего `dir` continue не пишет. Блок Compendium повторяет выбор цели из её `RecallRecord`, без вызова; тексты записей берутся из текущей свёртки (§7.4.2). *Рев. 16:* до recall (M5c) блок continue строит селектор без модели, по тому же U, что у цели (раздел G заметки M5a). *Рев. 19 (M5c) [D-203]:* continue повторяет запись цели (её новейшей правки continue, иначе самой цели), если она `recalled` или `empty`; иначе recall работает по режиму. Правка `edit` континуации хранит свою копию с `reusedFrom` — цель.
 
 - **Модель принимает префилл** (`caps.prefill = 'assistant-last'`): текущий текст уходит последним assistant-сообщением, добавка приклеивается как есть.
 - **Модель префилл не принимает** (Claude ≥ 4.6, deepseek-reasoner, Gemini): старый текст уходит обычным assistant-ходом, за ним — user-подсказка «продолжи с того места, где остановился, не повторяй». Добавка присоединяется через пустую строку.
@@ -1206,6 +1296,7 @@ interface RecordStore {
 - **Условия.** Ещё не пришли текст, рассуждение или вызов тула, а ошибка — 408/425/429/500/502/503/504/524/529. Повтор и запасная модель оборачивают весь цикл тулов, поэтому на деле это раунд 0, и цикл запускается заново.
 - **Как.** Один повтор с учётом `retry-after` (не дольше 8 с) и джиттером; событие `retry`.
 - **Без повтора.** Неоднозначные сетевые ошибки после отправки тела (`fetch failed`) не повторяются: можно заплатить дважды.
+- *Рев. 19 (M5c) [D-198, правка раздела K от 14.11].* Повтор общий для всех агентов, recall тоже. Предел «не больше двух вызовов recall» считает только его собственные вызовы — первый ответ и затем один ремонт или один добор (§7.4.2). Повтор этим пределом не ограничен: с повтором вызовов бывает три, а если повторён и вызов ремонта — четыре.
 
 **Запасная модель** (`fallback` в вызове или в привязке роли).
 
@@ -1230,7 +1321,9 @@ interface RecordStore {
 
 **Конфликт (M6).** Это ситуация, когда во время хода сессию изменили: правкой, скрытием или переносом головы.
 
-- `held{body}` хранит готовый ответ вместе с трассой и снимком Директора.
+*Рев. 19 — как построено [D-223].* В момент коммита ход сравнивает версию сессии с `base` своей строки `turn`: на `done`, на `stopped` с текстом и на сбое с `onError:'keep'`. Версия другая — ответ не коммитится, а держится. Во время хода версию двигают только `edit`, `hide` и `select`: `configure`, `fork` и пишущие глаголы Compendium отказывают `session_busy`, а глаголы Compendium версию и не меняют. `select` на ту же голову строки не пишет и конфликта не даёт.
+
+- `held{body}` хранит готовый ответ вместе с трассой и снимком Директора. *Рев. 19:* в `body` — всё, что ушло бы в коммит (`blocks`, `gen`, `trace`, `dir`, `recall`, `vars`), и ещё `addition` и `cont` для continue. Затем fsync и событие `conflict{turnId, draft}`. Сессия держит ход открытым, и после рестарта тоже (`recover.ts`). Пока он открыт, `send`, `submit` и `runTurn` отказывают `held_pending`, а снимок протокола показывает его в `openTurns` с `state:'held'` и текстом ответа.
 - `commitAnyway(turnId)` коммитит по **правилу безусловного коммита** (оно же используется при восстановлении):
 
 | kind | Куда пишется | Голова |
@@ -1244,6 +1337,7 @@ interface RecordStore {
   - Если U скрыт — `end{dropped}`, черновик приходит в событии.
 - **Continue, у которого цель изменилась,** заканчивается `end{discarded}`, черновик приходит в событии. Такой текст никогда не применяется к изменённому тексту без спроса.
 - `discard(turnId)` пишет `end{discarded}`.
+- *Рев. 19:* закоммиченный ответ `commitAnyway` объявляет событием `changed` (`msg` или `edit`), хвост — ещё `notice{code:'committed_as_tail'}`. Исходы `dropped` и `discarded` и сам `discard` событий не шлют: итог — в ответе метода.
 
 ### 6.7 Краш и восстановление
 
@@ -1251,7 +1345,7 @@ interface RecordStore {
 
 | Что найдено | Что делаем |
 |---|---|
-| есть `held` | Ход остаётся открытым. Снимок сессии показывает его клиенту, REPL спрашивает «сохранить / отбросить». Пока он не решён, новые ходы получают отказ `held_pending` |
+| есть `held` | Ход остаётся открытым. Снимок сессии показывает его клиенту, REPL спрашивает «сохранить / отбросить». *Рев. 19:* так не построено: у REPL и TUI нет ни вопроса, ни команды, решает клиент `--stdio` через `turn/commitAnyway` или `turn/discard` [D-223, риск 34]. Пока он не решён, новые ходы получают отказ `held_pending` |
 | есть текст в `chk` | Склеиваются дельты, коммит с `finish:'interrupted'`. `dir`, `recall`, `vars` и трасса (`partial:true`) берутся из `prep`. Охрана — `base`; при конфликте применяется правило безусловного коммита (§6.6), а continue при конфликте получает `end{abandoned}` |
 | ничего | `end{abandoned}` |
 
@@ -1288,7 +1382,7 @@ session lane ── prerecall | file | hist         (свои контролле
 - **Причины прерывания:** `user_stop`, `timeout:first_byte`, `timeout:idle`, `budget:director`, `budget:recall`, `preempted` (только фоновые), `superseded` (prefetch заменён новым или не дождался хода), `shutdown`, `consumer_gone`.
 - Таймаут никогда не выдаётся за Stop.
 - *Рев. 17 (M5b) [D-172]:* у полосы сессии — задачи `file` и `hist`, prerecall — с M5c. Новые причины — `budget:filing` и `budget:historian`: срок прохода (`filing.timeoutSec`, по умолчанию 300 с локально и 120 с удалённо) идёт, только пока вызов держит место на сервере; повтор §6.6, ждущий за ходом, не тратит его. Вытесненный вызов `structuredCall` и `streamCall` кончается кодом `preempted`, отдельным от `timeout` и `aborted`. `superseded` у полосы — почва ушла из-под идущей задачи: правка, скрытие, перенос головы, отмена или смена конфига.
-- **Если уходит потребитель** (`consumerSignal`), ожидающие гейты закрываются как `cancel`, а ход продолжается и коммитится.
+- **Если уходит потребитель** (`consumerSignal`), ожидающие гейты закрываются как `cancel`, а ход продолжается и коммитится. *Рев. 19 (M9) [D-237]:* ход продолжается, только если гейт не ждёт. Закрытый так гейт `review` кончает ход `stopped` без сообщения, гейт `transform` — fail-closed, `host_transform_failed` до запроса. Вызов модели, который уже идёт, уход не прерывает.
 
 ### 6.9 Детерминизм
 
@@ -1298,7 +1392,7 @@ session lane ── prerecall | file | hist         (свои контролле
 - **Что из этого следует.**
   - Восстановление берёт трассу из `prep`, а `/preview --turn` воспроизводит лор и макросы хода точно.
   - Свайп тянет новый seed.
-- **Запреты.** В `src/` нет `Math.random` и `Date.now`. Это проверяет правило линтера, а часы и энтропию передаёт Engine.
+- **Запреты.** В `src/` нет `Math.random` и `Date.now`. Это проверяет правило линтера, а часы и энтропию передаёт Engine. *Рев. 19:* линтера в проекте нет; запрет сторожат тесты `test/purity.test.ts` и `test/engine/purity.test.ts`, исключение — `engine/system.ts`.
 
 ---
 
@@ -1411,6 +1505,7 @@ async function narrateRounds(c: RoundsInput): Promise<RoundsResult> {
 - **Эхо рассуждений внутри хода** [D-18]. В нативном раунде своё рассуждение раунда идёт в его assistant-сообщение, если `caps.reasoning.echo ≠ 'never'` и вызов не выключает thinking (`reasoning:'none'` у модели с `canDisable`); что из него отправить, решает адаптер (§8.6). `replay` живёт только в памяти хода.
 - **Финальный раунд** [D-91].
   - В нативном запросе — `toolChoice:'none'`, а схемы тулов остаются объявленными: Gemini отвергает tool-сообщения без схем. Сервер, который `tool_choice` не соблюдает (`caps.toolChoiceHonored = false`, Ollama), получает этот раунд без тулов: так решает адаптер `openai-chat` (§8.3).
+  - *Рев. 19 [D-228]:* схемы на этом раунде объявляет только `openai-chat`, и то не у Ollama. Нативные Anthropic и Gemini (M7, M8) не шлют ни схем, ни `tool_choice` / `toolConfig` (§8.4). Это отступление от D-91. Примут ли их API историю вызовов без схем, вживую не проверено (риск 37).
   - Если до финального раунда были раунды с тулами, в запрос добавляется `FINAL_CUE`: тулы кончились, продолжи сцену, не упоминай тулы и не повторяй написанное. В нативном режиме это отдельное сообщение — `system`, если `caps.midSystem` равно `native` или `anthropic-native`, иначе `user`; `src:'core:final_cue'`. В prompted — абзац в конце сообщения с результатами.
   - Вызовы на финальном раунде (модель проигнорировала `'none'`) не исполняются и не сохраняются, текст раунда остаётся. В `trace.tools` идут строки с `refused:'final_round'`, `notice{code:'tool_calls_on_final_round'}` приходит раз за сессию, `finish` — `max_rounds`. Блоки `<tool_call>` и теги с именем тула этого раунда считаются скрытой разметкой: если модель позвала тул ими, рядом приходит и `tool_markup_stripped` (§6.2, шаг 9).
   - RP-ход всегда заканчивается прозой.
@@ -1423,7 +1518,7 @@ async function narrateRounds(c: RoundsInput): Promise<RoundsResult> {
 
 Директор и агенты Compendium (recall, filing, historian) получают JSON через один помощник, `agents/structured.ts`. Правило выбора транспорта записано здесь один раз и одинаково для всех.
 
-*Рев. 14.* Раздел переписан под то, что построено на M4 [D-98…D-100, D-117, D-121…D-123]. Пока помощником пользуется только Директор; агенты Compendium подключатся на M5.
+*Рев. 14.* Раздел переписан под то, что построено на M4 [D-98…D-100, D-117, D-121…D-123]. Пока помощником пользуется только Директор; агенты Compendium подключатся на M5. *Рев. 19:* подключились все три: filing и historian на M5b, recall на M5c, все с `tag: null`. Сигнатура ниже — рев. 14. С тех пор у входа есть `priority` и `idleDelaySec` (фоновые вызовы, D-172), `rawRead` и `opening` (D-199, D-208), а у кодов сбоя — `preempted` (D-172).
 
 ```ts
 type ReadResult<T> = { ok: true; value: T; skipped: Skip[] }
@@ -1450,15 +1545,15 @@ type StructuredFailCode = 'transport_unsupported' | 'provider_error' | 'no_outpu
 interface Attempt { transport: 'structured' | 'tagged'; outcome: AttemptOutcome; ms: number;
                     status?: number; finish?: string; tokens?: number }   // tokens — выходные
 type AttemptOutcome = 'ok' | 'ok_reasoning' | 'retried' | StructuredFailCode;
-// TraceCall — строка trace.calls (§5.7): { callKey, agent, model: 'conn:model', ms, usage? }
+// TraceCall — строка trace.calls (§5.7): { callKey, agent, model: 'conn:model', ms, usage? } (рев. 19: и at?, ttftMs?, prompt? [D-213])
 ```
 
 1. **Транспорт выбирается до вызова,** записывается в трассу и до конца хода не меняется. Выбирает вызывающий — функцией `chooseTransport(caps)`.
-   - **`structured`** — если `caps.structuredOutput.mode = 'json_schema'` **и** поддержка подтверждена. Для облачных API её подтверждает пресет хоста (Anthropic `output_config.format`, Gemini `responseSchema`). Для локальных серверов (OpenAI-совместимый `response_format`) — активная проба (`rp-core probe <conn:model> --active`, §8.2: схема соблюдена — `confirmedBy:'probe'`) или пользователь (`structured_output` в `[caps]` — `confirmedBy:'user'`). Строку `hosts.json`, которая подтверждает это локальному серверу словом `host`, проверка данных возможностей не пропускает. Утверждение «llama.cpp/Ollama всегда превращают схему в грамматику» не принимается на веру.
+   - **`structured`** — если `caps.structuredOutput.mode = 'json_schema'` **и** поддержка подтверждена. Для облачных API её подтверждает пресет хоста (Anthropic `output_config.format`, Gemini `generationConfig.responseFormat`; *рев. 19:* не `responseSchema`, как говорил план [D-234]). Для локальных серверов (OpenAI-совместимый `response_format`) — активная проба (`rp-core probe <conn:model> --active`, §8.2: схема соблюдена — `confirmedBy:'probe'`) или пользователь (`structured_output` в `[caps]` — `confirmedBy:'user'`). Строку `hosts.json`, которая подтверждает это локальному серверу словом `host`, проверка данных возможностей не пропускает. Утверждение «llama.cpp/Ollama всегда превращают схему в грамматику» не принимается на веру.
    - **`tagged`** — во всех остальных случаях. Описание схемы идёт в system, ответ — один JSON-объект: внутри `<plan>…</plan>` у Директора, без тега у агентов Compendium (так написаны промпты Bunraku). Объект без тега ищется в fence или как первый целый объект — порт `firstObject` из `BR:recall-parse.ts`.
    - **Принудительный выбор тула не используется никогда.** На claude-opus-5-5, claude-sonnet-5-5, claude-fable-5-1 и claude-mythos-5-1 он возвращает 400.
    - Третий транспорт, `tool` (`tool_choice:'auto'` + `strict` + корректирующий проход), зарезервирован. Он появится, если пробы найдут модели, где не работают ни `structured`, ни `tagged`.
-   - *Рев. 14:* на M4 есть только адаптер openai-chat. Транспорт `structured` вживую не проверен: ни у одной локальной модели здесь нет подтверждённого `json_schema`.
+   - *Рев. 14:* на M4 есть только адаптер openai-chat. Транспорт `structured` вживую не проверен: ни у одной локальной модели здесь нет подтверждённого `json_schema`. *Рев. 19:* M7 и M8 добавили нативные Anthropic и Gemini, и их пресеты хоста подтверждают `structured`. Вживую он не проверен и там: оба адаптера собраны без сети (риск 37) [D-234].
 2. **Вызов** — один `streamCall` (`engine/narrate.ts`) с полем `agent` и, в structured, `responseSchema`. Тулов и префилла нет, стопы — из семплеров. Текст и рассуждения собираются молча: событий `text` у агента нет. Сообщения — system, затем user по порядку; пустое user-сообщение не отправляется. При `alternation:'strict'` user-сообщения склеиваются через пустую строку: агенты не проходят через `shape.ts`.
 3. **Чтение ответа** [D-98]:
    1. Текст — видимый, без think-тегов: их содержимое уходит в рассуждения. Если видимый текст пуст, а у модели `caps.reasoning.answerInReasoning`, текстом становятся рассуждения — как у рассказчика.
@@ -1734,7 +1829,7 @@ const WORLD_LITE: WorldBudget = { chars: 1_500, characters: 6, relationships: 2,
 - `chapterUpdate`: action, title, description;
 - `invisibleArcUpdates` нет.
 
-По оценке исследования, на GPU задержку Директора определяет прежде всего декодирование ответа, а не обработка промпта. Поэтому lite урезает схему, а не только историю. Это проверяется замерами на M5c, вместе с recall.
+По оценке исследования, на GPU задержку Директора определяет прежде всего декодирование ответа, а не обработка промпта. Поэтому lite урезает схему, а не только историю. Это проверяется замерами на M5c, вместе с recall. *Рев. 19:* не замерено: замеры ушли в M5d [D-196], а там время всего хода с Директором заменили смещения вызовов в трассе (D-209, D-213).
 
 **Окно (рев. 14) [D-101, D-121].** Запрос Директора всегда помещается в его окно — и в lite, и в full.
 - **Окно** — своё: `contextWindow({caps, local, configWindow})` маршрута Директора (`prompt/budget.ts`). `preset.maxContext` — окно рассказчика.
@@ -2001,6 +2096,15 @@ type DirectorFailCode = 'no_connection' | 'transport_unsupported' | 'provider_er
 
 Ждёт только recall (§7.4.2) — M5c: и prerecall в полосе, и ожидание prefetch в полёте. Места, где сборка M5b изменила текст, помечены «рев. 17».
 
+*Рев. 19 — что построено на M5c* [D-196…D-208] (§19.10):
+- recall — индекс full и lite, промпты, терпимое чтение, добор, `RecallRecord` (§7.4.2);
+- режимы `auto|sync|prefetch|lexical|off` с `onMiss` и `graceSec`; prefetch в полосе; повышение prefetch на время ожидания и «Директор первым» на одном месте (§7.4.2);
+- ярус 1 селектора в порядке recall (§7.4.1);
+- `/memory recall|profile|mode`, строка `recall:` в `/trace`, recall в панели Agents, уведомления `recall_slow`, `prefetch_missed`, `recall_index_truncated` и `history_crowded` (§7.4.9, §7.4.6);
+- начало ответа префиллом у агентов `tag: null` — recall, filing, historian [D-208].
+
+Задержка на локальных серверах — закрепление `id_slot`, проба `/slots`, опции раннера Ollama, `lmstudio_autoevict`, `rp-core bench ttft` и замер качества prefetch — ушла в отдельную веху M5d [D-196] (§7.4.7). Нетипизированные записи книг как выбор recall отложены [D-196]. Места, где сборка M5c изменила текст, помечены «рев. 19».
+
 Из двух черновиков проекта основой взят «local-first»: на локальном бэкенде Compendium не добавляет вызовов до первого токена. Из «fidelity-first» взяты:
 - дословные промпты Bunraku в профиле full;
 - обзоры арок в слоте пересказов;
@@ -2037,7 +2141,7 @@ type DirectorFailCode = 'no_connection' | 'transport_unsupported' | 'provider_er
 
 #### 7.4.1 Активация: селектор и блок
 
-Типизированные записи — сессии и библиотечных книг с доступом `read` — попадают в промпт только через Compendium. Движок лора их не видит [D-76]. Нетипизированные записи книг остаются движку лора с семантикой ST; recall тоже может их выбрать.
+Типизированные записи — сессии и библиотечных книг с доступом `read` — попадают в промпт только через Compendium. Движок лора их не видит [D-76]. Нетипизированные записи книг остаются движку лора с семантикой ST; recall тоже может их выбрать. *Рев. 19 [D-196]:* пока не может: на M5c recall выбирает только типизированные записи, а нетипизированная срабатывает только по ключам. Расширение D-76 отложено.
 
 *Рев. 16 — маршрутизация [D-142].* `routeBooks(sources, cfg)` убирает типизированные записи книг с `read` из источников лора, которые получает сборка. Это идёт после правила «мир читается один раз по имени»: маршрутизация убирает записи, а не книги, так что заслонение по имени не меняется. Выключенные типизированные записи тоже убираются: они и так не сработали бы. Книги с `off` и сессия с `compendium.enabled = false` сохраняют всё. Заметки не меняются: они остаются лором на глубине 4 (D-77). Какая запись книги — типизированная, решает `isCompendiumEntry` (§5.8, «Затравка книг»): запись без заполненного `meta.data` остаётся лором, ведь её текст — всё, что у неё есть.
 
@@ -2046,7 +2150,7 @@ type DirectorFailCode = 'no_connection' | 'transport_unsupported' | 'provider_er
 | Ярус | Что | Как сопоставляется |
 |---|---|---|
 | 0 | упомянуты в U (на guided re-roll — ещё и в тексте указания) | все значимые слова имени или одного из алиасов совпали по основам `normalizeTerm` (§7.5) |
-| 1 | выбраны recall | `RecallRecord.picks` этого хода |
+| 1 | выбраны recall | `RecallRecord.picks` этого хода; *рев. 19 [D-203]:* в порядке recall, а не по правилу порядка внутри яруса |
 | 2 | упомянуты в последних 4 сообщениях перед U | как ярус 0 |
 | 3 (рев. 16) | константные записи книг (`constant`), не выбранные выше | — |
 
@@ -2125,15 +2229,17 @@ type DirectorFailCode = 'no_connection' | 'transport_unsupported' | 'provider_er
 
 Recall — вызов модели, который выбирает записи для следующего ответа: присутствующих персонажей, ожидаемое и обогащающее (категории промпта Bunraku). Он не валит ход и ограничен по времени [D-78].
 
+*Рев. 19 — построено на M5c* [D-196…D-208]. Чистые функции — `agents/compendium/recall.ts`: индекс, промпты, чтение, запись и её страж. Запуск в ходе и в полосе — `engine/recall.ts` (`runRecall`). Ход решает и ждёт в `engine/turn.ts`, prefetch считается в `engine/lane.ts`. Отступления от Bunraku и RoleCall — раздел F `docs/COMPENDIUM-DEVIATIONS.md`. Демо — `docs/M5C-DEMO.md` (§15). Где сборка изменила текст ниже, это сказано пометкой «рев. 19».
+
 **Когда работает.**
 
 | Ход | Recall |
 |---|---|
 | `reply` | по режиму (ниже) |
-| `swipe` | при `recall.onSwipe = 'reuse'` (по умолчанию) — `RecallRecord` заменяемого ответа, 0 вызовов, с `reusedFrom`. Обе версии отвечают на одно U, как у Директора [D-29]. На guided re-roll к повтору добавляется ярус 0 по тексту указания |
-| `continue` | выбор цели, 0 вызовов; тексты записей берутся из текущей свёртки |
-| приветствие, `preview` | только селектор, без вызова |
-| `draft` (M9) | выбор головного ответа |
+| `swipe` | при `recall.onSwipe = 'reuse'` (по умолчанию) — `RecallRecord` заменяемого ответа, 0 вызовов, с `reusedFrom`. Обе версии отвечают на одно U, как у Директора [D-29]. На guided re-roll к повтору добавляется ярус 0 по тексту указания. *Рев. 19 [D-203, раздел K]:* повторяется только запись `recalled` или `empty`, иначе — по режиму; guided re-roll и `'rerun'` вызывают recall заново, в ходе (§6.3) |
+| `continue` | выбор цели, 0 вызовов; тексты записей берутся из текущей свёртки. *Рев. 19:* та же оговорка — проваленная или отсутствующая запись цели не повторяется |
+| приветствие, `preview` | только селектор, без вызова. *Рев. 19 (раздел H):* превью следующего ответа — всегда `lexical`, даже если prefetch готов; `/preview --turn` берёт ярус 1 из записи показанного ответа (раздел K: у ответа с continue — запись того запроса, который показан) |
+| `draft` (M9) | выбор головного ответа. *Рев. 19 [D-239]:* построено иначе: черновик собирается как `preview({draft})`, поэтому recall у него нет, только селектор, как у превью |
 
 **Режимы** задаёт `compendium.recall.mode`:
 
@@ -2146,6 +2252,13 @@ Recall — вызов модели, который выбирает записи
 | `auto` (по умолчанию) | `prefetch`, если origin привязки `recall` локальный (§7.4.7); иначе `sync`. *Рев. 6:* решает локальность, а не число слотов: на одной GPU второй слот хранит KV рассказчика, а не даёт параллельности, и sync recall всё равно стоял бы на критическом пути |
 
 Директор не читает выбор recall, recall не читает директиву (§7.3). Поэтому порядок между ними на результат не влияет.
+
+*Рев. 19 — режимы, как построено [D-201, разделы G и K]:*
+- **Локальность** для `auto` и `onMiss` — та же, что у планировщика: у соединения из `config.toml` — его `local` (иначе догадка по URL); у соединения в процессе — только если провайдер сам говорит, что он локальный (скриптовый файл — строкой `"local": true`, §14); иначе `isLocalOrigin`. Если соединения одного origin расходятся, побеждает «локальный».
+- **`lexical`** — ярусы 0, 2 и 3 селектора; ярус 1 ничем не заменяется. **`off`** — то же без вызова; разница — только в `trace.compendium.source` и в строке `/trace`. Ни тот, ни другой записи не пишут.
+- **Полоса `manual` и one-shot команды** prefetch не делают никогда: `auto` на локальном origin и `prefetch` ведут себя как `onMiss` — без записи и уведомления, когда выходит `lexical`. Sync recall в `send` работает.
+- **Без входа нет и recall:** Compendium выключен или на пути нет живой типизированной записи — ни вызова, ни записи, ни строки в трассе; запрос — как на M5a.
+- `RP_CORE_RECALL=lexical|off` подменяет только умолчание режима; режим из `config.toml`, сессии или `/memory mode` сильнее (§13).
 
 **Prefetch.**
 - **Ставится:**
@@ -2166,12 +2279,28 @@ Recall — вызов модели, который выбирает записи
 - **Промах** → `recall.onMiss`: `lexical` (по умолчанию для локальных соединений) или `sync` (для удалённых). Игрок, ответивший быстрее `idleDelaySec`, тоже получает промах.
 - **Хранится только в памяти.** Краш означает промах.
 
+*Рев. 19 — prefetch, как построено [D-202 с правкой раздела I, D-203, разделы G, H и K]:*
+- **Не задача, а слот полосы.** Он не `LaneTask` (§7.4.7): у полосы отдельный слот, и «одна задача за раз» держится — пока идёт prefetch, задачи file и hist не начинаются, и наоборот. Долг выводится, как у задач: полоса в `auto`, голова — ответ ассистента (приветствие тоже: иначе первый ответ локальной сессии в `auto` всегда промахивался бы), есть живая типизированная запись, режим хочет prefetch, для этой базы нет готовой записи и ничего не идёт. Prefetch идёт раньше file и hist, кроме голодающей задачи. Фоновый приоритет, затвор простоя `idleDelaySec` на локальном origin, вытеснение любым интерактивным запросом — после затвора он начинается заново. Строк `job` нет, в журнал не пишется, после краша не восстанавливается. Готовые записи — в памяти, по базе, восемь новейших.
+- **База** — голова (новейший ответ ассистента перед U; сообщения игрока, сложенные под ним, пропускаются), новейшая правка или скрытие сообщения пути до головы, число скрытых и отпечаток настроек recall (модель, окно, профиль, числа, указания, срок, рассуждения, семплеры, предел вывода). Ход принимает prefetch, чья база совпала. Это заменяет три условия «годен» выше: правка, скрытие, перенос головы или другие настройки дают другую базу.
+- **Ревизия Compendium в базу не входит** (правка D-202, раздел I). С ней каждая строка, которую filing или historian писали после prefetch, делала его негодным: полоса делала второй, побайтно тот же запрос на каждый ответ (находка демо, §15). В выборе — ключи записей, а текст блок берёт из свёртки при сборке.
+- **Ожидание.** Prefetch, который для базы хода ещё ждёт места или уже идёт, повышается до интерактивного приоритета (`createBoost` в `sched.ts`: его не вытесняют, он проходит затвор простоя) и ждётся не дольше `graceSec`. Директор тем временем планирует; ждёт он только тогда, когда делит с prefetch локальный origin с одним местом. Опоздавший prefetch прерывается (`superseded`) — это промах. Stop прерывает ожидание и понижает prefetch: он дорабатывает в фоне для следующего ответа на тот же U.
+- **Промах** → `onMiss`. Но `prefetch_missed` — запись `{status:'skipped', source:'lexical', code:'prefetch_missed'}` и уведомление раз за сессию — бывает только тогда, когда ход правда ждал prefetch, который был, и выбора не получил. Если для базы ничего не было (сессию только открыли, prefetch не начинался, ответа перед U нет), ход идёт по `onMiss` без записи и без уведомления. Готовая запись prefetch со сбоем — откат со своим кодом (при `onMiss = lexical` её запись идёт в ход) и без уведомления.
+- **Принятый prefetch** пишется в `prep` и коммит как `source:'prefetch'` с `basis`. Его вызовы — в записи (`calls`, `usage`, `model`), а не в `trace.calls` хода и не в потолке вызовов хода. `/usage` считает их по записи. Prefetch, который ход не принял, в журнал не попадает, и `/usage` его не видит — как вытесненный проход полосы.
+- **`memoryWait`** ждёт и prefetch — в очереди, идущий или положенный голове (раздел I). `MemoryStatus.prefetch` говорит, что с ним (§7.4.9).
+
 **Привязка.** Роль `recall` → `recorder` → `narrator` [D-85]. Это повторяет пару классификатора в RoleCall и `compendium.model ?? scene model` в Bunraku. На облаке recall стоит направить на дешёвую модель.
+- *Рев. 19 (раздел J).* Если рассказчик — RP-тюн, recall (и `recorder`) стоит привязать к модели, которая следует инструкциям: в живом прогоне Mag-Mell 12B ответил на промпт recall в роли — прозой, без хэндлов (§15). `/model` и `/memory profile` показывают привязку; незаданный `recall` показывается как `recorder (follows)`.
 
 **Вызов.**
 - **Транспорт.** `structuredCall({agent:'recall', tag:null})` (§7.2): ответ — один голый JSON-объект, как просит промпт Bunraku. В `structured` схема — `{entry_ids: string[]}`. Если кандидатов ≤ 200, у `items` есть `enum` хэндлов, и грамматика llama.cpp не даст выдумать хэндл.
 - **Параметры.** Температура 0,3. Рассуждения — минимум из допустимых записью возможностей, с проверкой на проводе. maxTokens: full — 2 000 (`MAX_OUTPUT_TOKENS` Bunraku), lite — 200. Если запись возможностей не подтверждает, что рассуждения выключаются, или адаптер не смог отправить выключение, добавляется 1 024 на рассуждения: иначе каждый вызов кончался бы `finish:'length'`. `finish:'length'`, когда пришли одни рассуждения, — `undecodable` (инцидент RoleCall 2026-08-07, `pregen-retrieval.ts:43-61`).
 - **Дедлайн** `recall.timeoutSec` считается от получения места в семафоре: 30 с для локальных, 20 с для удалённых. Ремонт укладывается в тот же дедлайн; у prefetch — 60 с. У Bunraku 90 с (`RECALL_TIMEOUT_MS`); вместе с таймаутом первого байта 600 с это держало бы ответ минутами.
+- *Рев. 19 — вызов, как построено [D-198, D-199, D-204, D-208, раздел G]:*
+  - `structuredCall` получил крючок `rawRead`: агент `tag: null` сам читает видимый текст ответа (теги рассуждений вырезаны). Рассуждения JSON не ищутся; они заменяют пустой текст, только если запись возможностей говорит, что ответ приходит туда.
+  - Схема `structured` — `entry_ids` (с `enum` хэндлов до 200 кандидатов), в full ещё необязательный объект `reasons`. Поле — `entry_ids`, а не `picks`: его просит дословный промпт (раздел G); читатель принимает и `picks`.
+  - **Начало ответа префиллом** [D-208]. На транспорте `tagged`, если запись возможностей принимает префилл ассистента, каждый вызов — и ремонт, и добор — отправляет начало ответа `{"entry_ids": [`; читается начало плюс текст модели (или текст один, если он сам повторяет начало, открывает fence или список). На `structured` и без префилла в caps начала нет. Так же filing и historian получают `{"filings": [`. Bunraku и RoleCall префилла не шлют — отступление из списка для Chi.
+  - Правило «+1 024» — по проводу: без добавки, только если модель не рассуждает или рассуждения выключены и адаптер правда шлёт выключение. `AGENT_OUTPUT_FLOOR` для lite не действует: lite нужно ≥ 100 токенов на ответ. Запрос, который не оставляет ответу места, не отправляется: запись `skipped` с кодом `no_room`, ход идёт `lexical` (раздел G).
+  - `timeoutSec` задаёт одно значение сразу для всех трёх сроков, prefetch тоже. Добор укладывается в остаток срока от первого гранта.
 
 **Индекс** — кандидаты с короткими хэндлами `e1…eN`, которые ничего не значат вне индекса (`recall-index.ts` Bunraku). Не входят: списанные и выключенные записи, скрытые свежестью, стоящие в слоте `{{recap}}`.
 
@@ -2182,6 +2311,11 @@ Recall — вызов модели, который выбирает записи
 | переполнение | считается (`omitted`); `notice{recall_index_truncated}` раз за сессию | то же |
 
 - Bunraku передаёт 20 000 безусловно, хотя комментарий обещает «половину окна, если меньше» (`compendium-recall.ts:30` и `:92`).
+- *Рев. 19 — индекс, как построено [D-197, разделы K]:*
+  - **Кандидаты** — живые типизированные записи вида (сессии и читаемых книг, с оверлеями) свежими копиями на окне запроса (`visibleCopy`, граница ближайшего предка-ответа), без записей, которые стоят в предсказанном слоте `{{recap}}` (`trace.recap.ids` ближайшего предка-ответа). Заметки, обзоры арок и нетипизированные записи книг — не кандидаты [D-196].
+  - **Full** — один `deriveTree` по всем кандидатам под одним заголовком `=== World Knowledge (N entries) ===`, без заголовков книг; глубина 2, tagline всегда. Каждая запись — одна строка, даже если дерево вешает её под два одноимённых места; счёт группы — записи, показанные под ней (раздел K).
+  - **Lite** — шорт-лист под `## Knowledge Index`, без заголовков дерева: сначала записи ярусов 0 и 2 (селектор), затем по `lexScore` к последним 6 сообщениям (имя, алиасы, tagline; служебные слова выброшены, письменность без пробелов режется на пары знаков, попадание в имя — первым), затем остальные, новейшие первыми. Маленький Compendium так показывается целиком.
+  - Хэндлы — `e1…eN` в порядке печати, на один запрос. Пустой индекс — вызова нет, запись `skipped` с кодом `empty_index`. Обрезанный — хвост `(+N more entries not shown)` и `notice{recall_index_truncated}` раз за сессию.
 - **Замер** на фикстуре Bunraku (239 записей, 233 кандидата, `countText` Bunraku): индекс `names` — 2 535 токенов, `taglines` — 2 545, `preview` — 3 565. Между `names` и `taglines` почти нет разницы, потому что tagline есть только у трёх типов. Выведенный tagline это исправляет.
 
 **Промпт.**
@@ -2197,6 +2331,12 @@ Recall — вызов модели, который выбирает записи
   - последние 6 сообщений, ≤ 1 500 токенов; сообщение длиннее 1 200 символов — начало и конец;
   - форма `{"entry_ids":["e1"]}` с припиской «не больше 4, пустой список — нормально».
 
+*Рев. 19 — промпты, как построено [D-198, раздел K]:*
+- **full** — текст Bunraku слово в слово (golden-тест против отрендеренного `recallMessages` на 702d8120), кроме перечисленных правок: строка prefetch — последней строкой user, только в prefetch; беседа ≤ min(8 000, 20 % окна), новейшие первыми, сообщение, которое не помещается, режется на начало и конец; указания — только `compendium.recall.guidance` сессии (Guide нет), до 8 000 знаков без разрыва суррогатной пары; минимум не выше `maxEntries` и числа показанных записей. Сообщения беседы — как у Bunraku: последние `contextMessages`, пустые тоже, тексты не подрезаются (раздел K убрал первую подрезку). Строка языка D-183 к recall не добавляется: ответ — хэндлы.
+- **Добор** — второе сообщение user: `Your last answer: {"entry_ids":[…]}` и `moreNudge` Bunraku. У Bunraku первый ответ шёл эхом ассистента; у `structuredCall` хода ассистента нет.
+- **lite** — новый текст (≈ 80 токенов o200k): ACTIVE и ANTICIPATED, «A few right picks beat many loose ones.» Сообщения — без пустых, каждое ≤ 1 200 символов (начало и конец), вместе ≤ min(1 500, 20 % окна); весь запрос ≤ min(6 000, 40 % окна); указания — до 1 000 символов. Минимума, причин, ремонта и добора нет.
+- Ремонт — корректирующий проход `structuredCall`, как у filing (C-3); `REPAIR_NUDGE` Bunraku не портирован.
+
 **Чтение** — `parseRecall` Bunraku: первый целый JSON-объект, в fence или без; неизвестные, повторные и сверх лимита хэндлы отбрасываются и считаются. Сверх этого принимаются:
 - голый массив `["e1","e7"]`;
 - точное нормализованное имя кандидата вместо хэндла (`byName`);
@@ -2204,16 +2344,25 @@ Recall — вызов модели, который выбирает записи
 
 Причины режутся до 200 символов и идут только в трассу и `/memory recall` — **никогда** рассказчику.
 
+*Рев. 19 — чтение, как построено [D-199, разделы J и K]:*
+- **Где выбор:** `entry_ids`, `picks`, `entries` или `entry_names` (без учёта регистра, `_` и `-`) или голый список. Побеждает первое целое значение формы recall, которое что-то выбирает. Открывающая скобка, которая не закрылась, поиск не останавливает: целое значение после неё сильнее обрезка и починки остатка, а пример из самого промпта, повторённый перед ответом, не побеждает никогда.
+- **Чем может быть выбор:** хэндл в любом регистре, в скобках или с нулями (`E12`, `[e12]`, `e012`); строка индекса целиком; несколько хэндлов в одном элементе (`e1 and e2`) — считаются все; точное имя или алиас (`normalizeName`, единственный среди показанных); объект `{id|handle|name, reason}` или `{"e1": "reason"}`. Нечётких имён нет: Dice RoleCall не портирован.
+- **Испорченный ответ:** обрезанный JSON сохраняет закрытые элементы (`cutOff`); обрезок без единого закрытого элемента — не успех. Если ничего не читается, хэндлы вылавливаются из прозы (`salvaged`).
+- **Слова** (раздел J): текст без читаемого выбора — `undecodable` (`/memory recall` пишет «its answer could not be read»), `no_output` («the answer was empty») — только пустой ответ. Неверная форма читается как `invalid` и пишется как `undecodable`.
+- В lite причины не хранятся. Нечитаемый ответ lite — `status:'failed'` с кодом `undecodable`, как в full (раздел G): на свайпе он не повторяется, ход идёт по откату.
+
 **Второй вызов.**
 - Не больше одного, и только в full: ремонт на `no_output` или `undecodable`, либо добор до `minEntries`. Третьего нет (Bunraku).
 - Добор RoleCall с принудительным `tool_choice` (`pregen-retrieval.ts:627`) не переносится.
 - В lite второго вызова нет: если ничего годного, выбор пуст, а запись — `ok`.
+- *Рев. 19 [D-198, раздел K с правкой от 14.11].* Своих вызовов у recall не больше двух: первый ответ, затем один ремонт или один добор, не оба. Добор идёт, только если первый `structuredCall` сделал один вызов модели (`calls < 2` Bunraku): после ремонта или повтора добора нет. Добор заменяет первый ответ, только если читается и выбирает больше. Общий повтор §6.6 этим пределом не ограничен: с ним вызовов бывает три, а с повтором вызова ремонта — четыре (§6.6). В lite «выбор пуст, запись `ok`» не построено: нечитаемый ответ — `failed` (раздел G).
 
 **Сбой.**
 - Любой сбой даёт `RecallRecord{status:'failed', code}`, событие `agent{recall, status:'fallback', code}` и лексический выбор.
 - Ход recall не валит. Прервать его может только Stop, и таймаут никогда не выдаётся за Stop.
 - Вызовы sync считаются в потолок 12 вызовов на ход (§11).
 - После двух таймаутов за сессию — `notice{recall_slow}` с советом: `mode = lexical`, кэш хоста или второй слот, отдельное соединение.
+- *Рев. 19 [D-204, раздел K].* Построено иначе: `recall_slow` — раз за сессию, после трёх sync recall медленнее 8 с собственного времени (от первого гранта, без ожидания места за Директором), с советом: prefetch или дешёвая модель recall. Запись сбоя — `{status:'failed', source:'lexical', code}`. Потолок 12 вызовов на ход считает только вызовы sync; вызовы принятого prefetch — нет (они в записи). `prefetch_missed` — только после настоящего ожидания (выше, «Prefetch»).
 
 **Запись.**
 
@@ -2227,9 +2376,11 @@ interface RecallRecord {
   unknown: number; repeated: number; trimmed: number; omitted: number; byName: number; salvaged: number;
   calls: number; ms?: number; model?: string; transport?: 'structured' | 'tagged';
   code?: 'timeout' | 'provider_error' | 'no_output' | 'undecodable' | 'transport_unsupported'
-       | 'aborted' | 'no_connection' | 'prefetch_missed';
+       | 'aborted' | 'no_connection' | 'prefetch_missed'
+       | 'empty_index' | 'no_room';                 // рев. 19: пустой индекс; запрос не оставляет места ответу
   basis?: string;        // prefetch: A(n), после которого он посчитан
   reusedFrom?: string;   // свайп — заменённый ответ; continue — цель
+  usage?: { input: number; output: number };       // рев. 19: токены его вызовов — для /usage
 }
 ```
 
@@ -2237,12 +2388,20 @@ interface RecallRecord {
 - Повтор на свайпе и continue переживает перезапуск. Это заменяет LRU-кэши в памяти процесса: 32 записи у Bunraku, 256 у RoleCall.
 - Текст записей в ней не хранится. При сборке он всегда берётся из текущей свёртки, поэтому повтор видит поздние правки.
 - `/preview --turn` пересобирает блок из `prep.recall` и `trace.compendium.rev`.
+- *Рев. 19 — как построено [D-200, D-203, раздел K]* (тип и страж — `session/entries.ts`, `checkRecallRecord` в `recall.ts`):
+  - запись пишется, только когда recall работал, prefetch принят или промахнулся, выбор повторён или recall пропущен с кодом (`empty_index`, `no_room`, `no_connection`). Режимы `lexical` и `off`, ход без входа Compendium и откат без ожидания записи не пишут;
+  - `source: 'lexical'` — у сбоя и промаха, и тогда `code` говорит почему. `calls` — каждый вызов модели, повторы и добор тоже. Повтор — копия с 0 вызовов, `source:'reused'` и `reusedFrom`, без `ms`, `usage`, `basis` и `code`;
+  - `ms` — собственное время recall от первого гранта (раздел K);
+  - страж читает строку журнала мягко: обязательные поля — строго, плохие необязательные поля и выборы выбрасываются, причины режутся до 200, выборов ≤ 64. Плохая запись читается как отсутствующая — и в `recover.ts`;
+  - `/preview --turn` и `/trace` ответа с continue берут запись того запроса, который показывают (самого ответа или его правки), а `/memory recall` — новейшую запись ответа (раздел K).
 
 **Позже, после замеров M5c** (§7.3 ссылается на это решение):
 - поле `recall: {entry_ids}` в ответе Директора — замена sync-вызова при промахе prefetch. Читается отдельно: плохое поле даёт лексический откат и никогда не валит Директора, D-17 не страдает;
 - выбор recall как часть снимка мира.
 
 Оба меняют порядок вызовов на одном слоте и вводятся, только если замеры покажут, что промахи prefetch часты и дороги.
+
+*Рев. 19:* замеры D-196 отнесло к M5d, но промахи prefetch не мерили и там (§15), поэтому ни одно из двух не построено. Не построена и `/memory recall test <текст>`: превью показывает выбор селектора без recall. Отметки начала вызовов в `Trace.calls` (раздел I) добавила M5d — поле `at` (§5.7) [D-213].
 
 #### 7.4.3 Filing
 
@@ -2472,6 +2631,7 @@ const WORLD_LITE: WorldBudget = { chars: 1_500, characters: 6, relationships: 2,
 - Профиль меняет то, что видит модель, и лимиты числа и размера элементов (§5.8, D-87). Правила чтения и свёртка от профиля не зависят.
 - *Рев. 16 [D-154]:* на M5a профиль выбирает только блок: `compendiumProfile(cfg.profile, окно)`, а окно — окно запроса рассказчика. `LITE_WINDOW = 24 576`. Краткий рендер в full — до 1 200 символов (таблица лимитов — §7.4.1). Профили агентов придут с ними (M5b, M5c).
 - *Рев. 17 [D-174, D-176]:* filing и historian берут профиль по окну **recorder** — `compendiumProfile(cfg.profile, окно recorder)`; окно считается по тем же правилам, что у рассказчика (`contextWindow`: запись возможностей модели, `window` сессии, умолчание для локального сервера). Профиль блока по-прежнему считается по окну рассказчика: при разных моделях они могут разойтись. Full у filing ещё и проверяется: если весь запрос не оставляет 4 096 токенов на ответ, вызов идёт lite (как D-121 у Директора). Лимиты таблицы ниже для filing и historian построены как написаны; пункт «слот: обзоры арок» — §7.4.4. В живых прогонах M5b (окно 16 384) все проходы шли lite, транспорт tagged, по одному вызову, без ремонта (§15).
+- *Рев. 19 [D-197, D-198]:* recall берёт профиль по окну **своей** привязки (`recall` → `recorder` → `narrator`). Строки recall таблицы построены как написаны; ответ full — ≤ 10 записей, ремонт **или** добор, не оба (§7.4.2). `/memory profile` печатает профиль каждого агента — блок, recall, filing, historian — с окном, которое его решило, и привязкой (§7.4.9). В демо M5c (окно 4 096) все агенты шли lite; профиль full проверен только тестами.
 
 | Параметр | full (Bunraku, бюджеты зажаты окном) | lite |
 |---|---|---|
@@ -2500,6 +2660,7 @@ const WORLD_LITE: WorldBudget = { chars: 1_500, characters: 6, relationships: 2,
   - сообщение игрока — ≤ 1 600.
 - **historian** — окно ≈ 5 700, промпт ≈ 300, дайджест ≈ 200, ответ 1 500.
 - **рассказчик** — резерв ответа 2 048, если `max_tokens` не задан [D-89, §11]; голова пресета, карточка, персона, контракт Директора и каталог тулов — ≈ 3 000 (оценка); директива ≤ 600; лор с блоком Compendium ≤ 3 584 (25 % от окна минус резерв, рев. 12; блок ≤ 1 600); слот пересказов ≤ 1 638. На историю остаётся ≥ 5 500 токенов, ≈ 7 обменов. Если на историю остаётся меньше 25 % окна — `notice{history_crowded}` раз за сессию с советом: меньше лора, меньше `max_tokens`, другой пресет.
+  - *Рев. 19 [D-205].* Построено другим правилом: не доля окна, а число сообщений. После сборки, если перед U ушло меньше 4 сообщений, хотя на пути их больше и пресет сам не ограничивает историю таким числом (`preset.context.maxMessages`), — `notice{history_crowded}` (warn) раз за открытую сессию. Текст называет, сколько из скольких сообщений поместилось и сколько токенов занимает неизменная часть запроса из доступных (окно минус резерв ответа; комната тулов — отдельно), и советует рассказчика с большим окном (`/model`) или лёгкий пресет (`/preset builtin`); `/preview` показывает части. Проверка живёт в `engine/request.ts`, а не в `profile.ts`: результаты `assemble` закреплены старыми тестами, и запрос не меняется ни на байт. `preview` говорит его каждый раз и ничего не помечает; проверка помещения D-195 и отказ его не дают. Повод — импортированная история RoleCall (риск 28).
 
 #### 7.4.7 Фоновая полоса и задержка на локальных бэкендах
 
@@ -2534,6 +2695,7 @@ type LaneJob =
 
   Если соединения одного origin задают разную ёмкость, берётся меньшая.
 - **Проба слотов ёмкость не поднимает, а только советует.** У llama-server по умолчанию `-np` = auto (−1): это 4 слота с общим KV на один пул `-c` (README; `server.cpp`: при `n_parallel < 0` — 4 слота и `kv_unified`). Каждый слот показывает в `/slots` полный `n_ctx`, так что такой пул не отличить от раздельного `-np 4 --no-kv-unified`. При переполнении общего пула сервер отдаёт «Context size has been exceeded» всем идущим запросам, включая рассказчика (`server-context.cpp`). Если проба (`GET /slots` или `total_slots` в `/props`) видит ≥ 2 слотов, а `max_in_flight` не задан, — `notice{slots_detected}` раз за сессию с пресетом ниже.
+  - *Рев. 19 (M5d) [D-212]:* совет о ёмкости даёт `rp-core probe` строкой в `notes` (он там был и до M5d). Уведомление `slots_detected` построено с другим смыслом: llama.cpp с ≥ 2 слотами, который ядро **не** закрепляет (ниже, «Уведомления о сервере»).
 - **Приоритеты:**
   - interactive — рассказчик, Директор, sync recall, prefetch, которого ждёт ход (в пределах `graceSec`), `draft`;
   - background — prerecall, filing, historian.
@@ -2548,25 +2710,59 @@ type LaneJob =
 | облако (≥ 2 места) | Директор ∥ sync recall → сборка → рассказчик. Filing A(n−1) стартует при `send` и идёт рядом, как в Bunraku; recall читает свёртку, зафиксированную в начале хода. *Рев. 17:* как построено — проход начинается после хода (раздел I, ниже) |
 | локальный origin (1 или 2 слота) | prefetch в полёте — ждать ≤ `graceSec` → Директор → sync recall (только при `onMiss = sync` или `mode = sync`) → сборка → рассказчик. Фон — после хода и задержки `idleDelaySec`, пока игрок пишет |
 
-**Закрепление слотов (M5c).** При `max_in_flight = 2` на llama.cpp ядро шлёт `id_slot`: рассказчик — 0, агенты — 1.
+**Что ядро узнаёт о локальном сервере (рев. 19, M5d) [D-210].** `providers/server-info.ts` спрашивает сервер, что он такое; ответы помнит `ServerInfoMemo` в `engine/server-notices.ts`, по одному на origin на процесс движка.
+- **Кого.** Только соединения диалекта `openai-chat` с `baseUrl`, у которых `local` и `isLocalOrigin` (loopback, частные сети и CGNAT, `.local`, `.lan` и подобные). Никогда — `script:`, `record:`, `replay:`, удалённые origin и `local = true` на публичном имени (туннель): ошибка в конфиге не доходит до платного API. `EngineOptions.serverInfo: 'off'` или `RP_CORE_SERVER_INFO=off` выключают чтение; `test/preload.ts` ставит переменную, тесты M5d включают чтение сами.
+- **Что.** По порядку, до первого ответа:
+  1. `GET /props` — llama.cpp, если в ответе есть `default_generation_settings` или `total_slots`. Читаются `total_slots`, номер сборки из `build_info` (`b<N>-<commit>`; 0 или нет поля — неизвестно) и `endpoint_slots`;
+  2. иначе `GET /api/version` и `GET /api/ps` — Ollama: версия и загруженные модели с их окном;
+  3. иначе `GET /api/v1/models` — LM Studio: загружена ли модель (`loaded_instances`), по ключу модели и по id экземпляра;
+  4. иначе `unknown` с причиной.
+
+  Для уведомлений Ollama сессия спрашивает `POST /api/show` по каждому имени, когда имён на одном origin два и больше: блоб (строка `FROM` в `modelfile`) и опции раннера, которые сравнивает `needsReload` Ollama, — `num_ctx`, `num_batch`, `num_gpu`, `main_gpu`, `use_mmap`, `num_thread` (`server/sched.go` v0.40.12).
+- **Сроки.** 1,5 с на запрос и 3 с на всё чтение; ключ соединения тоже укладывается в эти 3 с. Шаг, который не ответил в срок, не мешает следующему; отказ соединения или общий срок кончают чтение.
+- **Когда.** Сессия начинает чтение для origin своих ролей при открытии, после каждого `configure` и в начале хода — и ничего не ждёт. Первый вызов модели на таком origin ждёт ответа не дольше общего срока и идёт дальше с ответом или без.
+- **Без сбоев.** Любая неудача — `unknown` с причиной. Ни в `caps-cache.json`, ни в журнал ничего не пишется. *Поправка после ревью (D-210):* до конца процесса хранится только определённый ответ — известный сервер или «сервер не известен» по 404 и 200. Ответ, который может скоро измениться (ничего не ответило, срок, HTTP 5xx, 401, 403), читается снова в начале хода, не чаще раза в `SERVER_INFO_RETRY_MS` (30 с). Паузу считают монотонные часы `monotonicMs` (`engine/system.ts`); в журнал они не попадают.
+- **`rp-core probe <conn>`** печатает то же и вердикт закрепления (§12.3).
+
+**Закрепление слотов (план M5c; рев. 19 — построено на M5d) [D-211].** На llama.cpp ядро шлёт `id_slot`: рассказчик (и его черновики) — 0, любой другой агент — 1.
 - **Зачем.** Без закрепления сервер отдаёт задаче, чей промпт мало похож на слот (`-sps`, по умолчанию 0,10), наименее недавно использованный свободный слот (`get_available_slot`). Prerecall займёт свободный слот, а следующая за ним задача filing — слот рассказчика.
 - **Проверка.** В исходниках llama.cpp `id_slot` читается общим обработчиком завершений и доходит через `/v1/chat/completions`, но README документирует его только для `/completion`. Поэтому проба M5c проверяет закрепление по `/slots`. Если сервер его не принимает, `-np 2` советуется только вместе с `--cache-ram`.
+- *Примечание реализации (рев. 19) [D-209, D-211].* Построено не так, как в плане:
+  - **Не только при `max_in_flight = 2`.** На локальном origin фоновая задача никогда не идёт рядом с рассказчиком или Директором (`sched.ts`), так что закрепление нужно не ради параллельности. Оно держит кэш каждого слота за одним видом промпта, и серверу `-np 2` это помогает и при `max_in_flight = 1`.
+  - **Без проверки по `/slots`.** Ядро закрепляет само, когда выполнено всё: сервер — llama.cpp (по `/props`, выше); `total_slots ≥ 2` — llama.cpp берёт `id_slot` по модулю числа слотов, и на одном слоте оба id попадают в слот 0; сборка b11552 или новее (PR #30295 llama.cpp: раньше закреплённый занятый слот мог взять другой промпт посреди генерации) **или** ёмкость origin — 1, и тогда ядро никогда не шлёт в занятый слот. Неизвестная сборка закрепляется только при ёмкости 1.
+  - **Где.** `streamCall` (`engine/narrate.ts`) ставит `slotPin` на копию caps вызова (`callCaps`), поэтому закреплены все пути: рассказчик, Директор, recall, filing, historian, черновик. Адаптер openai-chat ставит `id_slot` по агенту до `extra_body` и `exclude_body` соединения, и они побеждают [D-53]. `id_slot` в `extra_body` самой модели тоже побеждает, и правило тогда не закрепляет. `rp-core preview --wire` показывает `id_slot`, который понёс бы вызов; для этого превью ждёт ответа сервера, не дольше 3 с.
+  - **Все агенты делят слот 1.** Если Директор и sync recall хотят его разом, llama.cpp ставит второй в очередь и не отказывает (`server-context.cpp`). Отдать одному из них слот 0 значило бы опустошить кэш рассказчика.
+  - **`slot_pin`** в `[caps."conn:model"]` (§13): `true` закрепляет на 0 и 1, не спрашивая сервер, — и там, где сервер не читается (`local = false`, туннель); `false` не закрепляет никогда (в caps — `slotPin: null`).
+  - Вживую на `-np 2 --no-kv-unified` закреплённый рассказчик сохранил кэш во всех раундах бенча. Незакреплённый терял его в каждом раунде с `--cache-ram 0` и в одном из трёх с кэшем хоста (§15, M5d).
 
 **Защита от ловушек бэкендов** — данные адаптеров и документация, без новых механизмов:
 - **llama.cpp** — агенты никогда не шлют `cache_prompt:false`.
 - **Ollama** — запрос агента к той же модели несёт те же опции раннера, что у рассказчика (`num_ctx` и прочие): любое расхождение перезагружает модель (`needsReload` в `sched.go`). Если в конфиге они расходятся — `notice{ollama_options_mismatch}`.
+  - *Рев. 19 (M5d) [D-196, D-212]:* не построено. Ядро говорит с Ollama через `/v1`, а там опции раннера не задаются: зеркалить нечем. Вместо `ollama_options_mismatch` — `ollama_reload_risk` (ниже).
 - **LM Studio** — если роли на одном origin привязаны к разным моделям, `notice{lmstudio_autoevict}`: Auto-Evict по умолчанию держит одну JIT-модель.
+  - *Рев. 19 [D-212]:* построено с уточнением: роли на одном origin LM Studio называют две модели и больше, и хотя бы одна из них не загружена. Все загружены (`lms load`) — уведомления нет.
 
-**Пресеты** — документация M5c:
+**Уведомления о сервере (рев. 19, M5d) [D-212]** — `serverNotices` в `engine/server-notices.ts`, чистая функция ролей и ответов серверов. Каждое говорится раз за сессию по коду и предмету (origin, пара имён). Они идут по шине сессии: когда пришёл ответ сервера, после `/model` и `session/configure` и на ходу, когда сервер впервые ответил. От того, включён ли Compendium, они не зависят. Роли, которые считаются: рассказчик; Директор, если включён; при включённом Compendium — recorder и recall, если режим recall не `lexical` и не `off`.
+
+| Код | Уровень | Когда и что говорит |
+|---|---|---|
+| `slots_pinned` | info | ядро закрепляет слоты: сколько слотов и какая сборка, какой слот у рассказчика и какой у агентов. Кэш рассказчика остаётся в VRAM только с `-np 2 --no-kv-unified`: при `-np auto` KV общий, и простаивающий слот уходит в RAM хоста, как только начинается другая задача. Причина — только если она что-то добавляет (ёмкость 1 на старой сборке, `slot_pin = true`); закреплены только агенты — названы только они |
+| `slots_detected` | info | llama.cpp с ≥ 2 слотами, который ядро не закрепляет (`slot_pin = false`, свой `id_slot` в `extra_body`, старая или неизвестная сборка при ёмкости ≥ 2): почему, и как закрепить — `slot_pin = true`, новее сборка или `max_in_flight = 1`. Если `id_slot` задал сам человек, совета нет |
+| `ollama_reload_risk` | warn | две роли на одном origin Ollama называют разные имена с одним блобом и разными опциями раннера (`num_ctx 16384 vs 32768`): каждое переключение перезагружает модель; привязать обе роли к одному имени. Разные блобы не предупреждаются: останутся ли обе модели в памяти, зависит от VRAM и `OLLAMA_MAX_LOADED_MODELS`, а API этого не показывает |
+| `lmstudio_autoevict` | warn | роли называют две модели и больше, одна не загружена: JIT-загрузка с Auto-Evict (умолчание LM Studio) каждый раз выгружает другую; загрузить обе через `lms load` или привязать агентов к модели рассказчика |
+
+REPL печатает их строкой `!` после хода, на котором они пришли; `--stdio` шлёт событием `notice`. `rp-core send` их не печатает (§12.3).
+
+**Пресеты** — документация M5c. *Рев. 19:* написаны на M5d — раздел «Local servers: speed and caching» в `docs/USER-GUIDE.md` [D-216]:
 
 | Бэкенд | Что советуем |
 |---|---|
-| llama.cpp | `-np 1` с `--cache-ram` (включён по умолчанию, 8 192 МиБ, PR #16391): кэш промптов в памяти хоста возвращает префикс рассказчика без полной обработки. Либо `-np 2 --no-kv-unified -c <2 × окно>` и `max_in_flight = 2`: ядро закрепляет слоты через `id_slot`. По умолчанию `-np` = auto, 4 слота с общим KV; простаивающий слот перед очисткой сохраняется в `--cache-ram` (`--cache-idle-slots`, включён по умолчанию) и восстанавливается оттуда. Явный `-np 1` даёт один слот |
-| koboldcpp | `--smartcache 2`. Запросы здесь только встают в очередь, а ContextShift и FastForward не помогают при чередовании промптов |
-| Ollama | `OLLAMA_NUM_PARALLEL=2`, один `num_ctx` для всех ролей, `keep_alive: -1` |
-| LM Studio | загрузить модели вручную или выключить Auto-Evict; Max Concurrent Predictions ≥ 2 |
+| llama.cpp | `-np 1` с `--cache-ram` (включён по умолчанию, 8 192 МиБ, PR #16391): кэш промптов в памяти хоста возвращает префикс рассказчика без полной обработки. Либо `-np 2 --no-kv-unified -c <2 × окно>` и `max_in_flight = 2`: ядро закрепляет слоты через `id_slot`. По умолчанию `-np` = auto, 4 слота с общим KV; простаивающий слот перед очисткой сохраняется в `--cache-ram` (`--cache-idle-slots`, включён по умолчанию) и восстанавливается оттуда. Явный `-np 1` даёт один слот. *Рев. 19 [D-211]:* для закрепления `max_in_flight = 2` не нужен — ядро закрепляет `-np 2` при ёмкости 1 на любой сборке, а при ёмкости ≥ 2 — со сборки b11552. Руководство советует `-np 2 --no-kv-unified` и `max_in_flight = 1`, пока сборка старше b11552. С `--no-kv-unified` окно делится между слотами: `-c 32768 -np 2` даёт каждому 16 384 |
+| koboldcpp | `--smartcache 2`. Запросы здесь только встают в очередь, а ContextShift и FastForward не помогают при чередовании промптов. *Рев. 19:* не построено и не замерено (D-209) |
+| Ollama | `OLLAMA_NUM_PARALLEL=2`, один `num_ctx` для всех ролей, `keep_alive: -1`. *Рев. 19 [D-212]:* одно имя модели на блоб для всех ролей, иначе `ollama_reload_risk`. Один слот по умолчанию кэш рассказчика не теряет: Ollama 0.40.12 запускает свой раннер llama-server с `--cache-ram 8192` по умолчанию, и промпт рассказчика возвращается из RAM хоста после вызова агента (бенч — 1,00 во всех раундах, §15). `OLLAMA_NUM_PARALLEL=2` не замерялся (D-209) |
+| LM Studio | загрузить модели вручную или выключить Auto-Evict; Max Concurrent Predictions ≥ 2. *Рев. 19:* загрузить каждую модель ролей через `lms load` до игры (`lmstudio_autoevict`). Счёта промпта LM Studio не даёт: `/trace` и бенч показывают только время |
 
-Поведение бэкендов взято из исследования (README llama.cpp, PR #16391, вики koboldcpp, FAQ и `sched.go` Ollama, документация LM Studio) и сверено с исходниками llama-server; проверяется замерами M5c. Второй контекст в памяти стоит ≈ 160 КиБ на токен при 40 слоях × 8 KV-голов × 128 измерений в f16, то есть +8k токенов ≈ 1,25 ГиБ; в q8_0 — вдвое меньше (расчёт).
+Поведение бэкендов взято из исследования (README llama.cpp, PR #16391, вики koboldcpp, FAQ и `sched.go` Ollama, документация LM Studio) и сверено с исходниками llama-server; проверяется замерами M5c. Второй контекст в памяти стоит ≈ 160 КиБ на токен при 40 слоях × 8 KV-голов × 128 измерений в f16, то есть +8k токенов ≈ 1,25 ГиБ; в q8_0 — вдвое меньше (расчёт). *Рев. 19:* вживую на M5d проверены Ollama 0.40.12 и llama-server, который идёт с Ollama (сборка `b1`), на `-np 2 --no-kv-unified` с `--cache-ram` по умолчанию и с `--cache-ram 0`, на модели с полным вниманием (§15). koboldcpp, LM Studio, `-np auto` и модели SWA или гибридные вживую не проверены.
 
 **Время до первого токена — оценка.** Модель исследования:
 - модель 12–14B Q4 на одной GPU;
@@ -2575,15 +2771,15 @@ type LaneJob =
 - новый хвост за ход ≈ 0,8k без Директора и Compendium, ≈ 2,5k с директивой и блоком на глубине 1: они меняются каждый ход, и кэш расходится выше прошлого U;
 - Директор lite ≈ 6–8k на входе и 300–600 на выходе, recall lite ≈ 3k и 60.
 
-Цифры замеряются на M5c.
+Цифры замеряются на M5c. *Рев. 19:* таблица не перемерялась. M5d замерила бенчем один вызов агента между двумя промптами рассказчика (§15); время до первого токена всего хода с Директором и recall — вне M5d (D-209).
 
 | Схема | До первого токена |
 |---|---|
 | без Директора и Compendium, KV тёплый | ≈ 0,5 с |
 | порядок Bunraku на одном слоте: Директор full → recall с причинами → повторная обработка промпта рассказчика | ≈ 45 с |
 | Директор lite + sync recall lite, 1 слот, без кэша хоста | ≈ 25–34 с |
-| Директор lite + prefetch, 1 слот, без кэша хоста (Ollama, koboldcpp без `--smartcache`, llama.cpp с `--cache-ram 0`) | ≈ 21–30 с (Директор ≈ 13–22 + повторная обработка ≈ 8) |
-| Директор lite + prefetch, llama.cpp по умолчанию (`--cache-ram`) или `-np 2` с `id_slot` | ≈ 15–24 с |
+| Директор lite + prefetch, 1 слот, без кэша хоста (koboldcpp без `--smartcache`, llama.cpp с `--cache-ram 0`; *рев. 19:* не Ollama — её раннер идёт с `--cache-ram` по умолчанию, §15, M5d) | ≈ 21–30 с (Директор ≈ 13–22 + повторная обработка ≈ 8) |
+| Директор lite + prefetch, llama.cpp по умолчанию (`--cache-ram`), *рев. 19:* Ollama по умолчанию, или `-np 2` с `id_slot` | ≈ 15–24 с |
 | без Директора, prefetch, 1 слот, без кэша хоста | ≈ 8 с, если фон успел поработать |
 | без Директора, prefetch, кэш хоста или `-np 2` с `id_slot` | ≈ 1,5–2 с (хвост с блоком) |
 | свайп через 2 с после ответа, 1 слот, без кэша хоста | ≈ 0,5 с: фон ещё не начался (`idleDelaySec`); без задержки было бы ≈ 8 с |
@@ -2596,8 +2792,10 @@ type LaneJob =
 - прогрев — запрос с префиксом рассказчика и `max_tokens: 1` после фоновых задач, если нет ни второго слота, ни кэша хоста;
 - вызовы агентов с общим префиксом рассказчика — приём «Classic» из Summarize SillyTavern.
 
+*Рев. 19:* не построено. На бенче M5d кэш рассказчика выживал и так: с закреплением — во всех раундах, на Ollama с одним слотом и кэшем хоста — тоже (§15).
+
 *Рев. 17 — полоса, как построена (M5b) [D-171, D-172, D-180, разделы G, H, I, K]* (`engine/lane.ts`, `engine/sched.ts`):
-- **Задачи** — `file` и `hist`; `prerecall` и ожидание prefetch в полёте придут с recall (M5c, C-10). Задача — `{key, task, on, range, attempt}`; в журнал пишется только её строка `job`.
+- **Задачи** — `file` и `hist`; `prerecall` и ожидание prefetch в полёте придут с recall (M5c, C-10). *Рев. 19:* пришли на M5c, но prefetch — не задача, а отдельный слот полосы с фоновым приоритетом (§7.4.2, «prefetch, как построено») [D-202]. Задача — `{key, task, on, range, attempt}`; в журнал пишется только её строка `job`.
 - **Работа выводится, а не хранится.** Курсора нет: после каждого коммита, `send`, правки, скрытия, переноса головы, смены конфига, глагола `/memory` и при открытии полоса сворачивает путь заново и считает долг: принятые ответы без покрытия (§7.4.3) и одно назревшее окно historian (§7.4.4). Ответ покрыт ключом filing, чья строка применяется, или отменённым ключом, чья отменённая строка не устарела, — если `range` строки держит ответ. Вывод кэшируется по журналу, конфигу и затравке. `compendium.enabled: false` — полосы нет.
 - **Порядок:** задачи file по пути, затем historian. Задача, вытесненная 3 раза подряд (`STARVED_AFTER`), идёт первой и даёт `notice{memory_starved}` раз за сессию. Вытеснения считаются по ключу у filing и по агенту у historian: его ключ двигается вместе с окном. Законченная попытка (готово или сбой) обнуляет счёт.
 - **Задачи по имени** — refile, retry, восстановленный `begin` — идут вместе с выведенными (на общем ключе побеждает выведенная). Они бегут, только пока их агент включён (`filing.enabled`, `historian.interval > 0`); иначе ждут в `MemoryStatus.held` и никогда не начинаются. Без этого правила задача выключенного агента крутилась без конца: тысячи строк `begin` за секунды и замёрзший цикл событий (находка ревью). Проход, перекрытый без продвижения, в тот же взгляд заново не начинается.
@@ -2606,7 +2804,7 @@ type LaneJob =
 - **Парковка:** `maxAttempts` (3) сбоев — ключ припаркован до `/memory retry`; `no_room` паркует сразу. **Предохранитель (раздел K):** две задачи одного агента подряд ушли на парковку — агент на паузе: его задачи остаются в очереди, но не начинаются до `/memory retry` или следующего открытия; `notice{memory_paused}` раз на агента, `MemoryStatus.blocked`.
 - **Перекрытие.** Правка, скрытие, перенос головы, отмена или смена конфига, которая выбивает почву из-под идущей задачи, прерывает её с `superseded` (`agent{status:'skipped', reason:'superseded'}`); ничего не пишется.
 - **Когда начинать (раздел I).** Пока идёт ход своей сессии — ничего. В `auto` — и пока голова — сообщение игрока моложе max(`idleDelaySec`, 2 с). *Отступление от строки «облако» в таблице выше* («filing A(n−1) стартует при `send`»): на облаке проход ждёт конца хода. Демо нашло, почему: задача, начатая между `send` и `runTurn`, на одном месте тут же уступала место рассказчику, а на скриптовой модели съедала его строку.
-- **Планировщик** [D-172]: `acquire(priority, signal, opts)`. Interactive — рассказчик, Директор, sync recall, `draft`; background — filing и historian.
+- **Планировщик** [D-172]: `acquire(priority, signal, opts)`. Interactive — рассказчик, Директор, sync recall, `draft`; background — filing и historian. *Рев. 19:* с M5c фоновый и prefetch recall. Prefetch, которого ждёт ход, повышается до interactive (`createBoost`) [D-203].
   - Удалённый origin: фон идёт рядом, пока есть места. Интерактивный запрос, которому не хватает места, вытесняет самого свежего невытесненного фонового держателя (`preempted`).
   - Локальный origin (`isLocalOrigin`, `providers/http.ts`): интерактивный запрос в работе или в очереди вытесняет **всех** фоновых держателей, даже при свободном месте; фон получает место, только когда интерактивных нет ни в работе, ни в очереди и открыт затвор простоя.
   - Вытесненный держатель хранит место, пока не отпустит: origin никогда не несёт больше своей ёмкости.
@@ -2616,7 +2814,7 @@ type LaneJob =
 - **Режим** [D-171, разделы G и H]: `EngineOptions.lane` — `'auto'` (сам начинает задачи) или `'manual'` (ничего не начинает; `memoryWait` прогоняет полосу). По умолчанию — `'manual'`, если при открытии движка `RP_CORE_LANE=manual`, иначе `'auto'`. `test/preload.ts` ставит `manual`, поэтому старые скриптовые тесты и запущенные ими CLI вызовов filing не видят; тесты M5b включают полосу сами. One-shot команды (`rp-core send` и подобные) открывают движок в `manual`: они не начинают задачу, которую не успеют закончить. CLI в пайпе полосу не ждёт — ждёт `/memory wait`.
 - **События** (шина сессии; никогда не в потоке хода): `agent{agent:'filing'|'historian', job, status: queued|started|preempted|done|failed|parked|skipped, count?, skipped?, code?, reason?}`; `memory{change, ref: ключ, kind, name, by:'filing'|'historian'}` на каждую запись, которую строка правда изменила; `memory{change:'reverted'}` — на записи, которые убрали refile или отмена; `idle{background:n}`. Вызовы полосы считаются в `/usage` и в блоке usage TUI (по `calls` строк). *Принято:* вызовы перекрытого или вытесненного прохода в журнал не попадают, и `/usage` их не считает (шина о них сказала).
 - **Уведомления** (шина; REPL печатает их строкой `!`): `memory_backlog` — непокрытых принятых ответов больше `everyN + 3` (C-1), раз за сессию; `memory_starved` — раз за сессию; `memory_paused` — раз на агента; `filing_classic_conflict` — раз на имя за сессию; `slots_shared` — раз за сессию, когда два разных соединения сессии (рассказчик, его запасная модель, Директор, recorder, recall) ведут на один origin (G-21); `recorder_unavailable` — раз, пока работа есть, а у recorder нет маршрута (и при одном historian, раздел K).
-- **Не в M5b** (G-22, M5c): зеркалирование опций раннера Ollama и `ollama_options_mismatch`, `lmstudio_autoevict`, `id_slot`, `history_crowded`.
+- **Не в M5b** (G-22, M5c): зеркалирование опций раннера Ollama и `ollama_options_mismatch`, `lmstudio_autoevict`, `id_slot`, `history_crowded`. *Рев. 19:* `history_crowded` построено на M5c [D-205], `id_slot` и `lmstudio_autoevict` — на M5d [D-211, D-212]. Зеркалирования опций Ollama и `ollama_options_mismatch` нет: вместо них — `ollama_reload_risk` [D-212].
 
 #### 7.4.8 Ручное управление, экспорт и импорт
 
@@ -2632,7 +2830,7 @@ type LaneJob =
 
 **Что работает сейчас (рев. 16, M5a).** Всё ручное, кроме агентов: `/memory [list]`, `show`, `tree`, `new`, `edit`, `add`, `retire`, `restore`, `export` и `/memory on|off` (§7.4.9, §12.4). `retire` и `restore` работают для любой записи. `<ref>` — `C<n>`, ключ или однозначное имя (D-150). На `/memory undo|refile|retry` REPL отвечает, что они придут с M5b (агенты Compendium), на `/memory recall|profile|mode` — с M5c (recall).
 
-**Что работает сейчас (рев. 17, M5b) [D-180, D-181].** Ещё `/memory undo|refile|retry` и новые `/memory wait|status` (§7.4.9, §12.4). На `/memory recall|profile|mode` REPL отвечает, что они придут с M5c.
+**Что работает сейчас (рев. 17, M5b) [D-180, D-181].** Ещё `/memory undo|refile|retry` и новые `/memory wait|status` (§7.4.9, §12.4). На `/memory recall|profile|mode` REPL отвечает, что они придут с M5c. *Рев. 19:* пришли на M5c [D-206]; не построена только `/memory recall test` (§7.4.9).
 - **`/memory undo <ref|#n> [file|hist]`** пишет `revert` для прохода filing, а затем historian, привязанного к сообщению: сначала действующая строка, чей `on` — это сообщение, иначе та, чей `range` его держит; `file` или `hist` выбирает один. Отменяется только применённый проход; уже отменённый или устаревший — `changed: false`, ничего не пишется. Идущая задача ключа перекрывается. Полоса этот проход заново не пишет (D-74); строка подтверждения говорит, как вернуть: `/memory refile #n file`.
 - **`/memory refile <ref|#n> [file|hist]`** ставит проходы сообщения заново по ключу; без `file|hist` — каждый привязанный проход и ещё filing, если ответ принят и ни одна строка filing его не покрывает (раздел K). В журнал refile не пишется: задача живёт, пока сессия открыта. Новая строка заменяет прежнюю и перекрывает отмену. Отказы словами: Compendium выключен, сообщение скрыто, ответ ещё не принят (`filing.wait`), ключ припаркован (его возвращает `/memory retry`).
 - **`/memory retry [#n]`** пишет `job{retry}` для припаркованных ключей пути (или сообщения n) и ставит их; заодно снимает паузу предохранителя. Ключи, чьи ответы с тех пор покрыты другой строкой или скрыты, не перечисляются и не повторяются (раздел K).
@@ -2706,6 +2904,17 @@ type LaneJob =
 - **`/trace`** — строка `recap:` после строки `compendium:`: `recap: 1 arc: C21 "Украденный свет" rev 41 · 1 summary: C20 "Переправа к маяку" · boundary 1f6b8745`. Пустой слот строки не даёт.
 - **TUI** — панель Agents получает блоки Filing и Historian из событий полосы (статус, время, `memory: <изменение>`), идёт ли ход или нет (D-128).
 
+*Рев. 19 — что добавила M5c [D-206, разделы H, I и K]* (вывод — из демо, `docs/M5C-DEMO.md`). Из списка выше не построены `/memory recall test <текст>` и строка статуса recall; `/memory profile` только показывает — менять профиль им нельзя (профиль — `compendium.profile`). `/model recall <conn:model>` есть.
+- **`/memory recall [--turn <#n|id>]`** (или просто `5`, `#5`, id) — запись ответа: `recall for #17: sync · recalled 2 · lite · script:default · tagged`, выборы в порядке recall с `C<n>` и причинами, строка `read:` (неизвестные, повторы, сверх предела, по имени, выловленные, не показанные в индексе), затем `1 call · 1.3s · 1162 in / 31 out tokens`. Принятый prefetch — `1 call in the background, without the player's message`; повтор — `0 calls: the picks of #n`; сбой и пропуск — причина словами и «the selector picked alone (lexical)». Без записи — `lexical` или `off` по трассе ответа. По умолчанию — последний ответ на пути, кроме приветствия.
+- **`/memory profile`** — заголовок (`auto`: lite ниже 24 576) и строки block, recall, filing, historian: профиль, окно, которое его решило, `conn:model`, за кем следует привязка (D-85), у recall — `up to N picks, reading the last M messages`; `not running: …`, когда агент не работает (filing выключен, `interval 0`, режим `lexical` или `off`, полоса `manual`).
+- **`/memory mode`** без аргумента — режим и откуда он (умолчание, сессия, `RP_CORE_RECALL`, скрипт без строки recall) и что он значит здесь: prefetch с `grace_sec` и `on_miss` или sync рядом с Директором — по локальности; при полосе `manual` — что prefetch нет и решает `on_miss`. С режимом — пишет `compendium.recall.mode` сессии, с следующего ответа; во время хода — отказ.
+- **Строки хода** — приглушённые, перед ответом: `⋯ recall: recalled (2)`, `adopted (2)`, `reused (2)`, `fallback [<код>]`. **Строки полосы** — как у filing: `⋯ recall: prefetched after #21 → 2: C17 "…", C6 "…"`, `→ nothing picked`, `the prefetch after #n failed [<код>]`, вытеснение — словами о том, что стало с ответом. Строка `prefetched` не печатается после ответа, который этот prefetch уже принял.
+- **`/trace`** — строка `recall:` перед строкой `compendium:`: `recall: sync · 2 picked: C17 "…", C5 "…" · 1 call 1.2s`; `prefetch after #21 · 2 picked: … · 0 calls in this turn (the prefetch: 1 call 0.2s)`; `reused from <id> (another version of #17) · … · 0 calls`; `sync · failed [timeout] → lexical · 1 call 4.0s`; `prefetch after #19 · missed [prefetch_missed] → lexical · 0 calls`; без записи — `lexical (no recall call; the selector picked alone)` или `off (no recall call)`.
+- **`/memory status`** — строка prefetch: идёт, в очереди, `prefetched after #23, ready for the next reply: 2 picked: …`, сбой — «the next reply falls back», пропуск — «the next reply goes without recall (lexical)». **`/memory wait`** ждёт и prefetch.
+- **`/usage`** — строка `recall` считает вызовы sync по трассе и вызовы принятого или проваленного prefetch по записи.
+- **TUI** — блок Recall в панели Agents: у хода `recalled (n) · sync · 0.4s`; у полосы — `Recall · prefetched (n)`, блок помечен как полосы и сбрасывается `idle{background:0}`, если ещё стоял в очереди. Токены prefetch считаются, только когда его приняли.
+- `rp-core chat --help` называет recall и `RP_CORE_RECALL=lexical|off` рядом с `RP_CORE_LANE`.
+
 *Рев. 16 — глаголы `SessionHandle` [D-159 с правками раздела H]:*
 
 ```ts
@@ -2741,6 +2950,7 @@ interface MemoryStatus {
   held?: LaneTaskInfo[];                                           // задачи по имени, чей агент выключен
   backlog: number;                                                 // принятые ответы без покрытия
   blocked?: { agent: 'filing' | 'historian' | 'both'; reason: 'no_route' | 'paused'; message: string };   // раздел K
+  prefetch?: { basis: string; on: string; state: 'queued' | 'running' | 'ready'; record?: RecallRecord };   // рев. 19 (M5c), раздел H
 }
 interface MemoryLaneWrite { keys: string[]; changed: boolean }
 memoryUndo(input: { messageId: string; task?: 'file' | 'hist' }): MemoryLaneWrite;
@@ -2754,25 +2964,31 @@ memoryStatus(): MemoryStatus;
 - `memoryUndo` пишет по строке `revert` на ключ (`on` — `on` отменённой строки) после пробного прогона и шлёт `memory{change:'reverted', by:'user'}` на каждую запись, которую отмена правда меняет.
 - `memoryRetry` без припаркованных ключей, но с агентом на паузе возвращает `{keys: [], changed: true}`: пауза снята.
 - `memoryWait` разрешён и во время хода: до конца хода ничего не начнётся. Таймаут больше 2³¹ − 1 мс ждёт столько. `idle: false` — истёк срок или осталась задача, которую можно запустить.
+- *Рев. 19 (M5c) [разделы H, I и K]:* в `auto` `memoryWait` ждёт и prefetch — в очереди, идущий или положенный голове; пока он есть, `idle: false`. `MemoryStatus.prefetch` — prefetch для головы-ответа (или для ответа, на который отвечает сообщение игрока на голове): `queued` — положен, но не начат; `running` — начат (может ещё ждать места); `ready` — запись готова, и со сбоем тоже. Нет prefetch — поля нет; при `lexical` из `test/preload.ts` его нет никогда. `idle{background}` считает prefetch.
 
-**Протокол (M6)** — команды `memory/*` заменяют прежние (§12.2):
+**Протокол (M6)** — команды `memory/*` заменяют прежние (§12.2). *Рев. 19 — как построено (`protocol/rpc.ts`) [D-224]:*
 
 ```ts
-| { method: 'memory/list'; params: { sessionId: string; at?: string; type?: string; includeRetired?: boolean } }
-| { method: 'memory/get'; params: { sessionId: string; ref: string; at?: string } }       // → { entry, render, brief }
-| { method: 'memory/tree'; params: { sessionId: string; at?: string; book?: string } }
-| { method: 'memory/file'; params: { sessionId: string; type: EntryType; data: Record<string, unknown> } }
-| { method: 'memory/add'; params: { sessionId: string; title: string; keys: string[]; content: string } }   // заметка; глагол memoryAdd — с M3, метод — с M6
-| { method: 'memory/edit'; params: { sessionId: string; ref: string; set?: Record<string, unknown>; unset?: string[];
-      keys?: string[]; featured?: boolean } }
-| { method: 'memory/retire' | 'memory/restore'; params: { sessionId: string; ref: string; reason?: string } }
-| { method: 'memory/undo' | 'memory/refile'; params: { sessionId: string; messageId: string; task?: 'file' | 'hist' } }   // task — рев. 17
-| { method: 'memory/retry'; params: { sessionId: string; messageId?: string } }
-| { method: 'memory/wait'; params: { sessionId: string; timeoutMs?: number } }   // рев. 17: глаголы — с M5b,
-| { method: 'memory/status'; params: { sessionId: string } }                     //   методы проектируются к M6
-| { method: 'memory/recall'; params: { sessionId: string; turnId?: string; test?: string } }   // → RecallRecord + trace.compendium
-| { method: 'memory/export'; params: { sessionId: string; name: string; format: 'core' | 'compendium' } }
+| { method: 'memory/list'; params: { sessionId: string; at?: string; type?: string; includeRetired?: boolean } }   // → MemoryRow[]
+| { method: 'memory/get'; params: { sessionId: string; ref: string; at?: string } }       // → { ref, entry, render, brief }
+| { method: 'memory/tree'; params: { sessionId: string; at?: string; book?: string } }    // → TreeNode[]
+| { method: 'memory/status'; params: { sessionId: string } }                   // → MemoryStatus; работает и во время хода
+| { method: 'memory/wait'; params: { sessionId: string; timeoutMs?: number } } // → MemoryStatus & { idle }; и во время хода
+| { method: 'memory/recall'; params: { sessionId: string; turnId?: string } }  // → { messageId, record, compendium }
+| { method: 'memory/file'; params: { sessionId: string; type: string; data: Record<string, unknown> } }   // → MemoryWrite & { ref, change }
+| { method: 'memory/add'; params: { sessionId: string; title: string; content: string; keys?: string[] } }  // заметка → MemoryWrite
+| { method: 'memory/edit'; params: { sessionId: string; ref: string; title?: string; content?: string; keys?: string[];
+      set?: Record<string, unknown>; unset?: string[]; featured?: boolean } }   // → MemoryWrite
+| { method: 'memory/retire'; params: { sessionId: string; ref: string; reason?: string } }   // → MemoryWrite
+| { method: 'memory/restore'; params: { sessionId: string; ref: string } }                   // → MemoryWrite
+| { method: 'memory/undo' | 'memory/refile'; params: { sessionId: string; messageId: string; task?: 'file' | 'hist' } }   // → MemoryLaneWrite
+| { method: 'memory/retry'; params: { sessionId: string; messageId?: string } }              // → MemoryLaneWrite
+| { method: 'memory/export'; params: { sessionId: string; name: string; format: 'core' | 'compendium'; force?: boolean } }
 ```
+
+- *Рев. 19.* Каждый метод — тонкая обёртка глагола выше, с его отказами (`-32000` с `data.code`); форму params проверяет диспетчер (`-32602`) [D-221]. Против плана: `memory/add` берёт `keys` необязательно, как глагол; `memory/edit` — ещё `title` и `content`; `memory/restore` без `reason`; `memory/export` — с `force`; `memory/status` и `memory/wait` построены на M6.
+- `at: <messageId>` у `list`, `get` и `tree` сворачивает Compendium на другой ветке и голову не двигает. На M6 тот же `at` получили глаголы `memoryList`, `memoryGet` и `memoryTree`; неизвестный id — `not_found`.
+- `memory/recall` отдаёт `RecallRecord` ответа и его `trace.compendium` (после continue — трассу последнего продолжения): последнего ответа на активном пути или ответа хода `turnId`. Ответа на пути нет — `not_found`. Параметра `test` (выбор селектора без модели) нет. У `/memory profile` и `/memory mode` (M5c) методов нет: режим recall меняет `session/configure`.
 
 **События:**
 
@@ -2787,6 +3003,8 @@ memoryStatus(): MemoryStatus;
 
 *Рев. 16:* на M5a событие `memory` пишут только глаголы человека (`by:'user'`), с `ref` = ключ записи; `file` даёт `created` или `merged` — по эффекту своей строки. Панель Agents в TUI события `by:'user'` по-прежнему не показывает.
 
+*Рев. 19 (M5c) [D-203]:* события `agent{recall}` хода несут `turnId`: `started` (sync получил место), `recalled` (sync, `source:'sync'`, `count`), `adopted` (prefetch, `source:'prefetch'`), `reused`, `fallback` (`source:'lexical'`, `code` — сбой или `prefetch_missed`), `skipped` (`empty_index`, `no_room`, `no_connection`). События prefetch идут от полосы, **без** `turnId`: `queued` (раз на базу), `started`, `preempted`, `done` (`count`, `source:'prefetch'`), `failed` (`code`), `skipped` с `reason:'superseded'`. callKey вызова prefetch — `p_<ответ>:recall:N`: так TUI отличает его от вызова хода.
+
 *Рев. 17 [D-171, разделы G, I]:* полоса шлёт `agent` с `agent: 'filing' | 'historian'` и `job`, без `turnId`: `queued` (без `job` — id выдаётся при запуске; снова при каждом возврате в очередь), `started` (вызов получил место), `preempted`, `done` (`count` — операции, `skipped` — истинное число пропусков), `failed` (`code`), `parked`, `skipped` с `reason: 'superseded'`. `memory` с `by:'filing' | 'historian'` приходит на каждую запись, у которой строка правда изменила данные, имя или состояние: записи сравниваются до и после строки, так что refile говорит `merged`, а не `created`, о записях, которые уже были (раздел G). Записи, которые убрали refile или отмена, получают `change: 'reverted'`. События полосы идут только по шине сессии, не в поток хода.
 
 **Уведомления:** `recall_slow`, `recall_index_truncated`, `prefetch_missed` (раз за сессию), `memory_backlog`, `memory_starved`, `compendium_large_entry`, `filing_classic_conflict`, `library_entry_missing`, `slots_shared`, `slots_detected`, `ollama_options_mismatch`, `lmstudio_autoevict`, `history_crowded`, `director_lite`.
@@ -2795,6 +3013,10 @@ memoryStatus(): MemoryStatus;
 
 *Рев. 17:* на M5b есть `memory_backlog`, `memory_starved`, `filing_classic_conflict`, `slots_shared` и новые `memory_paused` (предохранитель, раз на агента) и `recorder_unavailable` (у recorder нет маршрута; раз, пока работа есть) [D-171, раздел K]. Полоса шлёт их по шине сессии; REPL печатает каждое уведомление шины. `recall_slow`, `recall_index_truncated`, `prefetch_missed`, `slots_detected`, `ollama_options_mismatch`, `lmstudio_autoevict` и `history_crowded` — M5c (G-22).
 
+*Рев. 19:* на M5c есть `recall_slow`, `prefetch_missed`, `recall_index_truncated` (все `info`, раз за открытую сессию; когда — §7.4.2) и `history_crowded` (`warn`, раз за открытую сессию, §7.4.6) [D-204, D-205]. Ход сообщает их как остальные свои уведомления. `slots_detected`, `ollama_options_mismatch` и `lmstudio_autoevict` ушли в M5d [D-196] (§7.4.7).
+
+*Рев. 19 (M5d) [D-212]:* построены `slots_detected` (с новым смыслом: llama.cpp, который ядро не закрепляет) и `lmstudio_autoevict`; `ollama_options_mismatch` — нет, его место занял `ollama_reload_risk`; новое `slots_pinned` (info) говорит, что слоты закреплены. Все четыре — раз за сессию по коду и предмету, по шине (§7.4.7, «Уведомления о сервере»).
+
 **Трасса** (§5.7):
 - `agents` получает ключ `recall`. Статус filing и historian хранится в строках `job` и `mem` (`gen`, `skipped`), в событиях `agent` и в `/memory`: эти агенты работают после коммита ответа, и в трассу хода попасть не могут;
 - `compendium: {rev, source, picks: {ref, via}[], injected: {ref, tok}[], cut: {ref, tok}[], repeated, hidden}` — без текстов записей; `via` — `mention`, `model` или `window`;
@@ -2802,7 +3024,7 @@ memoryStatus(): MemoryStatus;
 - `recap` получает `arcs: {key, rev}[]`.
   - *рев. 17:* и `profile`, `share` (раздел K, §5.7).
 
-**Снимок протокола** получает `compendium?: {entries, byType, pending}`.
+**Снимок протокола** получает `compendium?: {entries, byType, pending}`. *Рев. 19:* построено `compendium: {entries, pending}`, без `byType`; `pending` — задачи в очереди полосы [D-222].
 
 **Настройки** — `[compendium]` вместо `[memory]` (§13):
 
@@ -2819,7 +3041,7 @@ interface CompendiumConfig {
   recall: { mode: 'auto' | 'sync' | 'prefetch' | 'lexical' | 'off'; onMiss: 'auto' | 'lexical' | 'sync';
             maxEntries?: number /* по профилю: full 10, lite 4; [1–30] */; minEntries: number /* 0 [0–20] */;
             contextMessages?: number /* по профилю: full 20, lite 6; [5–100] */; graceSec: number /* 4 */;
-            timeoutSec?: number /* 30 локально, 20 удалённо */; onSwipe: 'reuse' | 'rerun'; guidance: string /* ≤ 8 000 */ };
+            timeoutSec?: number /* 30 локально, 20 удалённо, prefetch 60; рев. 19: заданный — для всех трёх */; onSwipe: 'reuse' | 'rerun'; guidance: string /* ≤ 8 000 */ };
   filing: { enabled: boolean; wait: number /* 1 [0–5] */; everyN: number /* 1 [1–10] */;
             allow: EntryType[] /* все, кроме summary */; timeoutSec?: number /* 300 / 120 */ };
   historian: { interval: number /* 20 [0–100] */; recapAfter: number /* 24 */; overlap?: number /* full 10, lite 6 */ };
@@ -2832,6 +3054,7 @@ interface CompendiumConfig {
 - В `SessionConfig` (`session/entries.ts`) все поля `CompendiumConfig`, кроме `enabled`, необязательны. Умолчания выше подставляет `resolveCompendium(c)` (`agents/compendium/profile.ts`): profile `auto`, minShare 0,4, maxAttempts 3, idleDelaySec 8, books `{}`, recall `{mode 'auto', onMiss 'auto', minEntries 0, graceSec 4, onSwipe 'reuse'}`, filing `{enabled true, wait 1, everyN 1, allow — все, кроме summary}`, historian `{interval 20, recapAfter 24}`. Значение не того вида или вне диапазона — умолчание; старое имя в snake_case, которое мог сохранить заголовок, тоже читается (camelCase сильнее).
 - M5a читает `enabled`, `profile`, `minShare` и `books`; остальное разбирается и проверяется для M5b и M5c.
 - *Рев. 17 [D-182]:* M5b читает ещё `filing.*` (`enabled`, `wait`, `everyN`, `allow`, `timeoutSec`), `historian.*` (`interval`, 0 — выключен; `recapAfter`; `overlap`), `maxAttempts`, `idleDelaySec`, `guidance` и `language`; `profile` — теперь и для агентов, по окну recorder. Новых ключей нет. `filing.timeoutSec` без значения — 300 с на локальном соединении и 120 с на удалённом; срок берёт и historian. Умолчания — выше. Не читает пока только `recall.*` (M5c).
+- *Рев. 19 [D-201, D-204]:* M5c читает `recall.*` — все ключи, что выше. Новых нет. Умолчания по профилю: `maxEntries` — full 10, lite 4; `contextMessages` — full 20, lite 6; `minEntries` не выше `maxEntries` (и числа показанных записей). `timeoutSec` без значения — 30 с локально, 20 с удалённо и 60 с у prefetch; заданный — одно значение для всех трёх. Режим без значения — `auto`, если окружение не подменяет умолчание (`RP_CORE_RECALL`, §13).
 - **Новые сессии** получают `compendium: {enabled: true}`. Сохранённый заголовок остаётся как был. Сессии, созданные до M5a, хранят `enabled:false` (умолчание M3 и M4), если `config.toml` не задавал иного; `/memory on` их включает.
 - **Проверки.** `config.toml` — §13. Заголовок сессии проверяется мягко: только `enabled`, иначе заголовок M4 со snake_case-таблицей не открылся бы. То, что пишет сессия, проверяет `configure()`: часть патча `compendium` — в тех же диапазонах, что и `config.toml`, по именам camelCase; `null` удаляет поле; имя в snake_case — отказ `invalid config: compendium.<путь>: <почему>`. `configure({compendium: {enabled}})` действует сразу: следующий `view()`, `/memory`, `preview` и ход сворачивают уже с новой затравкой.
 
@@ -2844,13 +3067,13 @@ interface CompendiumConfig {
 | квитанции, undo, commit, очередь, deps, book-writer, `entry-fields` | ≈ 470 | никогда: их заменяют свёртка, `revert` и «новейшее действие по ключу» |
 | Reconcile — зеркальные связи MIRROR/KEEP | 134 | после M5: `/memory reconcile`, без модели |
 | Diagnostics — бюджеты, почти-дубли, пересказы без сюжета | 122 | после M5: `/memory diag`, без модели |
-| Ingest — импорт старого чата | 266 | вместе с импортом чатов [D-9]: задачи полосы `ingest:<from>-<to>`, привязанные к кускам пути |
+| Ingest — импорт старого чата | 266 | вместе с импортом чатов [D-9]: задачи полосы `ingest:<from>-<to>`, привязанные к кускам пути. *Рев. 19:* импорт историй RoleCall и чатов ST построен без него: прошлое импортированного чата filing не пишет [D-189, D-240]. Ingest не построен |
 | Standardize — классические записи в типизированные | 721 | после M9: копией книги, не на месте [D-3] |
 | Refine, построенное моделью дерево и его ограничения | 354 + 571 | нет: это авторинг в UI Bunraku |
 | Dashboard, crossrefs, dossiers, storyboards | 167 + 529 | в UI Bunraku, по данным `memory/list` и `memory/tree` |
 | тул `explore_lorebook` | 108 | заменён `search_lore`/`read_lore` по Compendium с хэндлами `C<n>` |
 | smart context (`summary-cut.ts`) | 30 | позже |
-| ярусы графа связей, «залипание» выбора, `recall.every` | — | после замеров M5c |
+| ярусы графа связей, «залипание» выбора, `recall.every` | — | после замеров M5c (рев. 19: замеры — M5d [D-196]) |
 | консолидация разросшихся записей | — | позже, по уведомлению `compendium_large_entry` |
 
 ### 7.5 Поиск по истории
@@ -2958,6 +3181,7 @@ interface Provider { stream(req: ModelRequest, env: { fetch: typeof fetch; key: 
 - `AssistantResult.replay` хранит дословные нагрузки текущего раунда. Поток отдаёт их событием `replay` прямо перед `finish`, не больше раза на вид: у openai-chat это `reasoning_details` и `tool_extra`. Цикл кладёт их на wire-сообщение раунда (§8.6).
 - Совпадение `replay` проверяется только по `connection` + `model`; `kind` говорит адаптеру, как его рендерить.
 - Изменяемого состояния на уровне модуля нет: синглтон адаптера Anthropic в RoleCall перемешивал параллельные потоки.
+- *Рев. 19 (M7, M8):* нативные адаптеры устроены проще. Чистый `buildAnthropicRequest` / `buildGeminiRequest` → `{url, headers, body}` есть, а отдельной фабрики парсера нет: поток читается генератором внутри `stream()` на каждый вызов. `usage`, `replay` и `finish` они отдают только в конце потока — после `message_stop` у Anthropic, после EOF у Gemini (у него нет `[DONE]`), — так что пауза после `finish` (§8.8) их не касается. `Provider.wire(req)` у обоих строит тот же запрос без ключа.
 - `fetch` и ключ передаются **на каждый запрос** (`Engine.open({fetch, keys})`), и провайдер между запросами не кэшируется. Это нужно хосту с собственным замком исходящих запросов (Bunraku).
 
 **Общий `sse.ts`.**
@@ -2993,19 +3217,24 @@ interface ModelCaps {
                       | 'anthropic-blocks' | 'gemini-parts';
                tags?: string[]; control: 'none' | 'effort' | 'budget' | 'adaptive' | 'level' | 'toggle';
                canDisable: boolean; offShape?: unknown /* Sonnet 5.5: between_tools */;   // canDisable: reasoning 'none' выключает thinking
-               echo: 'never' | 'tool-turn' | 'all-with-tools'; answerInReasoning?: boolean };   // 'all-with-tools' — эхо DeepSeek (§8.4)
+               echo: 'never' | 'tool-turn' | 'all-with-tools'; answerInReasoning?: boolean;   // 'all-with-tools' — эхо DeepSeek (§8.4)
+               efforts?: string[] };   // рев. 19 [D-54]: допустимые значения effort
   samplers: { accepted: string[]; fixed?: boolean; wire?: Record<string, string> };
   streamUsage: 'stream_options' | 'always' | 'timings' | 'none';
   caching: 'auto-prefix' | 'anthropic-breakpoints' | 'none';
   maxInFlight: number;                 // ёмкость origin: явный max_in_flight, иначе 1 локально и 4 удалённо; проба слотов только советует [D-84]
-  source: ('host' | 'model' | 'catalog' | 'probe' | 'user')[];
+  slotPin?: { narrator: number; agents: number } | null;   // рев. 19 [D-211]: id_slot по агенту (llama.cpp); null — slot_pin = false, не закреплять
+  cacheMinTokens?: number; stopMax?: number;   // рев. 19 [D-54]: минимум для кэш-метки (§8.4); сколько стопов принимает сервер
+  extraBody?: Record<string, unknown>;         // рев. 19 [D-54]: поля тела по хосту и модели (OpenRouter, llama.cpp cache_prompt); защищённые не перезаписываются
+  source: ('host' | 'model' | 'catalog' | 'probe' | 'user' | 'script')[];   // рев. 19: 'script' — caps соединения `--provider script:`
 }
 ```
 
 **Порядок источников.** Каждый следующий уточняет предыдущий.
 
-1. **Пресеты хостов** (`hosts.json`): llama.cpp :8080, Ollama :11434, LM Studio :1234, koboldcpp :5001, vLLM, OpenRouter, NanoGPT, DeepSeek, api.anthropic.com, generativelanguage.googleapis.com. Пресеты локальных серверов (`LOCAL_SERVER_KINDS`: llama.cpp, Ollama, LM Studio, koboldcpp, vLLM) не утверждают `structuredOutput`: его подтверждает проба или пользователь (§7.2), и `checkCapsRows` отвергает `confirmedBy:'host'` в такой строке.
+1. **Пресеты хостов** (`hosts.json`): llama.cpp :8080, Ollama :11434, LM Studio :1234, koboldcpp :5001, vLLM, OpenRouter, NanoGPT, DeepSeek, api.anthropic.com, generativelanguage.googleapis.com. *Рев. 19:* с M1b в `hosts.json` есть ещё OpenAI, Mistral AI (`toolIdFormat:'mistral9'`), Groq и OpenAI-совместимый endpoint Gemini. Пресеты локальных серверов (`LOCAL_SERVER_KINDS`: llama.cpp, Ollama, LM Studio, koboldcpp, vLLM) не утверждают `structuredOutput`: его подтверждает проба или пользователь (§7.2), и `checkCapsRows` отвергает `confirmedBy:'host'` в такой строке.
 2. **Строки по шаблону модели** (`models.json`). Например, у claude-opus-5-5, claude-sonnet-5-5, claude-fable-5-1 и claude-mythos-5-1 в `toolChoice` нет `'required'`, а также стоят `canDisable:false`, `prefill:'none'` и фиксированные семплеры.
+   - *Рев. 19 (M7, M8):* у нативных диалектов свои строки (поле `dialect` в строке, `as_of` 2026-10-29). Claude: thinking `budget` у 4–4.5 (выключается) и `adaptive` у 4.6+ и 5-й серии (не выключается); префилл `assistant-last` только у 4–4.5; фиксированные семплеры у 4.6+ и 5-й серии; нативный mid-system (§8.5); `cacheMinTokens` по модели (§8.4). Gemini: `budget` у 2.5 (выключается только у 2.5 Flash), `level` у 3 и 4 (`minimal` — у 3 Flash и 3 Flash Lite). Пресеты хостов обоих — `tools:'native'`, `toolChoice: ['auto', 'none']`, `structuredOutput` от хоста, `midSystem:'as-user'`, `prefill:'none'`, `reasoning.control:'none'`: модель вне строк не получает ни thinking, ни префилла, а поздние system идут заметкой.
 3. **Метаданные каталогов:** OpenRouter `supported_parameters`, Ollama `/api/show`, llama.cpp `/props`, koboldcpp `/api/extra/version`.
 4. **Активные пробы** (`rp-core probe <conn>:<model> --active`, в REPL `/probe --active`). Они зовут модель через тот же адаптер, что и ход, — не больше `ACTIVE_PROBE_MAX_CALLS` (6) вызовов, повтор тоже считается:
    - `stream` — пинг: ответ, поле рассуждений, usage в потоке. Если не пришли ни usage, ни `timings` llama.cpp, а запись не просила `stream_options`, пинг повторяется с ним (`stream_usage`);
@@ -3029,6 +3258,8 @@ interface ModelCaps {
 **Одно правило для всех агентов.** Транспорт определяется до вызова и **никогда** не переключается посреди хода. Fallback с другим транспортом получает свой запрос, собранный заново, и идёт, только пока у хода нет вывода [D-90]: транспорты в одном ходе не смешиваются. Сбой транспорта превращается в типизированный отказ. У рассказчика совет `notice{code:'caps.suggest'}` с готовой строкой конфига приходит в одном случае: DeepSeek отверг заглушки эха (§8.4). Транспорт модели показывает `rp-core probe --active`.
 
 Запись возможностей меняется только через пресет, каталог, явную пробу или пользователя. Ядро не делает выводов из текста ошибок и ничего не применяет само.
+
+*Рев. 19 [D-211].* Одно исключение — `slotPin`. Без `slot_pin` в конфиге движок ставит его сам, по ответу сервера (§7.4.7), но только на копию caps одного вызова: ни в запись возможностей, ни в `caps-cache.json` он не попадает. Поле входит в `PATCHABLE`, так что его можно задать поправкой caps, как остальные поля `[caps]`.
 
 ### 8.3 Транспорты тулов
 
@@ -3064,6 +3295,7 @@ interface ModelCaps {
 - **Нечитаемый блок** всё равно становится вызовом (имя из блока или `invalid_tool`) с ошибкой в результате: пары вызов/результат в хранении не рвутся.
 - **Стриминговый вырезатель** с carry-буфером не пускает обрывки тегов в события `text`. Он придерживает и хвостовые пробелы, и строку, которая может оказаться fence вокруг следующего блока; склейка всего, что он выдал, равна `stripPromptedCalls` всего текста. Решённые блоки он помнит и заново не читает: 100 КБ незакрытых открывающих тегов, поданные по 16 символов, вырезаются быстрее чем за 0,1 с (было ≈ 17 с).
 - **`PROMPTED_STOP`** (`<tool_result`) — стоп-последовательность: раунд шлёт стопы семплера плюс её. Если стопов больше `caps.stopMax`, она остаётся, а уходят последние стопы семплера. Если сервер стоп проигнорировал, всё с `<tool_result` срезается, прежде чем текст раунда вернётся в провод (`cutAtPromptedStop`).
+  - *Рев. 19 [D-229]:* у Claude с фиксированными семплерами (4.6+ и 5-я серия) и при `api_version` от `2026-10-21` адаптер не шлёт `stop_sequences` вовсе, и `PROMPTED_STOP` до сервера не доходит. Prompted-раунд там держится только на `cutAtPromptedStop`. Транспорт пресета api.anthropic.com — native, так что это касается только явного `tools = "prompted"`.
 - **Результаты** возвращаются одним user-сообщением: блоки `<tool_result name="…" id="…">` в порядке вызовов, через пустую строку; `</tool_result` внутри текста экранируется. id вызовов — `call_<раунд>_<i>`. Сырой текст вызова внутри хода остаётся в wire-сообщениях: если его вырезать, модель отучится звать тулы.
 
 **Восстановление протечек** (любой диалект и транспорт) [D-57].
@@ -3078,6 +3310,7 @@ interface ModelCaps {
 **Финальный раунд** [D-91].
 
 - native: `toolChoice:'none'`, схемы остаются объявленными. Если сервер `tool_choice` не соблюдает (`toolChoiceHonored:false`, Ollama), адаптер не шлёт ни тулов, ни `tool_choice`: иначе модель всё равно позвала бы тул.
+  - *Рев. 19 [D-228]:* нативные Anthropic и Gemini на финальном раунде не шлют ни схем, ни `tool_choice` / `toolConfig`, хотя их пресеты `'none'` знают и соблюдают. Это отступление от D-91: схемы на финальном раунде не объявлены.
 - prompted: запрос тот же, что у обычного раунда.
 - Цикл, который уже звал тулы, добавляет на финальный раунд `FINAL_CUE` — просьбу продолжить сцену без тулов. У native это отдельное сообщение: `system`, если `caps.midSystem` — `native` или `anthropic-native`, иначе `user` (src `core:final_cue`). У prompted — конец user-сообщения с результатами.
 - Вызовы финального раунда не исполняются (§7.1).
@@ -3088,7 +3321,7 @@ interface ModelCaps {
 
 - id и имена уникальны и безопасны, аргументы — объекты.
 - На каждый вызов есть ответ, порядок сохранён, висящих пачек нет.
-- id ремапятся под диалект: `functionResponse.id` у Gemini, 9-символьные id у Mistral.
+- id ремапятся под диалект: `functionResponse.id` у Gemini, 9-символьные id у Mistral. *Рев. 19:* у Gemini ремапа нет — `functionResponse` несёт id вызова, а id от сервера и есть id вызова, если он проходит `SAFE_ID` и ещё не занят в ходу (§8.4); переименование циклом — §8.6.
 
 ### 8.4 Адаптеры в порядке сборки
 
@@ -3111,45 +3344,65 @@ interface ModelCaps {
   - **Отказ.** Если запрос с заглушками получил HTTP 400 с кодом `bad_request`, приходит `notice{code:'caps.suggest'}`, раз за сессию. Он называет выход: `tools = "none"` в `[caps."conn:model"]`. 400 о длине контекста (`context_length_exceeded`) — не отказ заглушки.
   - Fallback, чьё правило эха отличается, собирает свой запрос заново [D-90]: чужие рассуждения в него не попадают.
 - **Usage** берётся из финального чанка с `choices:[]`, из повторного чанка OpenRouter или из `timings` llama.cpp.
+  - *Рев. 19 (M5d) [D-213]:* `timings` без `cache_n` (старые сборки, форки, Ollama) больше не дают всего промпта: раньше `prompt_n` читался как весь промпт. У Ollama `timings.prompt_n` — весь промпт, а `cache_n` она не шлёт. Правило — из `readTokenReport` Bunraku (`src/core/tokens/usage.ts`, Coneja-Chibi), §19.4.
+  - *Рев. 19 [D-213]:* событие `usage` несёт ещё `prompt: {processed?, cached?}` — счёт промпта вызова для трассы (§5.7). Сначала из usage: `cached` = `prompt_tokens_details.cached_tokens`, `processed` = `prompt_tokens − cached` (так считают llama.cpp и Ollama на `/v1`). Иначе из `timings` с `cache_n`: `processed = prompt_n`, `cached = cache_n`. В объединённом `Usage` поля usage по-прежнему побеждают `timings`.
 - **Дополнительно:**
   - OpenRouter — `provider.allow_fallbacks:false` и `session_id`, без изменчивых метаданных;
   - llama.cpp — `cache_prompt:true`.
+  - *рев. 19 [D-211]:* llama.cpp — `id_slot` по агенту, когда в caps вызова есть `slotPin`: рассказчик — `slotPin.narrator`, остальные — `slotPin.agents`. Ставится до `extra_body` и `exclude_body` соединения; `id_slot`, который уже лежит в теле из `extra_body` модели, не заменяется.
 - **Ollama.** На `/v1` (проверено на 0.34.2) действует `num_ctx` из Modelfile: на демо M3 сервер насчитал 10 377 токенов промпта при оценке 9 869 и прочёл промпт целиком (docs/M3-DEMO.md). Каталог берёт окно из `/api/ps` у загруженной модели или из `PARAMETER num_ctx`, но не обученный контекст. Если нет ни того, ни другого, окно — умолчание сервера (на демо 4096), и его нужно указать в `[caps."conn:model"] context_length`. `tool_choice` Ollama не соблюдает (`toolChoiceHonored:false`).
 
-**anthropic (M7).**
+**anthropic (M7).** *Рев. 19: построено 29.10 (`providers/anthropic.ts`). Ниже — как построено; где код отличается от плана, это сказано и названо решением [D-227…D-231].*
 
-- **Заголовки.** `x-api-key`. `anthropic-version` закреплён на соединении, по умолчанию `2023-06-01`; в версии 2026-10-21 любой семплер — 400. `max_tokens` обязателен.
-- **System.**
-  - Ведущий system-прогон становится отдельными блоками верхнего уровня, кэш-метка — на последнем.
+- **URL и заголовки.** `base_url` можно не писать: по умолчанию `https://api.anthropic.com`. Вставленный `/v1` или `/v1/messages` срезается, путь — `/v1/messages`. Ключ — в `x-api-key`. `anthropic-version` закреплён на соединении (`api_version`), по умолчанию `2023-06-01`; в версии 2026-10-21 любой семплер — 400, поэтому закреплённая версия не раньше `2026-10-21` (даты сравниваются строкой) выключает семплеры и стопы так же, как `samplers.fixed` [D-229]. `max_tokens` обязателен: это резерв ответа (§11).
+- **System и роли.**
+  - Ведущий system-прогон становится отдельными блоками верхнего уровня (`system`), кэш-метка — на последнем.
   - Поздние system — по правилу из §8.5.
-- **Тулы.** Результаты уходят user-ходом из блоков `tool_result`.
-- **Thinking** — по записи возможностей.
-  - Режим: adaptive или опущен. `enabled` с бюджетом — только на ≤ 4.5.
-  - `disabled` не отправляется на моделях, которые его отвергают: Opus 5.5, Sonnet 5.5, Fable, Mythos. У Sonnet 5.5 минимум — `between_tools`.
-  - Effort — в `output_config.effort`.
-  - Если UI показывает рассуждения, ставится `display:'summarized'`.
-- **Семплеры.** На моделях с фиксированными семплерами не отправляется ни один. `temperature` и `top_p` вместе — никогда.
-- **Префилл** на ≥ 4.6 не используется.
-- **Кэш.** Stateless-метки: последний system-блок, `messages[-2]`, `messages[-1]`, с учётом минимальной кэшируемой длины. TTL по умолчанию 1 час: в RP паузы длинные.
-- **Причины остановки.** `pause_turn` → отправить повторно. `refusal` и `model_context_window_exceeded` → типизированные finish.
-- **Блоки thinking.** `redacted_thinking` и thinking с пустым текстом возвращаются внутри цикла без изменений.
+  - Соседние сообщения одной роли склеиваются; нативный system — никогда.
+  - Если диалог начинается не с user (приветствие сразу после system), впереди ставится user из одного пробела.
+- **Тулы.** На обычном native-раунде — `tools` с `input_schema` и `tool_choice:{type:'auto'}`. На финальном (`toolChoice:'none'`) не уходят ни схемы, ни `tool_choice` [D-228]. Вызовы — блоки `tool_use` с аргументами-объектом (нечитаемый JSON — `tool_protocol_invalid` до отправки); результаты — блоки `tool_result` в user-ходе. Флаг `is_error` не ставится: текст ошибки уходит обычным результатом.
+- **Structured output** — `output_config.format: {type:'json_schema', schema}`, если `structuredOutput.mode = 'json_schema'` (у пресета api.anthropic.com — `confirmedBy:'host'`).
+- **Thinking** — по записи возможностей [D-229].
+  - `adaptive` (4.6–4.8 и 5-я серия): `thinking:{type:'adaptive', display:'summarized'}` — всегда, а не только когда UI показывает рассуждения. Effort `low|medium|high` — в `output_config.effort`; `auto` его не шлёт. `reasoning:'none'` просто опускает `thinking`: `disabled` здесь не отправляется (Opus 5.5, Sonnet 5.5, Fable, Mythos его отвергают), а `offShape` Sonnet 5.5 (`between_tools`) адаптер пока не читает.
+  - `budget` (4–4.5): `{type:'enabled', budget_tokens}` — 1 024 на `low`, 8 192 на `high`, 4 096 на остальное, но не больше половины `max_tokens`; если выходит меньше 1 024, thinking не шлётся. `reasoning:'none'` при `canDisable` — `{type:'disabled'}`.
+  - Модель вне строк (`control:'none'` пресета) поля `thinking` не получает.
+- **Семплеры.** `temperature`, `top_p`, `top_k` — только принимаемые записью; `top_p` рядом с `temperature` — никогда. Не уходят вовсе, если семплеры фиксированы (4.6+ и 5-я серия), если закреплена версия от `2026-10-21` или если в запросе есть `thinking`. В первых двух случаях не уходит и `stop_sequences` [D-229]; иначе — стопы, не больше `caps.stopMax`.
+- **Префилл** — последним assistant-сообщением, только при `caps.prefill = 'assistant-last'` (4–4.5) и без тулов. На 4.6+ и 5-й серии — `prefill:'none'`.
+- **Кэш.** Stateless-метки `cache_control:{type:'ephemeral', ttl}`: на последнем блоке system, если system не короче `cacheMinTokens`, и на последнем блоке `messages[-2]` и `messages[-1]`, если префикс до них не короче того же минимума (оценка `estimateTokens` по JSON запроса). Минимум — из строк модели: 512 у Opus 5, Fable 5 и Mythos 5; 2 048 у Opus 4.7 и Haiku 3.5; 4 096 у Opus 4.5, Opus 4.6 и Haiku 4.5; 1 024 у остальных. TTL по умолчанию 1 час, `cache_ttl = "5m"` — короче: в RP паузы длинные. Бета-заголовка кэша нет.
+- **Usage.** `inputTotal` = `input_tokens` + чтение + запись кэша; отдельно `inputCacheRead`, `inputCacheWrite` и `inputCacheWrite1h` (`cache_creation.ephemeral_1h_input_tokens`). Модель, которую отдал сервер, — из `message_start`.
+- **Причины остановки.** `pause_turn` → запрос повторяется с полученными блоками как продолжение assistant, всего не больше трёх запросов; usage складывается, индексы блоков идут подряд, finish один; третья пауза — finish `length` с `raw:'pause_turn'` [D-230]. `refusal` → `refusal`; `max_tokens` и `model_context_window_exceeded` → `length`; `end_turn`, `tool_use`, `stop_sequence` → `end` (`normalizeFinish`). Поток без `message_stop` или без `stop_reason` — `truncated_stream`.
+- **Ошибки.** 400, чей текст говорит о подписи thinking, — `thinking_signature_mismatch`; текст сервера — только в `detail`. Событие `error` в потоке — `overloaded` (`overloaded_error`) или `bad_request`.
+- **Блоки thinking.** Поток копит thinking (вместе с `signature_delta`) и `redacted_thinking`, включая thinking с пустым текстом, и отдаёт их одним `replay` вида `anthropic-blocks` перед finish (после пауз — все вместе). Внутри цикла они возвращаются без изменений, впереди блоков assistant-сообщения (§8.6).
+- **Каталог.** `rp-core models <conn>`, пробы и пикер TUI читают `GET /v1/models` с `x-api-key` и `anthropic-version`. Окно приходит, только если ответ несёт одно из полей окна, которые читает разбор каталога; строк `contextLength` у Claude в данных нет. Без `rp-core probe <conn:model> --write` или `[caps."conn:model"] context_length` окно Claude — удалённое умолчание 32 768 (§11).
 
-**gemini (M8).**
+**gemini (M8).** *Рев. 19: построено 29.10 (`providers/gemini.ts`); отличия от плана — D-232…D-234.*
 
-- **Запрос.** `:streamGenerateContent?alt=sse`. Ключ — в заголовке `x-goog-api-key`, никогда в URL. Ведущий system-прогон — в `systemInstruction`.
-- **Роли.** user и model; одинаковые соседние склеиваются, но подписанная часть никогда ни с чем не склеивается.
+- **Запрос.** `POST <base>/v1beta/models/<id>:streamGenerateContent?alt=sse`; `base_url` по умолчанию — `https://generativelanguage.googleapis.com`. Вставленные в `base_url` `/v1`, `/v1beta`, `/models` и префикс `models/` у id срезаются; id вне `[A-Za-z0-9._-]` — `bad_request` до отправки. Ключ — в заголовке `x-goog-api-key`, никогда в URL. Ведущий system-прогон — в `systemInstruction`.
+- **Роли.** user и model; одинаковые соседние склеиваются, но сообщение с подписанной частью (`thoughtSignature`) ни с чем не склеивается. Поздние system — часть user-хода `[System note]\n…` (`midSystem:'as-user'`).
 - **Тулы.**
-  - `functionDeclarations` проходят через санитайзер схем.
-  - `functionCall.id` возвращается обратно; `functionResponse` несёт id и имя.
-  - Все вызовы идут до всех ответов.
-- **Подписи.** `thoughtSignature` остаётся на исходной части, включая пустые текстовые части из стрима.
-- **Thinking.** `thinkingLevel` или `thinkingBudget` — по модели, никогда оба сразу.
-- **Безопасность.** Для всех настраиваемых категорий явно `safetySettings` OFF. SAFETY, PROHIBITED_CONTENT, MALFORMED_FUNCTION_CALL, MISSING_THOUGHT_SIGNATURE и `promptFeedback` становятся типизированными finish.
+  - `functionDeclarations` с `parametersJsonSchema` после санитайзера схем [D-232] и `toolConfig.functionCallingConfig.mode = 'AUTO'` — на обычном native-раунде. На финальном (`toolChoice:'none'`) не уходят ни объявления, ни `toolConfig` [D-228].
+  - `functionCall.id` от сервера — id вызова; без id вызов получает `g_missing_<n>`, и его `functionResponse` уходит без id. Тот же вызов (id и имя), повторённый в следующем чанке, отбрасывается.
+  - `functionResponse` несёт id, имя и `{result}` либо `{error}`.
+  - Все вызовы идут до всех ответов: model-ход с вызовами, затем user-ход с ответами.
+- **Подписи** [D-233]. Поток собирает **все** части ответа в исходном порядке — текст, thought-части, вызовы, пустые текстовые части с подписью — и отдаёт их одним `replay` вида `gemini-parts`. Внутри цикла model-ход той же пары соединение + модель уходит этими частями дословно, вместо своих блоков; `thoughtSignature` остаётся на исходной части.
+- **Thinking.** `thinkingLevel` или `thinkingBudget` — по модели, никогда оба сразу [D-234].
+  - `level` (Gemini 3 и 4): effort `low|medium|high` → `LOW|MEDIUM|HIGH`. `reasoning:'none'` → `MINIMAL` там, где он есть (3 Flash, 3 Flash Lite), иначе уровень не шлётся; `auto` — тоже не шлётся.
+  - `budget` (Gemini 2.5): 1 024 / 8 192 / 24 576 токенов на `low` / `medium` / `high`, но не больше `max(512, maxTokens − 512)`. `reasoning:'none'` → `thinkingBudget:0` только у 2.5 Flash (`canDisable`).
+  - `includeThoughts:true` — всегда, когда у модели есть управление thinking: thought-части приходят событиями рассуждения.
+- **Семплеры и стопы** — в `generationConfig`: `maxOutputTokens`, `temperature`, `topP`, `topK`, `seed` — по записи; `stopSequences` — не больше 5.
+- **Structured output** — `generationConfig.responseFormat.text = {mimeType:'APPLICATION_JSON', schema}`, схема — после того же санитайзера [D-234].
+- **Безопасность.** `safetySettings` с порогом OFF для четырёх категорий: HARASSMENT, HATE_SPEECH, SEXUALLY_EXPLICIT, DANGEROUS_CONTENT [D-232].
+- **Исходы** [D-233]. `promptFeedback.blockReason` — finish `content_filter`, причина — в `raw`. SAFETY, PROHIBITED_CONTENT, BLOCKLIST, SPII, RECITATION, IMAGE_SAFETY — finish `content_filter`; MAX_TOKENS — `length`. MALFORMED_FUNCTION_CALL — не finish, а ошибка `tool_protocol_invalid`; MISSING_THOUGHT_SIGNATURE и 4xx, чей текст говорит о подписи, — `thinking_signature_mismatch`. Поток без единого пакета или без `finishReason` (если промпт не заблокирован) — `truncated_stream`. Модель, которую отдал сервер, — `modelVersion`.
+- **Usage.** `promptTokenCount` → `inputTotal`, `cachedContentTokenCount` → `inputCacheRead`, `thoughtsTokenCount` → `outputReasoning`; `outputTotal` = `candidatesTokenCount` + рассуждения.
+- **Каталог.** `GET /v1beta/models?pageSize=1000`, не больше 8 страниц по `nextPageToken`, ключ — в заголовке. Остаются модели с `generateContent`; `inputTokenLimit` — окно (в caps — через `probe --write`).
+- **Защищённые поля.** `extra_body` и `exclude_body` не трогают `contents`, `systemInstruction`, `generationConfig`, `toolConfig`, `safetySettings` [D-53].
 - **API** — generateContent, не Interactions.
 
 ### 8.5 Системные сообщения посреди диалога у Anthropic
 
 Нативный `role:'system'` после первого хода есть у Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Haiku 5.5, Fable и Mythos 5/5.1. У Sonnet 5 его нет.
+
+*Рев. 19 [D-231]:* данные осторожнее этого списка. `midSystem:'anthropic-native'` ставят только строки `*claude-opus-5*` (Opus 5 и 5.5), `*claude-{opus,sonnet,haiku,fable,mythos}-5-5*` и `*claude-opus-4-8*`. Fable 5.1 и Mythos 5 и 5.1 под них не попадают и получают поздние system заметкой, как Sonnet 5 и пресет хоста (`as-user`). Включить нативный system можно строкой `[caps."conn:model"] mid_system = "anthropic-native"`.
 
 **Правило:** такое сообщение должно идти **после user-хода** и при этом либо быть **последним**, либо стоять **перед assistant-ходом**.
 
@@ -3167,6 +3420,8 @@ interface ModelCaps {
 - **Если чередование нарушено** (скрытые сообщения, два user подряд), решает только проверка адаптера. Список выше — ожидание, а не правило.
 - **Внутри цикла тулов** user-ход с `tool_result` допускает нативный system по тому же правилу.
 
+*Рев. 19, как построено.* Правило действует, только если у модели `midSystem:'anthropic-native'`; иначе каждый поздний блок идёт заметкой. Заметка — `[System note]\n<текст>`: впереди содержимого следующего сообщения, если это user-ход (или ход с `tool_result`); иначе — в конце предыдущего user-хода; иначе — отдельным user-ходом. План говорил о ближайшем следующем user-ходе; построен только соседний: через assistant заметка не перескакивает. Соседние user-ходы потом склеиваются.
+
 ### 8.6 Повтор рассуждений [D-18]
 
 - **Внутри текущего цикла тулов** рассуждения повторяются из `replay` в памяти — дословно, кроме перекладки на переименованный id вызова (ниже):
@@ -3182,6 +3437,11 @@ interface ModelCaps {
 - **Бета `thinking-binding-controls-2026-08-01`** (`prefix_mismatch_behavior:'drop_block'`) не отправляется: при этой политике она избыточна.
 - **DeepSeek** — по правилу из §8.4.
 - **Рассуждения никогда не уходят** в другой диалект или другую модель.
+- *Рев. 19, как построено (M7, M8).*
+  - **Anthropic:** из `replay` вида `anthropic-blocks` той же пары соединение + модель берутся только блоки `thinking` и `redacted_thinking`, как пришли, и ставятся впереди текста и `tool_use` сообщения. При `reasoning:'none'` у модели с `canDisable` они не уходят. После пауз `pause_turn` блоки всех запросов идут одним `replay`.
+  - **Gemini:** `replay` вида `gemini-parts` заменяет блоки model-хода целиком: части уходят дословно, в том числе thought-части и пустые подписанные [D-233].
+  - **Между ходами** повторять нечего: `replay` живёт только на wire-сообщении цикла, а сохранённые блоки `reasoning` ни один нативный адаптер в провод не кладёт. Бета `thinking-binding-controls` не отправляется.
+  - **Переименованный id.** `rekeyReplay` не трогает ни `anthropic-blocks`, ни `gemini-parts`. У Anthropic это не важно: в блоках thinking id нет. У Gemini переименованный циклом id (серверный не прошёл `SAFE_ID` или повторился в ходу) расходится с дословным повтором: в `functionCall` остаётся старый id, в `functionResponse` уходит новый. Тестов на это нет.
 
 ### 8.7 Раскладка ради кэша
 
@@ -3199,6 +3459,7 @@ interface ModelCaps {
 
 - **Режим thinking и effort** фиксированы на сессию. Их смена — это запись `config` и ожидаемый промах кэша.
 - **Раскладка по умолчанию верна пресету.** Сработавший лор на позициях `before`/`after` меняет голову — это семантика ST. Режим `layout = "cache-friendly"` (позже) переносит сработавший неконстантный лор в хвост.
+- *Рев. 19 (M7, M8).* У Anthropic метки ставит адаптер: последний system-блок, `messages[-2]` и `messages[-1]` (§8.4), чтобы следующий ход мог прочесть кэш до прошлого хвоста. На финальном раунде цикла схем в запросе нет [D-228] — а тулы стоят первыми в префиксе, так что этот раунд кэш, скорее всего, не читает; замеров нет. У Gemini кэш неявный (`caching:'auto-prefix'`): адаптер не шлёт ни меток, ни `cachedContent`, попадания видны в `cachedContentTokenCount`.
 
 ### 8.8 Параллельность, таймауты, ошибки
 
@@ -3212,9 +3473,9 @@ interface ModelCaps {
 - Интерактивный запрос обгоняет фоновые в очереди.
 - **Вытеснение.** Если все места заняты, причём хотя бы одно — фоновым запросом, интерактивный запрос прерывает самый свежий фоновый (`preempted`). Фоновый возвращается в очередь, ничего не записав.
 - Директор и рассказчик одного хода не конкурируют: Директор всегда идёт раньше. Sync recall запускается вместе с Директором; на одном месте семафор ставит Директора первым (§7.4.7).
-- Агенты не шлют `cache_prompt:false`; запросы агентов к той же модели Ollama несут опции раннера рассказчика, иначе модель перезагружается (§7.4.7).
-- Закрепление слотов llama.cpp (`id_slot`: рассказчик — 0, агенты — 1) — на M5c, при `max_in_flight = 2` и если проба подтвердит, что сервер его принимает (§7.4.7). Прогрев префикса — позже, если замеры M5c покажут нужду.
-- Что llama.cpp прекращает обработку при разрыве стрима, проверяется фикстурой на M5.
+- Агенты не шлют `cache_prompt:false`; запросы агентов к той же модели Ollama несут опции раннера рассказчика, иначе модель перезагружается (§7.4.7). *Рев. 19 [D-212]:* вторая половина не построена — через `/v1` опции раннера не задаются; вместо неё `notice{ollama_reload_risk}`.
+- Закрепление слотов llama.cpp (`id_slot`: рассказчик — 0, агенты — 1) — на M5c, при `max_in_flight = 2` и если проба подтвердит, что сервер его принимает (§7.4.7). Прогрев префикса — позже, если замеры M5c покажут нужду. *Рев. 19 (M5d) [D-209, D-211]:* построено при любом `max_in_flight`, по ответу `/props`: llama.cpp, ≥ 2 слотов и сборка b11552 или новее либо ёмкость 1. Ёмкость семафора от этого не меняется. Прогрева нет.
+- Что llama.cpp прекращает обработку при разрыве стрима, проверяется фикстурой на M5. *Рев. 19:* такой фикстуры нет. Живые тесты есть только у Ollama (`test/adapter/live-ollama.test.ts`, `test/live/m3-ollama.test.ts`) и облачного API (`test/live/m3-cloud.test.ts`); у llama.cpp их нет.
 - *Рев. 17 (M5b) [D-172]:* приоритеты и вытеснение построены. На удалённом origin вытесняется самый свежий фоновый держатель, на локальном — **все**, и даже при свободном месте; вытесненный держит место, пока не отпустит. Затвор простоя — только у локального origin; касание — и конец любого интерактивного запроса. `streamCall` и `structuredCall` принимают `priority`; вытесненный вызов кончается кодом `preempted` без повтора §6.6 и без корректирующего прохода. Подробно — §7.4.7, «полоса, как построена».
 
 **`http.ts`.**
@@ -3229,7 +3490,8 @@ interface ModelCaps {
 - `auth_failed`, `model_not_found`, `context_length_exceeded`, `bad_request`;
 - `rate_limited`, `overloaded`, `unreachable`, `truncated_stream`, `timeout`;
 - `content_filter`, `refusal`, `empty_response`, `reasoning_only`;
-- `prefill_unsupported`, `forced_tool_unsupported`, `thinking_signature_mismatch`, `tool_protocol_invalid`.
+- `prefill_unsupported`, `forced_tool_unsupported`, `thinking_signature_mismatch`, `tool_protocol_invalid`;
+- *Рев. 19:* ещё `key_unavailable` (ключ не получен из `key_env` или `key_cmd`, D-73) и коды тестовых провайдеров: `script_exhausted` (`script:` и `replay:`), `replay_mismatch` и `replay_aborted` (`replay:`).
 
 `message` — фиксированная фраза кода (`PROVIDER_ERROR_MESSAGE`) со статусом; слова сервера (могут цитировать промпт или эхом вернуть ключ) — в `detail`, их видит только `--debug` (`EngineOptions.onProviderError`), и то после `scrub`. Хранится только `{category, code, status}`. 403 с признаками модерации (OpenRouter `metadata.reasons` / `flagged_input`) — `content_filter`, а не `auth_failed`.
 
@@ -3299,7 +3561,7 @@ interface ToolCtx {                                        // один на хо
 - **Когда предлагаются.** Тулы лора предлагаются ещё и тогда, когда Compendium включён и у вида есть живая типизированная запись, которую блок прохода A не взял [D-92].
 - `search_lore` показывает типизированные записи сессии и при выключенном Compendium: свёртка их всё равно держит. Записи книг тогда — обычные `L<n>`.
 
-**`lexScore` (`text/lexscore.ts`)** — одно лексическое ранжирование: сейчас для `search_lore`, позже для селектора, шорт-листа и ростера Compendium (M5) и снимка мира Директора (M4). *Рев. 16:* селектор и снимок мира `lexScore` не используют — они сопоставляют имена правилом D-169 (`mention.ts`, §7.4.1); `lexScore` остаётся `search_lore` и, позже, шорт-листу и ростеру M5c. Запрос разбирается, как в §7.5 (слова по основам, фразы, подстроки), записи сравниваются лексикографически:
+**`lexScore` (`text/lexscore.ts`)** — одно лексическое ранжирование: сейчас для `search_lore`, позже для селектора, шорт-листа и ростера Compendium (M5) и снимка мира Директора (M4). *Рев. 16:* селектор и снимок мира `lexScore` не используют — они сопоставляют имена правилом D-169 (`mention.ts`, §7.4.1); `lexScore` остаётся `search_lore` и, позже, шорт-листу и ростеру M5c. *Рев. 19:* шорт-лист lite-recall M5c добирает записи по `lexScore` после названных (`agents/compendium/recall.ts`, §7.4.2). Ростер lite-filing (M5b) обходится без него: `filingRoster` ставит выше записи, названные в обмене, затем имена каста, затем остальные, внутри — изменённые последними (G-13, D-174). Запрос разбирается, как в §7.5 (слова по основам, фразы, подстроки), записи сравниваются лексикографически:
 
 1. сколько **разных** частей запроса совпало в заголовке, ключах или тексте записи — больше лучше. Частичное совпадение считается (в отличие от AND у `search_history`); запись без совпадений в список не попадает;
 2. при равенстве — сколько частей совпало именно в заголовке или ключе (заголовок считается ключом). Заголовок и каждый ключ сравниваются отдельно, так что фраза не перескакивает через два ключа; ключи `/regex/` в ранжировании не участвуют;
@@ -3351,7 +3613,7 @@ interface ToolCtx {                                        // один на хо
 
 - Сообщения чата — это область истории: приветствие, история, текущее сообщение пользователя. Вставленные блоки, пересказы, префилл continue и заметка о пропуске [D-96] не считаются.
 - `d = 0` — после последнего сообщения; `d = 1` — прямо над текущим сообщением пользователя; `d ≥ count` — перед первым.
-- **При равной глубине** блоки упорядочены по `order` по возрастанию, затем по источнику: preset < авторская заметка < depth-заметка карточки < lore < compendium < director < guidance. *Рев. 12:* для ST-источников это порядок самого ST (golden-снимок 06): у него внутри одной глубины и роли идут заметка, заметка карточки, записи WI. Вставки лора на глубине получают `order` расширений ST — 100; `order` записи упорядочивает их только между собой. Директор по-прежнему ближе всех к чату; ниже него только guidance при guided re-roll и, когда с тулами истории часть истории не показана, напоминание о них (`core:remind`) [D-96].
+- **При равной глубине** блоки упорядочены по `order` по возрастанию, затем по источнику: preset < авторская заметка < depth-заметка карточки < lore < compendium < director < guidance. *Рев. 19 (M9) [D-236]:* между director и guidance стоит `host` — вставки `beforeAssemble`. *Рев. 12:* для ST-источников это порядок самого ST (golden-снимок 06): у него внутри одной глубины и роли идут заметка, заметка карточки, записи WI. Вставки лора на глубине получают `order` расширений ST — 100; `order` записи упорядочивает их только между собой. Директор по-прежнему ближе всех к чату; ниже него только guidance при guided re-roll и, когда с тулами истории часть истории не показана, напоминание о них (`core:remind`) [D-96].
 
 `prompt/depth.ts` — единственный код, который вычисляет вставки. Им пользуются:
 
@@ -3363,7 +3625,7 @@ interface ToolCtx {                                        // один на хо
 - заметки Compendium (глубина 4);
 - guidance (глубина 0).
 
-**Импорт.** Глубины ST переносятся 1:1. При импорте пресетов RoleCall (с M2) и лорбуков RoleCall (позже) к глубине внутри чата прибавляется 1: у RC глубина 0 означает «перед текущим сообщением пользователя».
+**Импорт.** Глубины ST переносятся 1:1. При импорте пресетов RoleCall (с M2) и лорбуков RoleCall (*рев. 19:* книги `compendium-v1.0.0` — с M5a, §10.5 [D-162]) к глубине внутри чата прибавляется 1: у RC глубина 0 означает «перед текущим сообщением пользователя».
 
 **Агенты** попадают в сборку только размеченными вставками (`{src, at: {depth, role} | {slot}}`) с настоящим источником в трассе. В блоки пресета они не вклеиваются никогда.
 
@@ -3499,7 +3761,15 @@ post_history (system) ← заменяется post_history_instructions кар�
 
 У каждого конвертера есть тест покрытия по слотам: забытый слот — это тихая потеря данных.
 
-**Позже:** `.vnpack` Леви, экспорт лорбуков RoleCall (+1 к глубине), Marinara, чаты ST в JSONL [D-9]. *Рев. 18:* истории RoleCall — §10.6.
+**Позже:** `.vnpack` Леви, экспорт лорбуков RoleCall (+1 к глубине), Marinara, чаты ST в JSONL [D-9]. *Рев. 18:* истории RoleCall — §10.6. *Рев. 19:* чаты ST в JSONL импортируются — ниже. Экспорт книги RoleCall (`compendium-v1.0.0`) читается с M5a, с той же +1 к глубине (рев. 16 выше) [D-162].
+
+**Чат ST в JSONL (рев. 19, вне вех) [D-240].** `rp-core import <chat.jsonl> --card <id> [--persona <файл>] [--model conn:model] [--as название] [--dry-run] [--new] [--json]` делает сессию из одиночного чата ST (Manage chat files → Export as .jsonl). Слои — как у остальных импортёров: `formats/st-chat.ts` — чистый разбор, `cli/import-st-chat.ts` — id, заголовок, запись.
+- **Карточка — отдельно.** В экспорте чата нет ни карточки, ни пресета. Карточку импортируют заранее и называют её id в библиотеке (`--card`, обязателен). Пресет и книги — умолчания `config.toml`. Персона — `--persona <файл>`, иначе `user_name` экспорта как персона с одним именем. Если `character_name` чата не совпал с именем карточки — предупреждение.
+- **Сообщения.** Строка — сообщение по порядку; `is_user` обязателен. Свайпы — сиблинги. Выбранная версия — `swipe_id`, если он указывает на текст `mes`; иначе последний свайп, равный `mes`; `mes`, которого нет среди свайпов, — ещё одна версия, с предупреждением. Выбранная версия — родитель следующего сообщения; голова — выбранная версия последнего, строкой `head`, если нужно. Первый ответ, если чат с него начинается, — приветствие (`gen.kind:'greeting'`), остальные — `gen.kind:'model'` с `extra.model`. `extra.reasoning` — блок `reasoning`. Сообщение с `is_system` — строка `hide` на каждую его версию: в модель оно не идёт, как в ST. Время — `send_date`, иначе +1 мс к предыдущему.
+- **Id.** Сообщение — 8 hex sha256 от (хеш файла, номер строки, номер свайпа); сессия — `s_` + 8 hex sha256 от (хеш файла, карточка, n). Повторный импорт того же файла с той же карточкой — отказ с id прежней сессии; `--new` — следующий n. Заголовок несёт `imported {from:'sillytavern', hash, file}`; название — `--as`, иначе имя файла.
+- **Compendium** — как у истории RoleCall [D-189]: в заголовке выключен, последняя строка `config` включает его, если он включён в умолчаниях; прошлое filing не пишет.
+- **Отказы до записи** (код 1): битый JSON и строка, которая не объект, — с номером строки; первая строка — не заголовок чата ST; `story.jsonl` RoleCall (подсказка — импортировать `.rolecall`); чат без сообщений; групповой чат (у ответов больше одного имени); нет такой карточки в библиотеке. Флаги истории RoleCall на `.jsonl` и `--card`/`--persona` на другом файле — ошибка использования (64). Вложения и картинки не переносятся — предупреждение.
+- **Чего нет:** проверки помещения, как у истории RoleCall [D-195]. Чекпоинты ST — отдельные файлы чатов: каждый импортируется сам и форком не становится.
 
 ### 10.6 Импорт истории RoleCall (рев. 18) [D-185…D-195]
 
@@ -3545,7 +3815,7 @@ post_history (system) ← заменяется post_history_instructions кар�
 - **Подсчёт токенов.**
   - **M1, без зависимостей:** консервативная оценка по символам (символы/3, для кириллицы — символы/2,5) с поправкой EMA.
   - **С M2:** `gpt-tokenizer` o200k, умноженный на поправку EMA для каждой модели. Словарь грузится лениво (≈ 0,3 с при первом подсчёте); счёт кэшируется по тексту. В трассе записано, чем считали (`tokens.counter`), и EMA учится только на сэмплах того же счётчика.
-  - Поправка учится по промпт-токенам, которые сообщает провайдер (llama.cpp `timings.prompt_n`, usage Anthropic): α 0,3, старт 1,15, коридор 0,8–2,0. Вызов с отношением ниже 0,5 — не сэмпл: сервер обрезал промпт (Ollama молча выкидывает старые сообщения под свой `num_ctx`). О таком вызове движок один раз говорит `context_truncated_by_server`.
+  - Поправка учится по промпт-токенам, которые сообщает провайдер (llama.cpp `timings.prompt_n` + `timings.cache_n`, usage Anthropic; *рев. 19 [D-213]:* с M5d, без `cache_n` сэмпла нет): α 0,3, старт 1,15, коридор 0,8–2,0. Вызов с отношением ниже 0,5 — не сэмпл: сервер обрезал промпт (Ollama молча выкидывает старые сообщения под свой `num_ctx`). О таком вызове движок один раз говорит `context_truncated_by_server`.
   - Счётчик подключается через внутренний интерфейс.
   - **Ход с тулами:** сэмпл EMA — нулевой раунд, его оценка и его промпт-токены; суммы по раундам поправку не учат. У native-тулов в оценку промпта (`trace.tokens.estimated`) входят объявления схем: сервер считает их промптом, и без них EMA принимал бы их за дрейф счётчика.
 - **Доли окна:**
@@ -3576,17 +3846,25 @@ post_history (system) ← заменяется post_history_instructions кар�
 ### 12.1 Библиотечный API — канонический
 
 ```ts
-const engine = await Engine.open({ home, config, fetch?, keys?, clock?, random?, hooks? /* M9 */ });
-const s = await engine.session(sessionId);                     // снимок; ничего не проигрывает
-const { messageId, version } = await s.send({ text, expectedVersion: s.version() });
+const engine = await Engine.open({ home, connections, fetch?, clock?, random?, sessionStore?, hooks?, hookTimeoutMs?, … });
+const s = engine.session(sessionId);                           // снимок; ничего не проигрывает
+const { messageId, version } = s.send({ text, expectedVersion: s.version() });
 const turn = s.runTurn({ kind: 'reply', expectedVersion: version, onError: 'keep' }); // отказ = throw Refusal
 for await (const ev of turn.events) render(ev);                // done/stopped/failed/conflict завершают итерацию
 engine.events();                                               // все сессии, включая фоновых агентов
+
+// рев. 19, M9: асинхронное хранилище хоста — тот же движок за асинхронным фасадом (§5.12)
+const hosted = await Engine.openWithRecordStore({ home, connections, recordStore });
+const h = await hosted.session(sessionId);                     // каждая операция ждёт своих записей
 ```
 
 `--stdio` и one-shot — чистая сериализация тех же вызовов и событий (по образцу пары SDK/RPC в pi).
 
+*Рев. 19 — как построено.* Синхронное — синхронно: `session`, `createSession`, `send`, `runTurn`, `edit`, `fork`, `configure` возвращают результат сразу; асинхронны `draft`, `memoryWait`, `nameSession` и `close`. Опций `config` и `keys` у `Engine.open` нет: соединения передаются готовыми (`connections`), ключ — в `Connection` (`key` или `resolveKey`, M1b; `buildConnections` строит их из `config.toml`). `addConnection` добавляет соединение работающему движку — так TUI подключает OpenRouter [D-244]. Хуки — `hooks` и `hookTimeoutMs` (§12.5). Пакет приватный и в npm не публикуется: хост зависит от git-репозитория; входы — `rp-core` и `rp-core/testing` (`docs/M9-HOST.md`).
+
 ### 12.2 Формат провода (M6)
+
+*Рев. 19 — как построено (M6, 29.10.2026; гейты и черновики — M9).* Раздел переписан по `src/protocol/` и `cli/main.ts`. Справочник для авторов клиентов — `docs/STDIO.md`, пример клиента — `tools/stdio-demo.py`. Что разошлось с планом, — D-219…D-226 (§19.10).
 
 **Кадрирование.**
 
@@ -3595,77 +3873,102 @@ engine.events();                                               // все сес�
 - Пустые строки игнорируются, включая лишнюю пустую строку на EOF у Bun.
 - `node:readline` для протокола не используется: Node режет по U+2028/U+2029.
 
-**Каналы.** В stdout идёт только протокол, логи — в stderr.
+**Каналы.** В stdout идёт только протокол, логи — в stderr. *Рев. 19:* тексты `failed.message` и `notice.message` проходят ту же чистку известных секретов, что и в one-shot (`redactEvent`).
 
-**Завершение.**
+**Завершение.** *Рев. 19 — как построено.*
 
-- **Закрытие stdin** — упорядоченное завершение:
-  - идущие ходы останавливаются с сохранением частичного текста;
+- **Закрытие stdin или `shutdown`** — упорядоченное завершение. `shutdown` отвечает `{shuttingDown: true}`, строки после него не читаются. Дальше:
+  - каждая открытая сессия останавливает свой ход (причина `shutdown`): пришедший текст коммитится как `stopped`, и клиент успевает получить это `stopped`;
   - полоса доделывает текущую задачу или оставляет её для повторного запуска;
-  - lock снимается, выход с кодом 0.
-- **SIGINT** останавливает ход; второй SIGINT завершает процесс.
-- **SIGTERM** прерывает всё и сохраняет частичный текст.
-- Обработчики сигналов есть только в `cli/`, библиотека их не ставит.
+  - lock снимается; хост дожидается ответов на начатые запросы и конца потока событий; выход с кодом 0.
+- **SIGINT** останавливает все ходы этого соединения; хост работает дальше и читает stdin. Любой следующий SIGINT — сразу выход с кодом 130: флаг первого сигнала после конца хода не сбрасывается (в one-shot он живёт один ход).
+- **SIGTERM** прекращает чтение stdin и закрывает движок, как при закрытии stdin: частичный текст сохраняется. Выход с кодом 143; второй SIGTERM — сразу 143.
+- Обработчики сигналов `--stdio` стоят в `cli/main.ts` (`cli/signals.ts` — для хода one-shot); библиотека их не ставит.
 
-**Команды (клиент → ядро).**
+**Рукопожатие (рев. 19).** Первым идёт `initialize`. Любой другой метод до него и второй `initialize` — `-32602`. `protocol` — только 1, `client.name` и `client.version` — непустые строки. `capabilities.gates` — подмножество `review` и `transform`, иначе `-32602`. `capabilities.approvals` принимается и пока ничего не делает. Ответ — `{protocol: 1, core: {version: '0.1.0'}, features: ['swipes', 'events', 'models', 'memory', 'conflicts', 'draft', 'review-gate']}`. Версия ядра — строка в `rpc.ts`, `package.json` не читается.
+
+**Сессии соединения (рев. 19) [D-219].** Методы с `sessionId` работают только с сессией, которую это соединение открыло через `session/new` или `session/open`. Иначе — `-32000` с `session_not_found`. `turn/stop` останавливает только ход, начатый в этом соединении. `session/fork` возвращает id новой сессии, но не открывает её. `session/close` снимает lock и убирает сессию из соединения.
+
+**Параллельность (рев. 19) [D-220].** Строки разбираются по порядку, и метод каждой начинается сразу, до чтения следующей строки. Дальше запросы идут параллельно, и ответы приходят в порядке готовности: клиент сводит их по `id`. Синхронная часть метода — проверки, допуск, запись строки журнала — кончается до следующей строки, так что `message/send` и следующий `turn/run` видят друг друга без ожидания ответа. Медленный метод (`models/list`, `caps/probe`, `memory/wait`, `session/draft`) не держит ни другие методы, ни `turn/stop`. Уведомление (запрос без `id`) ответа не получает никогда, даже при ошибке.
+
+**Команды (клиент → ядро).** *Рев. 19 — как построено:* формы — `RpcCommandParams` в `protocol/commands.ts`, разбор — в `rpc.ts`, результат — в комментарии.
 
 ```ts
 type Command =
   | { method: 'initialize'; params: { protocol: 1; client: { name: string; version: string };
-        capabilities?: { gates?: ('review' | 'transform')[]; approvals?: boolean } } }
-      // → { protocol: 1, core: { version }, features: ['swipes','tools','director','memory', …] }
+        capabilities?: { gates?: ('review' | 'transform')[]; approvals?: boolean } } }   // → см. «Рукопожатие»
+  | { method: 'session/list'; params?: {} }                               // → { id, title?, updated }[]
   | { method: 'session/new'; params: { character: string | Character; persona?: string | Persona;
-        config?: Partial<SessionConfig>; title?: string } }            // → { sessionId, snapshot }
-  | { method: 'session/open'; params: { sessionId: string } }           // → Snapshot
-  | { method: 'session/list'; params: {} }
-  | { method: 'session/close'; params: { sessionId: string } }
-  | { method: 'session/configure'; params: { sessionId: string; patch: Partial<SessionConfig> } }   // /model, /preset, /note …
-  | { method: 'session/fork'; params: { sessionId: string; at: string } }            // → { sessionId }
+        config?: Partial<SessionConfig>; title?: string } }              // → { sessionId, snapshot }
+  | { method: 'session/open'; params: { sessionId: string } }            // → Snapshot, затем события восстановления
+  | { method: 'session/close'; params: { sessionId: string } }           // → { closed }
+  | { method: 'session/configure'; params: { sessionId: string; patch: Partial<SessionConfig> } }   // → { version }
+  | { method: 'session/fork'; params: { sessionId: string; at: string } }            // → { sessionId }, не открыта
   | { method: 'session/preview'; params: { sessionId: string; draft?: string; turnId?: string } }
-  | { method: 'message/send'; params: { sessionId: string; text: string; expectedVersion: number; greetingIndex?: number } }
+  | { method: 'session/draft'; params: { sessionId: string; kind: 'impersonate' }
+                                     | { sessionId: string; kind: 'quiet'; prompt: string } }   // M9 → { text, usage? }
+  | { method: 'message/send'; params: { sessionId: string; text: string; expectedVersion: number; greetingIndex?: number } }   // → { messageId, version }
+  | { method: 'message/edit'; params: { sessionId: string; messageId: string; text: string; expectedVersion: number } }    // → { version }
+  | { method: 'message/hide'; params: { sessionId: string; messageId: string; hidden: boolean; expectedVersion: number } }  // → { version }
+  | { method: 'history/select'; params: { sessionId: string; messageId: string; expectedVersion: number; exact?: boolean } }  // → { version }; exact — §5.5
+  | { method: 'history/tails'; params: { sessionId: string } }            // → string[]
+  | { method: 'history/search'; params: { sessionId: string; query: string; before?: number; limit?: number } }   // §7.5; и во время хода
+  | { method: 'lore/test'; params: { sessionId: string; text: string } }   // → { ok, verdicts, lore, loreUse, notices }
+  | { method: 'memory/…' }                                                 // §7.4.9
+  | { method: 'director/show'; params: { sessionId: string; at?: string } }   // → { enabled, …directorAt(tree, at) }
+  | { method: 'models/list'; params: { conn: string } }                   // → { models: { id, contextLength? }[], … }
+  | { method: 'caps/get'; params: { conn: string; model: string } }       // → ModelCaps соединения
+  | { method: 'caps/probe'; params: { conn: string; model: string; active?: boolean } }   // → строка отчёта `probe --json`
   | { method: 'turn/run'; params: { sessionId: string; kind: TurnKind; expectedVersion: number;
         guidance?: string; fallback?: string; onError?: 'drop' | 'keep'; emptyReply?: 'fail' | 'keep';
-        inspect?: boolean /* M9 */ } }                                  // → { turnId, messageId } сразу после допуска
-  | { method: 'turn/submit'; params: { sessionId: string; text: string; expectedVersion: number } }
-  | { method: 'turn/stop' | 'turn/commitAnyway' | 'turn/discard'; params: { sessionId: string; turnId: string } }
-  | { method: 'message/edit'; params: { sessionId: string; messageId: string; text: string; expectedVersion: number } }
-  | { method: 'message/hide'; params: { sessionId: string; messageId: string; hidden: boolean; expectedVersion: number } }
-  | { method: 'history/select'; params: { sessionId: string; messageId: string; expectedVersion: number; exact?: boolean } }  // голова → новейший потомок; exact: true — на само сообщение (откат, §5.5; M1b)
-  | { method: 'history/tails'; params: { sessionId: string } }
-  | { method: 'history/search'; params: { sessionId: string; query: string; before?: number; limit?: number } }
-  | { method: 'lore/test'; params: { sessionId: string; text: string } }
-  | { method: 'memory/list'; params: { sessionId: string; at?: string; type?: string; includeRetired?: boolean } }
-  | { method: 'memory/get'; params: { sessionId: string; ref: string; at?: string } }       // → { entry, render, brief }
-  | { method: 'memory/tree'; params: { sessionId: string; at?: string; book?: string } }
-  | { method: 'memory/file'; params: { sessionId: string; type: EntryType; data: Record<string, unknown> } }
-  | { method: 'memory/add'; params: { sessionId: string; title: string; keys: string[]; content: string } }   // заметка; глагол memoryAdd — с M3
-  | { method: 'memory/edit'; params: { sessionId: string; ref: string; set?: Record<string, unknown>; unset?: string[];
-        keys?: string[]; featured?: boolean } }
-  | { method: 'memory/retire' | 'memory/restore'; params: { sessionId: string; ref: string; reason?: string } }
-  | { method: 'memory/undo' | 'memory/refile'; params: { sessionId: string; messageId: string } }
-  | { method: 'memory/retry'; params: { sessionId: string; messageId?: string } }
-  | { method: 'memory/recall'; params: { sessionId: string; turnId?: string; test?: string } }   // → RecallRecord + trace.compendium
-  | { method: 'memory/export'; params: { sessionId: string; name: string; format: 'core' | 'compendium' } }
-  | { method: 'director/show'; params: { sessionId: string; at?: string } }
-  | { method: 'caps/get' | 'caps/probe'; params: { conn: string; model: string } }
-  | { method: 'models/list'; params: { conn: string } }
-  | { method: 'shutdown'; params?: {} };
-// зарезервировано: 'draft/run' (M9), 'approval/request', 'input/request'
+        inspect?: boolean /* M9 */ } }                                   // → { turnId, messageId } сразу после допуска
+  | { method: 'turn/submit'; params: { sessionId: string; text: string; expectedVersion: number } }   // → { turnId, messageId }; onError всегда 'drop'
+  | { method: 'turn/stop'; params: { sessionId: string; turnId: string } }            // → { stopped }
+  | { method: 'turn/commitAnyway'; params: { sessionId: string; turnId: string } }    // → { outcome, version, message? } (§6.6)
+  | { method: 'turn/discard'; params: { sessionId: string; turnId: string } }         // → { discarded }
+  | { method: 'turn/answerGate'; params: { sessionId: string; turnId: string; gateId: string;
+        answer: { action: 'send' | 'cancel'; edits?: { index: number; text: string }[] } } }   // M9 → { accepted: true }
+  | { method: 'shutdown'; params?: {} };                                  // → { shuttingDown: true }
+// зарезервировано: 'approval/request', 'input/request'
+```
 
-interface Snapshot {
-  config: SessionConfig; version: number; head: string;
-  path: MessageView[];                         // последние 200 + курсор для подгрузки
+- *Против плана [D-224]:* `session/draft` вместо зарезервированного `draft/run`; `turn/answerGate` — метод в дополнение к ответу на `gate/request`; `memory/status` и `memory/wait` добавлены; `caps/probe` берёт `active`; `session/list` обходится без `params`. Методов для смены персоны и для имён истории и веток (работа вне вех, TUI) в протоколе нет; событие `changed{change:'persona'}` клиент получает.
+- **Новые сессии** (`62baf3e`): `session/new` берёт умолчания `config.toml` (`[roles]`, `[narrator]`, `[director]`, `[compendium]`, §13) и кладёт поверх патч `config` тем же `mergePatch`, что и `configure`. До этой правки stdio-сессии начинались со встроенных умолчаний. `character` и `persona` — id библиотеки (имя файла без `.json`) или объект; неизвестный id или невалидный объект — `-32602`.
+- **`models/list`, `caps/get`, `caps/probe`** ходят через соединения `config.toml`; соединения нет — `no_connection`. `caps/probe` с `active: true` вызывает модель (§8.2).
+
+```ts
+interface Snapshot {                           // рев. 19 — как построено [D-222]
+  sessionId: string; header: SessionHeader; config: SessionConfig; version: number; head: string | null;
+  path: MessageView[];                         // весь активный путь; курсора подгрузки нет
   tails: string[];
   openTurns: { turnId: string; kind: TurnKind; state: 'running' | 'held'; draft?: string }[];
-  director?: { turn: number; chapter?: string; arcs: number; seeds: number };
-  background: number;
-  compendium?: { entries: number; byType: Record<string, number>; pending: number };
+                                               // running — ходы этого соединения, без draft; held — с текстом ответа
+  background: number;                          // memoryStatus().backlog: принятые ответы без покрытия
+  director: { turn: number; arcs: number; seeds: number };   // всегда, и при выключенном Директоре
+  compendium: { entries: number; pending: number };          // pending — задачи в очереди полосы
 }
 ```
 
-Ошибки имеют вид `{code: -32000, message, data: {code: RefusalCode | ProviderErrorCode}}`.
+**Ошибки (рев. 19) [D-221].**
 
-**Запросы ядро → клиент (M9).** `gate/request {turnId, gateId, kind: 'review' | 'transform', payload}` — ответ `{action: 'send' | 'cancel', edits?}`. Запрос отправляется, только если клиент объявил этот гейт в `initialize`. Иначе `inspect` получает отказ `gate_unsupported`, а хук `transform` для этого клиента не включается.
+| Код | Когда |
+|---|---|
+| `-32700` | строка — не JSON; `id: null` |
+| `-32600` | объект — не запрос JSON-RPC 2.0: нет `jsonrpc: '2.0'` или `method`, `id` не строка, не число и не `null` |
+| `-32601` | неизвестный метод |
+| `-32602` | неверная форма params; вызов до `initialize`; второй `initialize`; неизвестный id библиотеки в `session/new` |
+| `-32603` | внутренняя ошибка; текст — `Internal error`, без подробностей |
+| `-32000` | отказ движка (`Refusal`) или сбой провайдера (`ProviderError`): `{code: -32000, message, data: {code}}` |
+
+Params проверяют два слоя: форму — диспетчер (`-32602`), смысл — глагол движка. Отказ движка `invalid_params` (неизвестный тип в `memory/file`, причина свёртки на пробном прогоне) приходит как `-32000` с `data.code: 'invalid_params'`. Клиенту надо понимать оба.
+
+**Запросы ядро → клиент (M9; рев. 19 — как построено) [D-226].**
+
+- `gate/request` — запрос JSON-RPC, у которого `id` равен `gateId`: `<turnId>:review` или `<turnId>:transform`. `params: {turnId, gateId, kind, payload: {messages}}`. Запрос уходит, только если клиент объявил этот гейт в `initialize`. Событие `gate` с теми же полями приходит всем, как любое событие.
+- Ответ — результат `{action: 'send' | 'cancel', edits?: {index, text}[]}` на этот `id`. Ответ-ошибка, другой `action` и испорченные `edits` — `cancel`. То же делает метод `turn/answerGate`; гейт, который не ждёт, — `-32000` `not_found` с текстом `gate_not_waiting`.
+- `turn/run` с `inspect: true` без объявленного `review` — отказ `gate_unsupported`. Клиент, объявивший `transform`, получает гейт `transform` на каждом `turn/run` и `turn/submit`; `cancel` — `failed{code:'host_transform_failed'}` до запроса к провайдеру.
+- Срока у гейта в `--stdio` нет: `hookTimeoutMs` хост не задаёт. Ход ждёт ответа, `turn/stop` или завершения; Stop отвечает гейту `cancel`.
+- `approval/request` и `input/request` по-прежнему зарезервированы.
 
 **События** (уведомление `{"jsonrpc":"2.0","method":"event","params":Event}`). Имена и поля — в собственных понятиях ядра:
 
@@ -3678,12 +3981,12 @@ type Event = { sessionId: string; ts: string } & (
       reason?: string; summary?: string }
   | { type: 'tool'; turnId: string; callId: string; name: string; round?: number; phase: 'start' | 'done';
       args?: unknown; ok?: boolean; summary?: string }   // round — раунд цикла с 0; args у done — разобранные аргументы
-  | { type: 'gate'; turnId: string; gateId: string; kind: 'review' | 'transform'; payload: unknown } // M9, в процессе
+  | { type: 'gate'; turnId: string; gateId: string; kind: 'review' | 'transform'; payload: unknown } // M9; payload — { messages }
   | { type: 'done'; turnId: string; message: MessageView }
   | { type: 'stopped'; turnId: string; message: MessageView | null }
   | { type: 'failed'; turnId: string; category: string; code: string; message: string; draft: string }
   | { type: 'conflict'; turnId: string; draft: string }                                // M6
-  | { type: 'agent'; agent: 'recall' | 'filing' | 'historian'; turnId?: string; job?: string;
+  | { type: 'agent'; agent: 'recall' | 'filing' | 'historian' | 'host' /* M9 */; turnId?: string; job?: string;
       status: 'queued' | 'started' | 'preempted' | 'adopted' | 'recalled' | 'reused' | 'fallback'
             | 'skipped' | 'done' | 'failed' | 'parked';
       source?: 'sync' | 'prefetch' | 'lexical' | 'reused'; count?: number; skipped?: number; code?: string; reason?: string }
@@ -3693,22 +3996,26 @@ type Event = { sessionId: string; ts: string } & (
       usage: Usage; costUsd: number | null; priceSource: 'provider' | 'table' | 'none' }
   | { type: 'retry'; callKey: string; attempt: number; delayMs: number; code: string; status?: number }
   | { type: 'recovered'; turnId: string; outcome: 'interrupted' | 'abandoned' | 'dropped'; draft?: string }
-  | { type: 'changed'; version: number; change: 'msg' | 'edit' | 'hide' | 'head'; id?: string }
+  | { type: 'changed'; version: number; change: 'msg' | 'edit' | 'hide' | 'head' | 'persona'; id?: string }   // рев. 19: persona — смена персоны
   | { type: 'notice'; level: 'info' | 'warn'; code: string; message: string }   // в т.ч. caps.suggest, prefill_*
   | { type: 'idle'; background: number } );
 ```
 
-- **Авторитетность.** `text` и `reasoning` эфемерны, но за ними всегда следует авторитетное `done`, `stopped`, `failed` или `conflict` с полным сообщением. Поэтому события «полной замены текста» нет: окончательный текст, в том числе после хуков хоста, несёт `done{message}`.
-- **Переподключение.** Проигрывания журнала в v1 нет. `session/open` возвращает снимок с версией, головой и открытыми ходами, затем идут живые события.
+- **Авторитетность.** `text` и `reasoning` эфемерны, но за ними всегда следует авторитетное `done`, `stopped`, `failed` или `conflict` с полным сообщением. Поэтому события «полной замены текста» нет: окончательный текст, в том числе после хуков хоста, несёт `done{message}`. *Рев. 19:* `conflict` и `failed` несут текст в `draft`, а не сообщение: сообщения ещё нет.
+- **Переподключение.** Проигрывания журнала в v1 нет. `session/open` возвращает снимок с версией, головой и открытыми ходами, затем идут живые события. *Рев. 19:* события восстановления, которые нашло открытие (`recovered`, уведомления), уходят один раз — сразу после ответа на первый `session/open` этой сессии в соединении [D-220].
 - **Склейка дельт.** Писатель JSONL склеивает `text`/`reasoning` в один кадр раз в 40 мс или по 768 символов. Любое другое событие сначала выталкивает накопленный текст.
 - **Схема.** JSON Schema генерируется из `protocol/events.ts` и `commands.ts` и поставляется вместе с ядром. Протокол замораживается как версия 1 на M6. Клиенты обязаны игнорировать неизвестные типы событий.
+  - *Рев. 19 — как построено [D-225].* `src/protocol/protocol.schema.json` (JSON Schema 2020-12, `$id: urn:rp-core:protocol:1`) строит `tools/generate-protocol-schema.ts` компилятором TypeScript из типов `RpcCommand`, `RpcResponse` и `RpcEventNotification` в `commands.ts`; события приходят из `events.ts`. `bun run schema` пишет файл, `bun run schema:check` сверяет его с типами. Лишние поля схема разрешает. Результаты методов в ней не описаны: `result` — любой JSON. «Заморожен» значит: `initialize` требует `protocol: 1`, а дальше добавляются только необязательные поля, методы и типы событий.
+  - *Дыры на 14.11.2026.* В схеме нет `session/draft` и `turn/answerGate` — их нет и в `RPC_METHODS` с `RpcCommandParams`, хотя диспетчер их обслуживает; нет `inspect` у `turn/run` и запроса `gate/request` с ответом. Сам файл отстал с M9 (`1ca938d`): в нём нет `agent: 'host'`, и `schema:check` падает. Теста, который гонял бы `schema:check` или сверял кадры со схемой, нет (§14).
 
 ### 12.3 One-shot (с M1)
 
 ```
 rp-core send <session> "текст" [--kind reply|swipe|continue] [--json]
-             [--provider script:<f>|record:<f>|replay:<f>] [--sandbox --seed <f>]
+             [--guidance текст] [--provider script:<f>|record:<f>|replay:<f>]
 ```
+
+*Рев. 19:* `--guidance` — только у `swipe`. `--sandbox` — глобальный флаг любой команды. `--seed` не построен: формат seed не определён («Примечания к ревизии», п. 34).
 
 - **Вывод.** Без флагов печатается текст ответа. С `--json` — события ядра (`Event`), по одному на строку, без обёртки JSON-RPC.
 - **По умолчанию** `onError:'keep'`.
@@ -3732,6 +4039,38 @@ rp-core send <session> "текст" [--kind reply|swipe|continue] [--json]
 
   Если ход перешёл на запасную модель и сервер не знает именно её, подсказка называет запасную модель и `[roles] narrator_fallback`. Чей вызов упал, говорит `TurnOutcome.failed.route` (`conn:model`). Событие `failed` при этом не меняется.
 - **Директор (M4) [D-113].** В текстовом режиме итог Директора — одна строка в stderr, как строка тула: `rp-core: ⋯ director: planned — seeds +1 · chapter 1`, `⋯ director: reused — no changes`, `⋯ director: failed (undecodable)`. `planning` не печатается. С `--json` это события `director`.
+
+- *Рев. 19 (M5d):* уведомления о сервере (§7.4.7) `send` не печатает: one-shot печатает события своего хода, а эти идут по шине сессии, как `slots_shared`. Их показывают `rp-core chat` и `--stdio`.
+
+**Сведения о сервере в `rp-core probe <conn>` (рев. 19, M5d) [D-210, D-211].** На локальном llama.cpp, Ollama или LM Studio диалекта `openai-chat` проба читает ещё и сведения о сервере (§7.4.7) и печатает две строки после строки слотов (демо M5d):
+
+```
+  server info: llama.cpp b11901, 2 slots
+  slot pinning: on — narrator 0, agents 1 (2 slots, build b11901)
+```
+
+- `server info:` — `llama.cpp b<N>, <n> slots` (или `build unknown`, `slots unknown`, `/slots off`), `ollama <версия>, loaded: <имя> (ctx N)` или `nothing loaded`, `LM Studio, loaded: …; not loaded: …`, иначе `unknown (<причина>)`.
+- `slot pinning:` — только у llama.cpp: вердикт, который получила бы сессия, `on — narrator 0, agents 1 (<почему>)` или `off — <почему>`. Если другое соединение на том же origin даст сессии меньшую ёмкость и другой вердикт, об этом говорит строка в `notes`.
+- Соединение с `local = false` не читается, как и в сессии; строка в `notes` говорит, что закрепляет его только `slot_pin = true`.
+- `RP_CORE_SERVER_INFO=off` пропускает чтение. В `--json` — поля `serverInfo` и `slotPin`.
+
+**Бенчмарк `rp-core bench ttft` (рев. 19, M5d) [D-214].**
+
+```
+rp-core bench ttft [conn:model] [--rounds N] [--prompt-tokens N] [--tail-tokens N] [--agent-tokens N]
+                   [--agent-shared PCT] [--pin auto|on|off] [--json]
+```
+
+- **Зачем.** Проверить, что сервер держит промпт рассказчика в кэше, пока между двумя его вызовами идёт вызов агента, и замерить первый токен. Модель по умолчанию — рассказчик из `[roles]`.
+- **Раунд** — три настоящих вызова подряд через `streamCall`, со стримом, `temperature 0` и не больше 16 токенов ответа:
+  1. промпт рассказчика P;
+  2. промпт агента A — как агент `filing`, так что правило закрепления отправляет его в слот агентов. A начинается с части P (`--agent-shared`, по умолчанию 50 %): промпт Директора или filing делит с рассказчиком system и карточку;
+  3. P и новый хвост T.
+- **Умолчания:** 3 раунда; P — 4 000 токенов, A — 1 500, T — 200 (оценка o200k); `--pin auto` — правило сессии (§7.4.7), `on` — слоты 0 и 1, `off` — без `id_slot`.
+- **Промпты** — выдуманные слова из генератора с зерном, без фикстур и текста истории. Перед P стоит случайная соль на запуск, чтобы повтор мерился холодным; `RP_CORE_BENCH_SALT` её заменяет (тесты ставят `''`).
+- **Вывод.** Сначала — сколько настоящих вызовов будет; затем сведения о сервере, вердикт закрепления, таблица на раунд (первый токен, всё время, `prompt tok`, `processed`, `cached`) и медианы. Отношение раунда — `processed` вызова 3 на число новых токенов, то есть `prompt_tokens` вызова 3 минус вызова 1; оба числа — сервера. **PASS** — отношение ≤ 1,5 в каждом раунде (критерий §15); **FAIL** называет раунды и предлагает схему сервера. Сервер без счёта промпта (LM Studio) получает только время и объяснение. `--json` — один объект в stdout, число вызовов — в stderr.
+- **Сессию не трогает** и ничего не пишет. Схемы сервера (`-np 1 --cache-ram N`, `-np 1 --cache-ram 0`, `-np 2 --no-kv-unified`) запускает человек; справка их называет.
+- **Коды выхода:** 0 — все раунды прошли или отношение неизвестно; 1 — FAIL; 3 — вызов упал; 64 — неверный флаг.
 
 **Активные пробы.**
 
@@ -3786,7 +4125,7 @@ rp-core import <story.rolecall> [--chat main|all|<префикс id>[,…]] [--m
                [--compendium on|off] [--as название] [--dry-run] [--new] [--keep-raw] [--json]
 ```
 
-- **Что делает** — §10.6. ZIP с `manifest.json` идёт к импортёру истории до общего распознавания; остальные файлы `rp-core import` распознаёт как прежде (§10.5).
+- **Что делает** — §10.6. ZIP с `manifest.json` идёт к импортёру истории до общего распознавания; остальные файлы `rp-core import` распознаёт как прежде (§10.5). *Рев. 19 [D-240]:* `rp-core import <chat.jsonl> --card <id>` делает сессию из одиночного чата SillyTavern (§10.5).
 - **Флаги.** `--chat` — главный чат (по умолчанию), все чаты (точная копия другого пропускается) или чаты по префиксу id через запятую; `main` и `all` — в любом регистре, `all` — только один. Префикс, который не называет ни одного чата или называет несколько, — отказ со списком кандидатов. `--model` — рассказчик сессий (иначе из `config.toml`); `--compendium off` — Compendium не включается; `--as` — название истории; `--dry-run` — всё проверить и ничего не писать; `--new` — импорт заново, новыми сессиями; `--keep-raw` — копия трекера, раскадровки и файла Директора каждого чата в `<home>/imports/<сессия>/`.
 - **Вывод.** stdout — строка на элемент библиотеки (`<вид> <id>  new|same (already in the library)|reused (an equal book)  "имя"`) и на сессию (`session <id>  new  "название" · chat <id8> · N messages (V versions) · head <id> · director on|off[, its state at turn T] · compendium on from the import|off[ · fork of <id>]`). stderr — `dry run: nothing was written`, пропущенные чаты, что сохранил `--keep-raw`, предупреждения с предметом (`warning: <о чём>: <текст>`), затем подсказки `rp-core chat <id>` / `rp-core tui <id>` и, без `--model`, какой рассказчик достался сессии. `--json` — один объект `{dryRun, library, sessions, skipped, warnings}`, с `--keep-raw` — и `kept`.
 - **Коды выхода:** 0; 1 — отказ `import failed: …` (файл не читается, нет карточки, `--chat` не называет чата или называет несколько, все выбранные чаты уже импортированы, архив не читается, причина разборщика; после сбоя записи — `nothing was imported`); 64 — неверное значение флага (`--compendium maybe`, `--model` не `conn:model` или с неизвестным соединением) и флаги истории на другом файле.
@@ -3825,13 +4164,14 @@ Mira › *Она ставит недочищенный бокал…*
 - Ctrl+C во время генерации останавливает ход с сохранением полученного, даже если что-то уже набрано; на приглашении Ctrl+C сначала стирает набранное, два Ctrl+C подряд на пустом приглашении — выход. Во время `/probe --active` Ctrl+C останавливает пробу: ничего не сохраняется (`(probe stopped; nothing stored)`), и это нажатие не считается первым из двух для выхода.
 - Строку, набранную во время хода, REPL держит у себя и после `done`/`stopped`/`failed` отправляет через `submit` со свежей версией. Пока идёт ответ, вывод readline приглушён (эхо клавиш и перерисовки строки не попадают в ответ); недонабранный текст возвращается в приглашение после хода.
 - Команды правки истории во время хода REPL отклоняет сам.
-- При открытии сессии с отложенным (`held`) ответом REPL спрашивает «сохранить / отбросить».
+- При открытии сессии с отложенным (`held`) ответом REPL спрашивает «сохранить / отбросить». *Рев. 19:* так не построено. Команды «сохранить / отбросить» у REPL и TUI нет, и `send` в такой сессии отказывает `held_pending`, пока ответ не решит клиент `--stdio` через `turn/commitAnyway` или `turn/discard` [D-223, риск 34].
 
 **Команды:**
 
 - **Ответы и история:** `/r` (свайп), `/[` `/]` (листать свайпы), `/regen <указание>`, `/c`, `/e [n]` (правка в `$EDITOR`), `/hide n`, `/rewind n`, `/tails`, `/goto <id>`, `/fork [n]`.
 - **Модели и контекст:** `/model narrator|director|recorder|recall <conn:model>`, `/preset`, `/lore add|rm|test`, `/persona`, `/note <текст> [@depth]`.
-- **Агенты:** `/director on|off|show` (M4), `/memory [list|show|tree|new|add|edit|retire|restore|undo|refile|retry|recall|export|profile|mode]` (§7.4.9). *Рев. 16:* плюс `/memory on|off`; что из этого есть на M5a — ниже, в «Заметки и поиск». *Рев. 17:* плюс `/memory wait|status`; на M5b нет только `recall|profile|mode` (M5c).
+  - *Рев. 19 (вне вех) [D-241]:* `/persona` (или `/persona show`) — персона сессии и персоны библиотеки; `/persona use <id>` — персона из библиотеки; `/persona name <текст>` и `/persona description <текст>` правят одно поле. Всё — со следующего хода: прошлые сообщения, в том числе приветствие со старым именем, остаются как были.
+- **Агенты:** `/director on|off|show` (M4), `/memory [list|show|tree|new|add|edit|retire|restore|undo|refile|retry|recall|export|profile|mode]` (§7.4.9). *Рев. 16:* плюс `/memory on|off`; что из этого есть на M5a — ниже, в «Заметки и поиск». *Рев. 17:* плюс `/memory wait|status`; на M5b нет только `recall|profile|mode` (M5c). *Рев. 19:* они есть с M5c — вывод в §7.4.9 [D-206]; `/memory profile` только показывает профиль.
   - *Рев. 14 [D-113]:* `/director` — то же, что `/director show`. Он печатает настройку (модель, профиль, личность) и состояние на голове (`directorAt`): ход и последний итог — planned, reused (с ответом, чей план повторён) или failed (код); главу — текущую и число завершённых; арки — заголовок, статус, приоритет, горизонт, возраст, следующий бит, пометку застоя; семена — hint, возраст из срока, подкрепления, `OVERDUE` и «ripe for payoff»; скрытые арки — заголовок, статус, тип, возраст из срока, число улик; намерения; последнюю директиву. Пустое состояние — «The Director has not planned yet.»
   - *Рев. 15 [D-139]:* последняя директива печатается целиком, как её получил рассказчик: блок `[DIRECTOR CONSTRAINTS - BINDING THIS TURN]` … `[/DIRECTOR CONSTRAINTS]` (`renderDirective` директивы записи — после дополнения и фильтра персоны). Заголовок и каждая строка блока приглушены, отступа нет, так что копия — точный текст. Так и в построчном REPL, и в TUI (Ctrl+D). Раньше здесь была однострочная сводка, каждое поле обрезано до 30–40 символов. Заголовки:
     - план записи на голове — `last directive (turn N, as sent):`; свайп, повторивший план, — `last directive (turn N, reused from <id>, as sent):`;
@@ -3851,21 +4191,25 @@ Mira › *Она ставит недочищенный бокал…*
   - *Рев. 17 (M5b) [D-180, D-181]:* ещё `undo <ref|#n> [file|hist]`, `refile <ref|#n> [file|hist]`, `retry [#n]`, `wait [sec]` и `status`. Сообщение — его номер на пути (`5` или `#5`, как у `/show`), иначе hex-id или однозначный префикс. `undo`, `refile` и `retry` — правки: во время хода REPL их отклоняет; `wait` и `status` только читают. `/help` их перечисляет. Вывод — §7.4.9; `recall|profile|mode` отвечают, что придут с M5c;
   - *Рев. 16:* `/lore add` и `/lore rm` книги, которую читает Compendium, говорят, как меняется `/memory`: записи книги приходят или уходят сразу, хэндлы следующих записей сдвигаются. `/lore rm` добавляет, что правки сессии K записей сохранены и вернутся с книгой, `/lore add` — что они снова применяются;
   - `/search` — тот же поиск, что у `search_history` (§7.5), по этому пути и только на чтение: по 10 совпадений, новые сначала; `before=n` показывает более старые.
-- **Отладка:** `/trace`, `/preview [--turn id]`, `/usage`, `/probe`, `/probe --active [--write]`.
+- **Отладка:** `/trace`, `/preview [--turn id]`, `/usage`, `/probe`, `/probe --active [--write]`. *Рев. 19:* полная форма — `/preview [n|id] [--wire] [--verdicts]`, она есть с M2; `--turn id` тоже работает.
+  - *Рев. 19 (M5c) [D-206]:* в `/trace` перед строкой `compendium:` стоит строка `recall:`: как пришла запись, что выбрано (с именами), вызовы и время. Без записи — `recall: lexical (…)` или `recall: off (no recall call)`.
   - `/trace` добавляет раунды тулов (`rounds: n · <транспорт> tools · ended: … · tool room x of y tok used`) и строку на каждый вызов. Ход без тулов печатается как раньше.
   - `/preview` показывает блок `core:tools` как обычное сообщение и строку тулов с транспортом.
   - *Рев. 18 [D-188]:* `/preview n` на ответе, импортированном из RoleCall, отказывает словами: ядро не собирало его запрос, пересобирать нечего. `/preview` без номера работает и в импортированной сессии.
   - *Рев. 16 [D-161]:* `/trace` получает строку `compendium:` — профиль, выбор, вставка, срез, повторы, скрытое свежестью и размер блока, например: `compendium: lite · picked 3: C8 "Фонарь Гордея" (mention), C1 "Глеб" (window), C2 "Сыч" (window) · injected 3: C8 "Фонарь Гордея" brief 72 tok, C1 "Глеб" brief 96 tok, C2 "Сыч" brief 70 tok · block 244 tok` (живой прогон, §15). Пустые части не печатаются; ничего не выбрано — `nothing picked`. Срезанное пределом числа записей и бюджетом печатается раздельно.
   - *Рев. 17 [D-178]:* после строки `compendium:` — строка `recap:` со слотом `{{recap}}`: обзоры с ревизией, пересказы, граница; например `recap: 1 arc: C21 "Украденный свет" rev 41 · 1 summary: C20 "Переправа к маяку" · boundary 1f6b8745` (демо M5b, §15). Пустой слот строки не даёт. `/usage` считает и вызовы полосы — строка на filing и на historian, по их строкам `mem` и `job`. С `--debug` строка об ошибке вызова полосы ждёт паузы между ходами.
   - *Рев. 14:* `/trace` перечисляет все вызовы хода — агент, модель, время: `calls: director <conn:model> 7.6s, narrator <conn:model> 5.6s`. `/usage` при вызовах других агентов печатает строку на агента (`narrator  N generations · …`, `director  N calls · …`) и `total`; каждый вызов оценивается по своей модели [D-101].
+  - *Рев. 19 (M5d) [D-213]:* `calls:` — теперь блок, строка на вызов: агент, начало от начала хода, первый токен, время, счёт промпта и модель, если она не модель ответа (`narrator  +15.7 s  first token 0.5 s  5.9 s  prompt 595 cached, 248 new`, живой прогон §15; §5.7). Уведомления о сервере REPL печатает строкой `!` после хода, на котором они пришли (§7.4.7).
   - `/probe` объясняет, как пробовать сервер из оболочки. `/probe --active` запускает активные пробы модели рассказчика (§12.3) и печатает отчёт в чат. Под `--provider script:` и `replay:` команда отклоняется, под `record:` её нет: вызовы пробы попали бы в запись. Факты, записанные через `--write`, этот чат не видит: соединения строятся при открытии, факты действуют со следующего `rp-core chat`.
 - **Сессии:** `/sessions`, `/open`, `/help`.
 
-Команды `/impersonate` в v1 нет, она появится вместе с `draft` (M9).
+*Рев. 19 (M9) [D-239]:* команда `/impersonate` есть — это `draft({kind:'impersonate'})` (§6.1). Реплика за игрока печатается в чат и никуда не записывается: в журнале ничего, версия та же. Отправить её — скопировать в ввод. Во время хода REPL отклоняет команду, как правку.
 
 #### 12.4.1 TUI (рев. 15, M4.5)
 
 `rp-core tui <session> [--provider …]` открывает сессию на весь экран терминала, `rp-core new --tui` — новую сессию [D-125]. Внутри — тот же REPL, что у `rp-core chat`: каждая команда `/…`, удержание строки во время хода, отказы, правила Ctrl+C. Без терминала на stdin и stdout команда выходит с кодом 64: `rp-core tui needs a terminal; use rp-core chat`. Скрипты, пайпы и `--provider script:` остаются у `rp-core chat`.
+
+*Рев. 19 (вне вех) [D-243].* `rp-core tui` без id сессии сначала открывает обзор историй; Esc выходит с кодом 0, F6 там же создаёт историю из библиотеки. Внутри сессии обзор открывает F5.
 
 **Порты [D-127].** TUI ведёт настоящий `Repl` через два порта.
 - Ввод — `ReplOptions.source`: `LineSource` (поле ввода TUI, `TextareaSource`) и `InterruptSource` (Ctrl+C). У `LineSource` есть `inline` (своя строка ввода: REPL ставит метку и подставляет текст для `/e`), `multiline` (настоящие переводы строк) и режим `prompt(text, 'line' | 'edit')`.
@@ -3879,6 +4223,7 @@ Mira › *Она ставит недочищенный бокал…*
 - Chat: лента, строка статуса и строка ввода. Метка ввода — `you ›`, при правке — `edit ›`. Поле растёт от 1 до 6 строк и не выходит за колонку чата [D-139].
 - Models: сессия, персонаж и персона; рассказчик — `conn:model`, окно, транспорт тулов, `(script)` или `(recording)` под `--provider`; Директор — off или `conn:model` (с «follows narrator»), профиль последнего плана, стиль; затем клавиши, по строке на клавишу.
 - Agents: рассказчик — состояние, 6 последних вызовов тулов с длительностью, итог последнего ответа; Директор — статус хода и запись на голове (ход, профиль, транспорт, модель, попытки, глава, арки, семена к сроку); агенты M5 — по блоку на агента; внизу — вызовы, токены и цена по пути. *Рев. 17 (M5b) [D-181]:* блоки Filing и Historian — статус прохода (`queued`, `started`, `done (n)`…), время и `memory: <изменение> <вид> "<имя>"`; события полосы приходят в панель, идёт ход или нет, а при открытии панель показывает состояние полосы (`memoryStatus`). Вызовы полосы входят в итог внизу.
+  - *Рев. 19 [D-243]:* под итогом — блок Context: окно рассказчика (с пределом, если он есть), резерв ответа и полоса **последнего** запроса против окна без резерва — по счёту сервера или по оценке (`~`); от 90 % — жёлтым. Трасса берётся у последнего ответа той же привязки рассказчика, не у старой модели. На локальном Ollama блок спрашивает `/api/ps` (срок — 1,5 с) и предупреждает, если загруженное окно модели меньше окна ядра; модель не загружена — так и пишет.
 
 **Лента [D-130, D-137].**
 - При открытии — весь активный путь карточками: `Имя › текст` и приглушённая строка статуса ответа. Подсказок REPL (`/r swipe /c continue /e edit`) в ней нет: их заменяют клавиши.
@@ -3907,6 +4252,11 @@ Mira › *Она ставит недочищенный бокал…*
 | F1 | `/help` |
 | F2 | боковые панели |
 | F3 | мышь вкл/выкл |
+| F4 | рев. 19: модель рассказчика; F9 внутри — ключ OpenRouter [D-244] |
+| F5 | рев. 19: истории и ветки, переименование [D-242, D-243] |
+| F6 | рев. 19: новая история из библиотеки [D-243] |
+| F7 | рев. 19: персона [D-241] |
+| F8 | рев. 19: пресет и книги истории [D-243] |
 | Esc | отменить правку, очистить ввод |
 
 - Клавиша-команда вставляет строку команды через тот же источник ввода. Правила REPL — удержание, отказ во время хода — действуют как есть.
@@ -3914,11 +4264,19 @@ Mira › *Она ставит недочищенный бокал…*
 - Левая панель называет действующую клавишу новой строки: Shift+Enter — если терминал сообщил протокол kitty, иначе Alt+Enter. Ctrl+J работает везде.
 - `/help` в TUI добавляет строку про правку на месте, а если левой панели не видно, — и все клавиши.
 
+**Окна выбора и обзоры (рев. 19, вне вех) [D-242…D-244].** Окна встают поверх ленты; набранный в поле ввода текст остаётся. Всё, что меняет сессию, идёт строкой команды через тот же источник ввода, с правилами REPL, — кроме названий и новой истории.
+- **F4 — модель.** Соединения `config.toml` и модели, которые назвали их серверы; серверы опрашиваются параллельно, недоступный сервер, отвергнутый ключ и соединение без каталога помечены строкой. Набор фильтрует по соединению и модели, Enter — `/model narrator conn:model`, F4 — обновить. Под `--provider` окна нет.
+- **F9 в окне F4 — OpenRouter.** Ключ вводится скрытно и живёт только в памяти процесса; если соединения `openrouter` нет, в `config.toml` дописывается блок без ключа (`key_env = "OPENROUTER_API_KEY"`) [D-244].
+- **F5 — истории.** Поиск по названию, персонажу и id; форки — под родителем. → показывает голову и хвосты выбранной истории с их именами; Enter — `/open <id>` или `/goto <лист>`, в том числе в другой истории. F2 переименовывает историю или ветку (`nameSession`); имя ветки наследуют её продолжения.
+- **F6 — новая история.** Карточка из библиотеки, затем персона и пресет (по желанию) и книги (пробел отмечает). Путь тот же, что у `rp-core new`, с умолчаниями `config.toml`; затем `/open <id>`.
+- **F7 — персона.** Персона из библиотеки — `/persona use <id>`; «Edit name…» и «Edit description…» кладут команду `/persona name|description` в поле ввода.
+- **F8 — настройки истории.** Две вкладки, пресет и книги, ←/→ между ними. Выбор применяют `/preset` и `/lore add|rm`; Esc закрывает без применения отмеченных книг.
+
 **Правка [D-131].** `/e` и Ctrl+E правят сообщение прямо в поле ввода, с настоящими переводами строк. Enter сохраняет, Esc или Ctrl+C отменяют. `$VISUAL` и `$EDITOR` в TUI не используются.
 
 **Цвета [D-134].** Все цвета — из терминала, hex нет.
 - Текст — цвет терминала по умолчанию (SGR 39). Приглушённое — он же с атрибутом DIM.
-- Акценты — палитра ANSI терминала: 2 — игрок, 5 — персонаж, 4 — клавиши и агенты, 3 — жёлтый, 1 — красный, 8 — рамки и полоса прокрутки.
+- Акценты — палитра ANSI терминала: 2 — игрок, 5 — персонаж, 4 — клавиши и агенты, 3 — жёлтый, 1 — красный, 8 — рамки и полоса прокрутки. *Рев. 19 [D-243]:* 6 — реплики в кавычках вместе с кавычками (`speech.ts`); при `NO_COLOR` — цвет текста. Пока сессия открывается, виден логотип.
 - Фон — фон терминала (SGR 49); у поля ввода своего фона нет.
 - Поэтому светлая и тёмная тема работают без определения темы. `NO_COLOR` — только атрибуты; фон выделения мышью остаётся цветом 8.
 
@@ -3941,31 +4299,34 @@ Mira › *Она ставит недочищенный бокал…*
 
 **Bunraku (M9).** Bunraku встраивает ядро как **библиотеку в процессе**, а не через `--stdio`.
 
-Что даёт ядро:
+Что даёт ядро (*рев. 19:* после M9 — как построено; для хостов — `docs/M9-HOST.md`):
 
 - **API и хранение.**
   - Глаголы §6.1 с `expectedVersion`.
   - `fetch` и ключи передаются инъекцией на каждый запрос, провайдер собирается заново.
-  - `consumerSignal`: ход продолжается после ухода UI.
-  - Порт записей `RecordStore` (§5.12) с conformance-тестами. Bunraku сохраняет свой движок хранения (зашифрованный SQLite), но хранит в нём записи ядра.
-- **Опции вызова:** `onError:'drop'`, `emptyReply:'keep'`, `fallback`, `inspect`.
-- **Хуки хоста** (точки вызова есть в машине состояний с M1 и до M9 пустые):
+  - `consumerSignal`: ход продолжается после ухода UI. *Рев. 19:* если гейт ждёт, он закрывается: `review` кончает ход без сообщения, `transform` — fail-closed (§6.8).
+  - Порт записей `RecordStore` (§5.12) с conformance-тестами. Bunraku сохраняет свой движок хранения (зашифрованный SQLite), но хранит в нём записи ядра. *Рев. 19 [D-235]:* построены две границы. Синхронный `SessionStore` — для хоста, который пишет синхронно (SQLite в процессе), через `Engine.open({sessionStore})`. Асинхронный `RecordStore` — через `Engine.openWithRecordStore`, где каждая операция сессии — `Promise`. Реализации на SQLite в ядре нет; `checkRecordStoreConformance` из `rp-core/testing` — для адаптера.
+- **Опции вызова:** `onError:'drop'`, `emptyReply:'keep'`, `fallback`, `inspect`; *рев. 19:* `transformGate`.
+- **Хуки хоста** (точки вызова есть в машине состояний с M1 и до M9 пустые; *рев. 19:* с M9 работают):
 
 ```ts
 interface HostHooks {
-  beforeAssemble?(ctx: HookCtx): Promise<Placement[]>;      // планировщики хоста; параллельно с Директором и recall; не валят ход
+  beforeAssemble?(ctx: HookCtx): Promise<Placement[]>;      // планировщики хоста; рев. 19: первым, до Директора и recall; не валят ход
   transformRequest?(req: { messages: PromptMsg[] }, ctx: HookCtx): Promise<{ edits: { index: number; text: string }[] }>;
   transformReply?(text: string, ctx: HookCtx): Promise<{ text: string; note?: string } | { veto: string }>;
 }
+// рев. 19: HookCtx — { sessionId, turnId, kind, signal }; Engine.open({ hooks, hookTimeoutMs })
 ```
 
-- **`beforeAssemble`** возвращает размеченные вставки (§10.1). Его статус приходит событиями `agent`. Сбой хука — пустой результат и `notice`.
+- **`beforeAssemble`** возвращает размеченные вставки (§10.1). Его статус приходит событиями `agent`. Сбой хука — пустой результат и `notice`. *Рев. 19 [D-236]:* вставка — `{depth, role, text, src:'host'}`. Хук идёт до Директора и recall, а не параллельно: его вставки нужны проверке помещения D-195.
 - **`transformRequest` и `transformReply` — fail-closed.**
-  - При исключении, отмене или таймауте (таймаут задаёт хост; без него хук ждёт до Stop или ухода потребителя) ход получает `failed{code:'host_transform_failed', draft}`.
+  - При исключении, отмене или таймауте (таймаут задаёт хост — `hookTimeoutMs`, один на каждый хук и гейт; без него хук ждёт ответа или Stop: *рев. 19:* уход потребителя закрывает только гейты) ход получает `failed{code:'host_transform_failed', draft}`.
   - Непреобразованный запрос при этом не отправляется, непреобразованный ответ не коммитится.
   - `veto` даёт `failed{code:'host_veto', draft}`.
-  - Что сделал хук, записывается в `trace.hooks`.
-  - В `--stdio` эти хуки идут к клиенту как `gate/request{kind:'transform'}`.
+  - Что сделал хук, записывается в `trace.hooks` (§5.7).
+  - В `--stdio` вместо хука — гейт: клиент, объявивший `transform`, получает `gate/request{kind:'transform'}` на каждом ходу (§12.2). *Рев. 19 [D-237]:* в процессе гейт тоже есть — по `transformGate`; хук и гейт — разные шаги, порядок и правки — §6.2, шаг 7.
+  - *Рев. 19 [D-238]:* на continue `transformReply` не вызывается; его `note` пока не записывается.
+- *Рев. 19 [D-239]:* **`draft`** — разовая генерация моделью рассказчика без записей (§6.1); в REPL — `/impersonate`.
 
 Что остаётся на стороне Bunraku (в ядре этого не будет):
 
@@ -3986,6 +4347,8 @@ interface HostHooks {
 - форк несёт переменные, а дубль Bunraku начинается без них.
 
 Адаптер пишется в репозитории Bunraku вместе с Chi (рев. 3). Внутри ядра нет моков в форме ChatStore.
+
+*Рев. 19.* Со стороны ядра M9 готова (§15), адаптера ещё нет. Чего Bunraku не хватает и после M9: реализации `SessionStore` или `RecordStore` на его SQLite; перевода трассы и событий в форму Bunraku (список выше); решения о старых сценах [D-27] и ответа о хранении в его SQLite [D-13, вопрос 3 в §18] — оба ждут разговора с Chi. `rp-core/testing` даёт скриптовый провайдер, эталонные хранилища и conformance, но не record/replay.
 
 **Kintsu.** Черновик Chi от 28.09.2026 (K4 не решён) предлагает Runner и Stage поверх `scene-turn.ts` Bunraku.
 
@@ -4022,7 +4385,7 @@ interface HostHooks {
 [connections.local]
 dialect = "openai-chat"
 base_url = "http://127.0.0.1:8080"
-max_in_flight = 1              # локально по умолчанию 1; 2 — только с -np 2 --no-kv-unified и id_slot (§7.4.7) [D-84]
+max_in_flight = 1              # локально по умолчанию 1; 2 — только с -np 2 --no-kv-unified и сборкой от b11552 (рев. 19, §7.4.7) [D-84, D-211]
 
 [connections.openrouter]
 dialect = "openai-chat"
@@ -4034,6 +4397,10 @@ dialect = "anthropic"
 key_cmd = ["secret-tool", "lookup", "service", "rp-core", "conn", "anthropic"]
 api_version = "2023-06-01"
 cache_ttl = "1h"
+
+[connections.gemini]           # рев. 19 (M8); base_url по умолчанию — https://generativelanguage.googleapis.com
+dialect = "gemini"
+key_env = "GEMINI_API_KEY"
 
 [roles]                        # значения по умолчанию для новых сессий; сессия может переопределить
 narrator = "local:qwen3-14b"
@@ -4056,6 +4423,7 @@ creativity = "moderate"        # subtle | moderate | dramatic [D-64]
 
 [compendium]                   # заменяет [memory]; §7.4.9. Рев. 16: M5a читает enabled, profile, min_share и books;
                                # рев. 17: M5b читает всё, кроме [compendium.recall] (M5c)
+                               # рев. 19: M5c читает и [compendium.recall]
 enabled = true
 profile = "auto"               # auto | full | lite; auto — lite при окне агента < 24 576 [D-79]
 language = ""                  # "" — язык истории
@@ -4071,7 +4439,7 @@ max_entries = 0                # 0 — по профилю: full 10, lite 4
 min_entries = 0
 context_messages = 0           # 0 — по профилю: full 20, lite 6
 grace_sec = 4
-timeout_sec = 0                # 0 — 30 локально, 20 удалённо; от гранта
+timeout_sec = 0                # 0 — 30 локально, 20 удалённо, 60 у prefetch; иначе одно значение для всех; от гранта
 on_swipe = "reuse"             # reuse | rerun
 guidance = ""                  # ≤ 8 000
 
@@ -4090,6 +4458,7 @@ overlap = 0                    # 0 — по профилю: full 10, lite 6
 
 [caps."local:qwen3-14b"]
 tools = "native"               # native | prompted | none; оверрайд — после проверки `rp-core probe <conn:model> --active`
+# slot_pin = true              # рев. 19: llama.cpp — рассказчик в слоте 0, агенты в 1; false — не закреплять никогда [D-211]
 
 [prices."openrouter:anthropic/claude-sonnet-5-5"]
 in_per_m = 2.0
@@ -4106,7 +4475,16 @@ as_of = "2026-10-06"
 
 Отчёт `rp-core probe <conn:model> --active` без `--write` предлагает для этой таблицы строки `tools`, `stream_usage` и `structured_output`. С `--write` те же факты идут в `caps-cache.json` (§12.3); процесс читает кэш при запуске.
 
+**`slot_pin` и сведения о сервере (рев. 19, M5d).** `[caps."conn:model"] slot_pin = true | false` [D-211]: `true` закрепляет слоты llama.cpp (рассказчик — 0, агенты — 1), не спрашивая сервер; `false` не закрепляет никогда; без ключа решает правило §7.4.7. В caps это `slotPin: {narrator: 0, agents: 1}` или `null`. Не из конфига: `RP_CORE_SERVER_INFO=off` выключает чтение сведений о локальных серверах [D-210] — в движке, в `rp-core probe` и в `bench ttft`; тогда закрепляет только `slot_pin = true`. Сессия под `record:` сервер не читает: запись проигрывается без него. `RP_CORE_BENCH_SALT` заменяет соль бенча (§12.3).
+
 `[narrator] max_rounds` вне 1–8 — ошибка конфига. Больше 8 может задать только хост; тогда ход обрезает значение до 8 с `notice{tool_rounds_clamped}` [D-55].
+
+**Нативные соединения (рев. 19; M7, M8).**
+- `dialect = "anthropic"` и `dialect = "gemini"` строят свои адаптеры (§8.4). `base_url` можно не писать: по умолчанию `https://api.anthropic.com` и `https://generativelanguage.googleapis.com`. Пропущенных соединений больше нет: список `skipped` у `buildConnections` остался на будущее.
+- `api_version` и `cache_ttl` (`"5m"` | `"1h"`, по умолчанию `1h`) — только у `anthropic`; у другого диалекта — ошибка конфига. `api_version` уходит и в каталог (`GET /v1/models`).
+- Ключ — `key_env` или `key_cmd`, как у всех; адаптер кладёт его в `x-api-key` или `x-goog-api-key`. Эти заголовки и `anthropic-version` защищены: `headers` их не задаёт.
+- `extra_body` и `exclude_body` не трогают `model`, `messages`, `stream`, `tools`, `tool_choice`, а с M8 — и полей Gemini `contents`, `systemInstruction`, `generationConfig`, `toolConfig`, `safetySettings` (список один на все диалекты). Поля Anthropic `system`, `thinking`, `output_config`, `max_tokens` не защищены: оверрайд может их поменять.
+- Окна Claude данные не знают: его даёт `rp-core probe <conn:model> --write` (если каталог его называет) или `[caps."conn:model"] context_length`; иначе — 32 768 (§11, §8.4).
 
 **`[compendium]` (рев. 16) [D-158].** На M4 таблица хранилась в сессии как написана (snake_case), проверялось только `enabled`. Теперь:
 - имена переводятся в camelCase `CompendiumConfig`: `min_share` → `minShare`, `idle_delay_sec` → `idleDelaySec`, `max_attempts` → `maxAttempts`, в `[compendium.recall]` — `on_miss`, `max_entries`, `min_entries`, `context_messages`, `grace_sec`, `timeout_sec`, `on_swipe`; в `[compendium.filing]` — `every_n`, `timeout_sec`; в `[compendium.historian]` — `recap_after`;
@@ -4121,6 +4499,14 @@ as_of = "2026-10-06"
 - `[compendium.filing]`: `enabled`, `wait`, `every_n`, `allow`, `timeout_sec` (`0` — 300 с локально, 120 с удалённо; тот же срок у historian);
 - `[compendium.historian]`: `interval` (`0` — historian выключен), `recap_after`, `overlap` (`0` — по профилю: 10 / 6).
 
+**`[compendium.recall]` (рев. 19) [D-201, D-204, D-207].** Новых ключей M5c не добавила; она читает те, что разобраны с M5a:
+- `mode` — `auto | sync | prefetch | lexical | off`; `on_miss` — `auto` (lexical локально, sync удалённо) `| lexical | sync`; `grace_sec` — сколько ход ждёт prefetch в полёте (4 с);
+- `max_entries`, `context_messages` — `0` по профилю (full 10 и 20, lite 4 и 6); `min_entries` — минимум full, не выше `max_entries` и показанных записей;
+- `timeout_sec` — `0`: 30 с локально, 20 с удалённо, 60 с у prefetch; число — один срок для всех трёх;
+- `on_swipe` — `reuse` или `rerun`; `guidance` — указания recall (full — до 8 000 знаков, lite берёт первые 1 000).
+
+Не из конфига: `RP_CORE_RECALL=lexical|off` (читается раз при открытии движка) подменяет **умолчание** режима: сессия без своего `mode` не вызывает recall. Режим из `config.toml`, сессии или `/memory mode` сильнее. `test/preload.ts` ставит `lexical`, поэтому старые скриптовые тесты и запущенные ими CLI вызовов recall не видят; тесты M5c включают его сами. `--provider script:` без строки `"agent": "recall"` тоже даёт умолчание `lexical` (§14).
+
 Не из конфига: переменная окружения `RP_CORE_LANE=manual` открывает движок с полосой `manual` — полоса ничего не начинает сама, `/memory wait` её прогоняет (для скриптов и тестов; §7.4.7). Инструмент фикстур `tools/fixtures/seed-innkeeper.ts` получил `--compendium off|on` (по умолчанию `off`): засеянный чат на 199 сообщений не открывается с 98 ответами в очереди filing.
 
 **Секреты [D-20].**
@@ -4129,7 +4515,7 @@ as_of = "2026-10-06"
   - `key_cmd` запускается через `Bun.spawn` без оболочки: `secret-tool` на Linux, `security` на macOS.
   - Результат живёт в памяти процесса.
   - Из argv ключи не принимаются.
-  - Встраивающий хост передаёт свой `keys`.
+  - Встраивающий хост передаёт свой `keys`. *Рев. 19:* опции `keys` у `Engine.open` нет: ключ лежит в каждом `Connection` хоста — `key` или `resolveKey()` (§12.1).
 - **Куда не попадают никогда:** файлы сессий, трассы, события, логи, `caps-cache.json`. Трасса знает только **имена** заголовков.
 - **Текст ошибок провайдера** перед записью куда-либо сводится к `{category, code, status}` и фиксированному сообщению для кода: такой текст может цитировать промпт. Сырой текст выводится в stderr только при `--debug`.
 - **Исходящие запросы** идут через замок на хост для каждого соединения (§8.8).
@@ -4150,6 +4536,8 @@ as_of = "2026-10-06"
 
 - **`script:<file>`** — шаги в JSONL на каждый вызов: `{text}`, `{reasoning}`, `{tool:{name,args}}` или `{tool:{name,argsText}}` (аргументы как есть — для сломанного JSON), `{replay}`, `{delay}`, `{pause}`, `{error:{code,status,afterOutput}}`, `{usage}`, `{cut}`, `{finish}`. Можно проверять хеш запроса; `toolChoice` и `stop` в хеш не входят.
   - Первая строка файла может быть `{"caps": {…}}` — частичная запись возможностей поверх `SCRIPT_CAPS` (там `tools: 'none'`). Так скриптовое соединение получает тулы.
+  - *Рев. 19 (M5c) [D-207]:* строка вызова может нести `"agent": "narrator|director|recall|filing|historian"`. Запрос берёт первую неиспользованную строку своего агента, иначе — первую без тега; строку другого агента не берёт никогда. Так Директор и recall, которые спрашивают одновременно, получают свои ответы детерминированно. Старые скрипты без тегов играют как прежде. `script_exhausted` называет строки, оставшиеся другим агентам; несовпадение хеша называет настоящую строку скрипта.
+  - *Рев. 19:* первая строка может сказать и `"local": true|false` (вместе с caps — одним объектом `{"caps": {…}, "local": true}`). Тогда планировщик считает origin скрипта локальным, и `auto` делает prefetch. Без неё скрипт — удалённый. Скрипт без строки `recall` даёт умолчание `lexical`: старые демо работают без `RP_CORE_RECALL`. `replay:` берёт локальность из записанного соединения.
   - Каждое поле этой строки проверяется по типу и по диапазонам `[caps]` из `config.toml`; у `structuredOutput`, `reasoning` и `samplers` — и вложенные поля (`samplers.wire` — объект строк). Ошибка называет строку и поле: `script line 1: caps.<поле> must be …`.
 - **`record:` / `replay:`** записывают нормализованную последовательность `StreamEv`, сырой SSE и хеш запроса; секреты вырезаются. Replay при несовпадении хеша **громко падает** и показывает дифф.
 - Так CI проверяет цикл хода на реальном поведении провайдеров — без сети и без денег.
@@ -4157,11 +4545,13 @@ as_of = "2026-10-06"
 **Golden-фикстуры адаптеров.** Сырые SSE, записанные нами самими (`fixtures/sse/<dialect>/<case>.sse`), проверяются против ожидаемых `StreamEv[]` и проводных запросов.
 
 - **Источники:** llama.cpp во всех форматах рассуждений, Ollama, LM Studio, koboldcpp, vLLM, OpenRouter, NanoGPT, DeepSeek, Anthropic, Gemini.
+  - *Рев. 19:* записанных SSE Anthropic и Gemini пока нет: тесты M7 и M8 строят события в коде (ниже, «Нативные Anthropic и Gemini»). Нет и записей LM Studio и koboldcpp, а у llama.cpp — один файл (`llamacpp-think.sse`). Всё лежит в `test/fixtures/sse/openai-chat/` (14 файлов); часть — случаи из тестов RoleCall (`rolecall-*`).
 - **Вызовы тулов:** фрагментами и целиком, повторяющиеся имена, пропуски индексов.
 - **Поток:** usage после finish, чанки ошибок посреди потока, обрыв.
 - **Рассуждения:** варианты полей, `redacted_thinking`, подписи на пустых частях.
 - **DeepSeek с тулами** [D-94]: прошлые сообщения ассистента без своего рассуждения этой модели (приветствие, ответ другой модели после `/model`, ответ с выключенным thinking) уходят с заглушкой `reasoning_content: " "`. Thinking не выключается, тулы не снимаются, `notice` нет. `notice{caps.suggest}` с `tools = "none"` приходит раз за сессию и только на 400 `bad_request` запроса с заглушкой, не на `context_length_exceeded` (`test/engine-m3/request.test.ts`, `test/adapter-m3/wire.test.ts`). Заглушка на живом API DeepSeek не проверена.
 - **Mid-system у Anthropic:** блоки на глубинах 0–4 при чередующейся и нарушенной истории; слияние двух system на одной глубине.
+  - *Рев. 19:* проверен один случай — Sonnet 5.5: нативный system после user перед assistant и заметка после assistant; у Sonnet 5 обе — заметки. Глубины 0–4 по отдельности, нарушенное чередование и слияние двух system на одной позиции тестов пока не имеют.
 
 **Golden-фикстуры сборщика.** Вход — карточка, пресет, лорбуки, путь, seed и часы; выход — снимки `{messages, trace}`.
 
@@ -4201,12 +4591,25 @@ as_of = "2026-10-06"
 - `held` остаётся открытым после рестарта.
 - Вытеснение фонового запроса интерактивным на `maxInFlight = 1`, а на локальном origin — и при свободном месте; задержка фона после хода и её сброс свайпом [D-84].
 - Хуки M9: `transform` fail-closed по таймауту и по исключению, `veto`; гейт `review` — ответ, cancel, Stop, уход потребителя.
+  - *Рев. 19:* так и построено; плюс `beforeAssemble`, правка запроса и ответа, гейт `transform` через `gate/request`, `draft` и асинхронный `RecordStore` — таблица «M9» ниже.
 
 **Протокол.**
 
 - Порядок событий, склейка дельт, форма ошибок, коды выхода one-shot.
 - Кадрирование: U+2028, CRLF, разорванный UTF-8, EOF без перевода строки, stdin закрыт посреди хода.
-- Каждое событие проверяется по сгенерированной схеме.
+- Каждое событие проверяется по сгенерированной схеме. *Рев. 19: не сделано.* Нет ни сверки кадров со схемой, ни теста, который гонял бы `bun run schema:check`; поэтому схема и отстала с M9 незаметно (§12.2, D-225).
+
+**`--stdio` (M6, рев. 19).** Новых тестов — 16 в 4 файлах; счёт — по `git show` пяти коммитов M6. Два старых теста движка переписаны под новое правило: в `test/engine/refusals.test.ts` правка, скрытие и выбор во время хода принимаются и дают `conflict`, в `test/engine/durability.test.ts` хвост пишется после `commitAnyway`, а не сам.
+
+| Файл | Тестов | Что проверяет |
+|---|---|---|
+| `test/protocol/rpc.test.ts` | 6 | `runRpc` на скриптовом провайдере: `-32700`, `-32602`, `-32601`, рукопожатие, `session/new` с персоной, поток хода, `memory/recall`, `session/open`, `shutdown`; `turn/stop` во время паузы модели; EOF останавливает ход и успевает отправить его `stopped`; команды Compendium по открытой сессии; правка во время хода → `conflict` → `held` в снимке → `held_pending` → `commitAnyway`; медленный `models/list` не держит `session/list`. Седьмой тест добавила M9 — гейт `transform` через `gate/request` |
+| `test/cli/stdio.test.ts` | 5 | настоящий `main --stdio`: в stdout только протокол, выход 0 по `shutdown`; умолчания `config.toml` и патч `config` в `session/new`; `caps/get`, `models/list` и `caps/probe` с подменённым `fetch`; SIGTERM, пока хост ждёт строку, — 143; SIGINT останавливает ход, хост принимает следующий, затем SIGTERM — 143 |
+| `test/engine/conflict-m6.test.ts` | 4 | `held` переживает переоткрытие, `commitAnyway` при ушедшей голове — хвост; `discard` открывает дорогу следующему ходу; continue с изменённой целью — `discarded`; скрытое U — `dropped` |
+| `test/memory/history-m6.test.ts` | 1 | `memoryList`, `memoryGet` и `memoryTree` с `at` сворачивают другую ветку, голова на месте |
+
+- Конфликт swipe отдельным тестом не проверен: тесты — reply и continue.
+- Прогон этих файлов вместе с `test/protocol-jsonl/jsonl.test.ts` (сплиттер, 14 тестов с M1a) 14.11.2026 — 31 тест прошёл. Полный прогон на момент M6 в коммитах не записан. На 14.11.2026, после M5d: 6246 прошли, 4 пропущены, 0 упали — 6250 тестов в 364 файлах.
 
 **Агенты.**
 
@@ -4295,14 +4698,83 @@ as_of = "2026-10-06"
 - Правки ревью идут с регрессионными тестами; каждый падает на коде до правки (тесты времени разделителя — висят).
 - Полный прогон: 5710 тестов прошли, 4 пропущены (3 живых и тест настоящего экспорта), 3 теста на время упали только под нагрузкой машины и проходят по отдельности — 5717 тестов в 306 файлах. Проверка типов чистая.
 
+**M9 (рев. 19).** Новых тестов — 28: 27 в семи файлах и 1 в старом `test/protocol/rpc.test.ts` (гейт `transform` через `gate/request`, правка доходит до провайдера). *Как считали:* `bun test` по этим файлам, 14.11.2026; в коммитах M9 — 26 объявлений, два из них идут в цикле по двум хранилищам.
+
+| Файл | Тестов | Что проверяет |
+|---|---|---|
+| `test/engine/m9-hooks.test.ts` | 4 | `beforeAssemble` ставит текст хоста и шлёт `agent{host}`; правка запроса доходит до провайдера, правка ответа — до журнала, `trace.hooks`; отказ `transformRequest` — провайдер не вызван; `veto` — ничего не закоммичено |
+| `test/engine/m9-gates.test.ts` | 5 | гейт `review` ждёт ответа и применяет правки до вызова; Stop на гейте — без вызова модели; срок гейта `transform` — `host_transform_failed` до запроса; уход потребителя не прерывает вызов без гейта и закрывает ждущий гейт `transform` [D-237] |
+| `test/engine/m9-draft.test.ts` | 2 | `quiet` — один вызов, журнал не тронут; отмена `draft` освобождает место на сервере и не пишет `turn` [D-239] |
+| `test/engine/m9-store.test.ts` | 2 | ход, форк и повторное открытие на `MemorySessionStore` хоста; эксклюзивность сессии между двумя движками [D-235] |
+| `test/engine/m9-record-engine.test.ts` | 8 | асинхронный `RecordStore` [D-235]: ход и повторное открытие; провайдер ждёт долговечных `turn` и `prep`; `done` ждёт строки ответа; названия и форки записаны до возврата; файловый `RecordStore` тем же путём; гейт `review` через фасад; медленная запись одной сессии не держит другую; сбой `prep` — без вызова провайдера, lease отпущен при закрытии |
+| `test/session/port.test.ts` | 4 | conformance на памяти и на файлах; файловые строки читает новый экземпляр; пачка с дырой не пишет префикс |
+| `test/session/backend.test.ts` | 2 | создание, эксклюзивное открытие, запись, повторное открытие и форк на файловом и in-memory `SessionStore` |
+
+**Вне вех (рев. 19): импорт чата ST и TUI.** Новых тестов — 33: 26 в восьми новых файлах и 7 в четырёх старых. *Как считали:* `bun test` по новым файлам, 14.11.2026; в старых — по объявлениям в коммитах.
+
+| Файл | Тестов | Что проверяет |
+|---|---|---|
+| `test/stimport/import.test.ts` | 3 | выбранный свайп, другие версии, рассуждения и скрытые сообщения; нет карточки, групповой чат и битый JSONL — отказ без сессии; устаревший `swipe_id` уступает `mes`, `--persona` сильнее имени из экспорта [D-240] |
+| `test/tui/model-picker.test.ts` | 5 | F4 и смена рассказчика; черновик ввода остаётся, соединения без каталога объяснены; F9 подключает OpenRouter, ключ не попадает ни в конфиг, ни в чат; неверный или отменённый ключ [D-244] |
+| `test/tui/story-picker.test.ts` | 4 | F5: поиск и открытие с сохранением черновика; голова и хвосты; F2 называет историю и ветку; переименование неоткрытой истории, Esc [D-242] |
+| `test/tui/new-story.test.ts` | 2 | новая история из карточки, персоны, пресета и нескольких книг; F6 внутри чата без потери черновика |
+| `test/tui/persona-picker.test.ts` | 1 | F7: персона из библиотеки и правка полей [D-241] |
+| `test/tui/settings-picker.test.ts` | 2 | F8: пресет и несколько книг с сохранением черновика; Esc отменяет отмеченные книги |
+| `test/tui/context-pane.test.ts` | 4 | блок Context: последний запрос, предупреждение о меньшем окне Ollama, выбор модели в `/api/ps`, место под Usage |
+| `test/tui/speech-colour.test.ts` | 5 | реплики в кавычках — цвет 6, в потоке и после перевода строки; `NO_COLOR`; логотип при запуске |
+| старые: `test/tui/lifecycle.test.ts` (4), `test/session/fork.test.ts`, `test/engine/session.test.ts`, `test/config/secrets.test.ts` (по 1) | 7 | запуск без id сессии: обзор, Esc, выбор истории, F6, терминал по-прежнему нужен; форк хранит имена своего пути и текущее название; смена персоны в журнале переживает повторное открытие и форк; ключ из TUI — только в памяти |
+
+**Recall (M5c, рев. 19).** Новых тестов — 295: 294 в 26 новых файлах и 1 в старом `test/filing-m5b/request.test.ts` (начало ответа filing, D-208). *Как считали:* `bun test` по каждому новому файлу, 14.11 (M5d числа тестов в них не меняла). Полного прогона на коммите M5c не записано, поэтому разницей полных прогонов сумма не сверена.
+
+| Каталог | Файлов | Тестов | Что проверяет |
+|---|---|---|---|
+| `test/recall-m5c/` | 6 | 99 | чистые функции [D-197…D-200]: индекс (порт всех 12 случаев `recall-core.test.ts` Bunraku, фикстура `harbor.ts` — порт `fixture-book.ts`), промпт — golden против текста Bunraku, чтение (векторы парсера RoleCall), запись и её страж, крючок `rawRead`; правки ревью (раздел K) |
+| `test/recall-engine-m5c/` | 5 | 50 | recall в ходе [D-201…D-204]: sync рядом с Директором на одном и двух местах, `recall_slow`; ожидание prefetch, промах, Stop во время ожидания; повтор, восстановление после краша, слот вне индекса; префилл и минимум добора; правки ревью |
+| `test/sched-m5c/` | 4 | 57 | планировщик [D-203, D-207]: повышение (`createBoost`, `boosted`), `ordered()` — «Директор первым» на одном месте и оба сразу на двух, локальность по соединениям, скриптовый провайдер со строками `agent` и `"local"` |
+| `test/repl-m5c/` | 2 | 31 | `/memory recall`, `profile`, `mode`, строка `recall:` в `/trace`, строки полосы prefetch, `/memory status` и `wait` [D-206] |
+| `test/crowded-m5c/` | 2 | 14 | `history_crowded` [D-205]: правило, слова, раз за сессию через движок |
+| `test/demo-m5c/` | 1 | 14 | демо §15 на настоящем CLI и скриптовых моделях (`docs/M5C-DEMO.md`) |
+| `test/structured/opening.test.ts` | 1 | 13 | начало ответа префиллом и чтение «начало + текст» [D-208] |
+| `test/tui/recall-m5c.test.ts` | 1 | 6 | блок Recall в панели Agents: prefetch полосы, sync хода, сбросы |
+| `test/cli/` (`replay-m5c`, `routeof-m5c`, `script-recall-m5c`) | 3 | 6 | локальность `replay:` по записи; окно и локальность привязок для `/memory profile`; скрипт без строки recall — `lexical` |
+| `test/lane-m5b/prefill.test.ts` | 1 | 4 | начало `{"filings": [` у filing и historian через полосу [D-208] |
+
+- Тесты до M5c вызовов recall не видят: `test/preload.ts` ставит `RP_CORE_RECALL=lexical`; демо M5a и M5b запускают CLI без этой переменной — их скрипты без строки recall и так дают `lexical`. Пины, которые поменялись сознательно (строка `Later:` в `/help`, `recall   recorder (follows)` в `/model`), переписаны там, где жили.
+- Портированные тесты Bunraku и RoleCall несут шапку «Ported from …» и копирайт Coneja-Chibi (§19.7).
+- Правки ревью идут с регрессионными тестами; каждый падает на коде до правки (проверено по одному, откатом в копии).
+
+**Задержка на локальных серверах (M5d, рев. 19).** Новых тестов — 140 в 11 новых файлах. *Как считали:* по вызовам `test(` в исходниках новых файлов, строки таблицы `pinVerdict` (тест на строку) — по одной. Старые тесты (`test/adapter/`, `test/config/`, `test/repl/`, `test/repl-m5c/`, `test/demo-m5c/`, `test/cli/review-m3.test.ts`) поправлены под новую строку `/trace` и новые поля; новых тестов в них нет.
+
+| Каталог | Файлов | Тестов | Что проверяет |
+|---|---|---|---|
+| `test/serverinfo-m5d/` | 4 | 65 | читатель [D-210]: llama.cpp, Ollama, LM Studio; сроки, зависший путь, отказ origin и диалекта, ключ в общем сроке, повтор после временного сбоя (поправка D-210); таблица `pinVerdict` [D-211]; уведомления [D-212] — каждый код и его текст, раз за сессию, после `/model`, с Compendium и без; `probe` через CLI |
+| `test/pin-m5d/` | 2 | 23 | `id_slot` по агенту и `slot_pin` в адаптере; закрепление во всех путях движка: Директор, sync recall, черновик, `--wire` превью, старая сборка при ёмкости 1 и 2, `extra_body` побеждает, `local = false`, `script:`, `record:` |
+| `test/trace-m5d/` | 3 | 24 | счёт промпта: `timings` с `cache_n` и без, `cached_tokens` OpenAI, `timings.prompt_n` Ollama — не `processed` (по правилам `readTokenReport`, без его кода); старые и новые строки `calls` читаются; строка `/trace` |
+| `test/bench-m5d/` | 1 | 18 | `bench ttft`: один слот, старая сборка, серверы в форме Ollama и LM Studio, `--json`, упавший вызов, неверные флаги |
+| `test/demo-m5d/` | 1 | 10 | демо §15 на настоящем CLI против подделок llama.cpp, Ollama и LM Studio (`docs/M5D-DEMO.md`) |
+
+- Подделки серверов [D-215] — `Bun.serve` на 127.0.0.1 (`fakes.ts` в каталогах): llama.cpp с `/props`, `/slots`, чатом с `timings` и записью `id_slot` каждого тела; Ollama с `/api/version`, `/api/ps`, `/api/show` и `cached_tokens` в `/v1`; LM Studio с `/api/v1/models`.
+- `test/preload.ts` ставит `RP_CORE_SERVER_INFO=off` и `RP_CORE_BENCH_SALT=''`: старые подделки видят только прежние запросы. Тесты M5d включают чтение сами; демо убирает переменную из окружения дочерних процессов.
+- Полный прогон после M5d (14.11.2026): 6246 тестов прошли, 4 пропущены, 0 упали — 6250 тестов в 364 файлах. Тест на время `test/demo-m3/fixture.test.ts` («under 3 s») под нагрузкой машины нестабилен.
+
+**Нативные Anthropic и Gemini (рев. 19; M7, M8).** Новых тестов — 15 в 2 новых файлах; тесты, которые ждали отказа для `anthropic` и `gemini` (`test/cli/m1b.test.ts`, `test/cli/review-m1b.test.ts`, `test/config/build.test.ts`), переписаны: соединения теперь строятся, `new --model gemini:…` и `/model narrator gemini:…` работают. *Как считали:* `bun test` по двум новым файлам 14.11.2026 — 15 прошли, 0 упали.
+
+| Файл | Тестов | Что проверяет |
+|---|---|---|
+| `test/adapter/anthropic.test.ts` | 8 | провод: system-прогон в `system`, нативный system и заметка по модели (§8.5), adaptive thinking и effort, ни семплеров, ни стопов у фиксированной модели и при `api_version = "2026-10-21"`; тулы, повтор подписанного пустого thinking и `redacted_thinking`, кэш-метки `ttl:'1h'`, `output_config.format`, чужая модель повтора не получает; поток — текст, вызов, usage с кэшем, `replay`; `pause_turn` — два запроса и один finish; каталог `/v1/models` с `x-api-key`; конфиг с ленивым ключом; 400 о подписи — `thinking_signature_mismatch` без текста сервера |
+| `test/adapter/gemini.test.ts` | 7 | провод: URL без ключа, `x-goog-api-key`, `systemInstruction`, заметка поздних system, `thinkingLevel` / `thinkingBudget` по модели, safety OFF; дословный повтор подписанных частей, настоящий id в `functionResponse`, санитайзер схем; поток — thought-часть, пустая подписанная часть, id вызова, usage, `modelVersion`; блокировка промпта и MALFORMED_FUNCTION_CALL; каталог по страницам; конфиг; трёхраундовый цикл на уровне провайдера |
+
+- События SSE в обоих файлах написаны руками: записей настоящего API нет (§15, M8, «Условие»). Живых тестов с `RP_CORE_LIVE` для этих диалектов нет.
+- Трёхраундовый цикл Gemini идёт мимо `engine/narrate.ts`: тест сам собирает wire-сообщения из событий. Цикл тулов движка на нативных адаптерах не прогонялся.
+
 **Прочее.**
 
-- **Детерминизм:** правило линтера против `Math.random`/`Date.now` в `src/`. Одинаковые seed, часы и replay дают побайтно одинаковые промпты.
-- **Живые тесты** идут только с `RP_CORE_LIVE=1`. `test/adapter/live-ollama.test.ts` делает один короткий вызов к Ollama. `test/live/m3-ollama.test.ts` задаёт вопрос демо M3 локальной модели.
+- **Детерминизм:** правило линтера против `Math.random`/`Date.now` в `src/`. *Рев. 19:* линтера нет — правило держит тест `test/purity.test.ts` (ещё и `new Date()` без аргументов; исключение — только `engine/system.ts`), для движка — `test/engine/purity.test.ts`. Одинаковые seed, часы и replay дают побайтно одинаковые промпты.
+- **Живые тесты** идут только с `RP_CORE_LIVE=1`. `test/adapter/live-ollama.test.ts` делает один короткий вызов к Ollama. `test/live/m3-ollama.test.ts` задаёт вопрос демо M3 локальной модели. *Рев. 19:* третий живой тест — `test/live/m3-cloud.test.ts`: то же демо на облачном API, только с `RP_CORE_LIVE=1` и `RP_CORE_CLOUD_URL`; он платный (`docs/M3-DEMO.md`).
   - Переменные: `RP_CORE_OLLAMA_URL` (по умолчанию `http://127.0.0.1:11434`), `RP_CORE_OLLAMA_M3_MODEL` (`magmell-16k:latest`), `RP_CORE_OLLAMA_CTX` (16384), `RP_CORE_OLLAMA_TOOLS` (`prompted` по умолчанию или `native`), `RP_CORE_OLLAMA_MAX_TOKENS` (300; рассуждения думающей модели входят в него).
   - Инварианты проверяются на каждой попытке: блок ядра; заметка о пропуске и напоминание по одному, в том числе слитые с соседним сообщением (src `core:gap+history`); парные блоки; в сохранённом тексте нет разметки тулов, включая четыре имени тулов как теги. Вызов `search_history` и ответ «Тихон» должны случиться хотя бы в одной из трёх попыток.
   - Попытка, которая кончилась не `done`, печатает исход, уведомления, события тулов и то, что стримилось (до 2000 символов); в конце печатается JSON всех попыток.
-- **Conformance порта (M9):** `describeRecordStoreConformance` гоняется на файловой и на in-memory реализации. Его же может использовать адаптер Bunraku.
+- **Conformance порта (M9):** `checkRecordStoreConformance` (*рев. 19*; в плане — `describeRecordStoreConformance`) гоняется на файловой и на in-memory реализации, у файловой — и с `reopen` (`test/session/port.test.ts`). Её же может использовать адаптер Bunraku: это функция из `rp-core/testing`, а не набор тестов [D-235].
 
 ---
 
@@ -4324,12 +4796,12 @@ as_of = "2026-10-06"
 | M3 | тулы и поиск | 13–23 | **Короче.** Prompted-парсер — port; починка аргументов, протечки и поиск `/btw` — adapt |
 | M4 | Story Director | 10,5–18 | **Меньше риска.** Импульс и личности — port; план, промпты, редьюсер и состояние — adapt; ≈ 760 строк тестов переносятся. Объём больше на 3,9 тыс. строк личностей |
 | M4.5 | TUI (рев. 15, вставлена 27.10) | вне оценки | Ничего: новый код на `@opentui/core` 0.7.0 |
-| M5 | Compendium (рев. 6): M5a данные и ручной режим → M5b filing, historian и полоса → M5c recall и задержка | 32–52 | Типы, рендер, дерево, промпты и разбор filing, historian и recall, кодек — port/adapt из Bunraku; слияние и свежесть — из RoleCall. Новые: свёртка с оверлеями, полоса и расписание recall и фона, lite-профиль, замеры |
+| M5 | Compendium (рев. 6): M5a данные и ручной режим → M5b filing, historian и полоса → M5c recall и задержка (*рев. 19:* задержка выделена в M5d [D-196]) | 32–52 | Типы, рендер, дерево, промпты и разбор filing, historian и recall, кодек — port/adapt из Bunraku; слияние и свежесть — из RoleCall. Новые: свёртка с оверлеями, полоса и расписание recall и фона, lite-профиль, замеры |
 | — | импорт истории RoleCall (рев. 18, вставлен 28.10 между M5b и M5c) | вне оценки | Разделитель рассуждений и рендер персоны — port из RoleCall; экспорт пресета и правила состояния Директора — adapt. ZIP-читатель, разбор, план и запись — новые |
-| M6 | `--stdio` | 3,5–6 | **Короче.** Кадрирование, склейка и типы событий готовы на M1a. Конверт JSON-RPC — adapt |
-| M7 | нативный Anthropic | 2–4 | **Короче:** ≈ 65 % адаптера из Bunraku, размер L → M |
-| M8 | нативный Gemini | 4–7 | Не короче: адаптер новый |
-| M9 | стык с Bunraku | 5,5–9 | Немного: гейты — adapt. Порт записей и раннер хуков — новые |
+| M6 | `--stdio` | 3,5–6 | **Короче.** Кадрирование, склейка и типы событий готовы на M1a. Конверт JSON-RPC — adapt. *Рев. 19:* `rpc.ts` и `commands.ts` написаны заново, кода Bunraku в них нет |
+| M7 | нативный Anthropic | 2–4 | **Короче:** ≈ 65 % адаптера из Bunraku, размер L → M. *Рев. 19:* адаптер написан заново, кода Bunraku в нём нет [D-227] |
+| M8 | нативный Gemini | 4–7 | Не короче: адаптер новый. *Рев. 19:* санитайзер схем и список safety — тоже свои [D-232] |
+| M9 | стык с Bunraku | 5,5–9 | Немного: гейты — adapt. Порт записей и раннер хуков — новые. *Рев. 19:* гейты тоже написаны заново, кода Bunraku нет |
 | **Итого** | | **≈ 120–202** (рев. 5 — 113–192; рев. 4 без Compendium — 98–167) | ≈ 24–40 недель одного разработчика |
 
 **Рантайм-зависимости.** На всей M1 (M1a и M1b) зависимостей по-прежнему ноль:
@@ -4778,6 +5250,32 @@ as_of = "2026-10-06"
 
 *M5c — recall и задержка*, 8–13 дней.
 
+*Статус M5c (recall): **готово 28.10.2026**; строки `PROVENANCE.md`, раздел F `docs/COMPENDIUM-DEVIATIONS.md` и правка раздела K — 14.11.2026. Новых тестов — 295 (§14). Отдельного полного прогона на коммите M5c не записано; на 14.11, после M5d, — 6246 тестов прошли, 4 пропущены, 0 упали: 6250 тестов в 364 файлах (один тест на время, «under 3 s» в `test/demo-m3/fixture.test.ts`, под нагрузкой машины бывает красным). Демо без модели — `test/demo-m5c/` и `docs/M5C-DEMO.md`; живой прогон на Ollama — ниже; решения сборки — D-196…D-208 (§19.10, ждут подтверждения — вопрос 27). Задержка выделена в веху M5d [D-196].*
+
+*Что ушло в M5d [D-196].* Строки «Проба слотов» и «Замеры» ниже, демо на llama.cpp на 60 ходов, `rp-core bench ttft` и его матрица, зеркалирование опций раннера Ollama (`ollama_options_mismatch`), `lmstudio_autoevict`, оба критерия приёмки (качество prefetch и повторная обработка промпта). На машине сборки M5c не было llama.cpp, koboldcpp и LM Studio, а Ollama шла через `/v1`, где опций раннера не задать: проверить это было нечем.
+
+*Как прошло* — демо на скриптовых моделях: настоящий CLI отдельными процессами в одном доме, `import`, `new` и четыре чата; индекс, промпты, чтение, шаг recall хода, prefetch полосы, планировщик, ярус 1, журнал, `/trace`, `/memory` и Директор — настоящие, скриптованы только ответы моделей. `bun test test/demo-m5c`: 14 тестов, ≈ 12 с (Bun 1.3.14). Все девять утверждений демо прошли:
+- **Выбор по смыслу.** U8 «Но ведь кто-то видел, как его увозили той ночью?» не называет ни одной записи. Recall выбирает пересказ «Переправа к маяку» сообщений #1–#5: его давно срезали из истории, в слоте `{{recap}}` его нет. В запросе рассказчика — `[Lore: Переправа к маяку]`, единственное место, где есть лодка с солью. Селектор один (`/preview`) её не выбирает.
+- **Рядом с Директором.** Удалённый скриптовый origin с двумя местами: оба ответа по 1,2 с, ход — 1,6 с, меньше суммы. «Директор первым» на одном месте — тест движка (`test/recall-engine-m5c/sync.test.ts`, `test/sched-m5c/order.test.ts`).
+- **Свайп** — `⋯ recall: reused (2)`, 0 вызовов, только вызов рассказчика; и после перезапуска — для свайпа и continue.
+- **Таймаут.** `timeout_sec = 4`, ответ recall спит 10 с: `sync · failed [timeout] → lexical · 1 call 4.0s`, ответ рассказчика приходит.
+- **Промах prefetch** на локальном origin (`"local": true`): ход ждёт `grace_sec` (1 с), `prefetch_missed` один раз, запись `skipped`, `lexical`, `prefetch_missed`; ход — ≈ 1,1 с, вызов в нём один — рассказчика.
+- **Принятый prefetch** — `⋯ recall: adopted (2)`, `/trace`: `0 calls in this turn (the prefetch: 1 call 0.2s)`. Запрос prefetch кончается строкой prefetch и не держит U; `/usage` считает его вызов по записи.
+- **`/memory recall`, `profile`, `mode`**; полоса делает prefetch раньше historian; `history_crowded` — раз за открытую сессию (на U6 и, после переоткрытия, на U8).
+- **Находка демо** — одна, цена устройства, а не ошибка: когда после prefetch historian или filing писали строку, полоса делала второй, побайтно тот же prefetch — база держала ревизию Compendium. С filing по умолчанию локальный сервер платил бы два prefetch на ответ. База её больше не держит (правка D-202, раздел I).
+
+*Живой прогон* (раздел J) — Ollama, `magmell-16k` (Mag-Mell 12B, окно 16 384 → lite), история трактирщицы и книга `innkeeper`, Директор, filing и historian выключены, `idle_delay_sec = 2`:
+- prefetch после приветствия промахнулся, пока модель грузилась (→ lexical);
+- prefetch после #3 принят без вызова recall в ходе (2,6 с в фоне), но не мог знать следующего вопроса игрока — о купце, по описанию; для этого есть `sync`;
+- следующий prefetch и sync recall провалились: RP-модель ответила на промпт recall в роли — 270 токенов прозы Марфы, без хэндлов. Повтор с префиллом `{"entry_ids": [` дал `e1]}` — читаемо, хоть выбор и слабый. Отсюда D-208.
+- С префиллом sync recall отвечал читаемым JSON за 0,4–0,6 с (≈ 4 токена вывода), но почти всегда выбирал первую строку индекса: префилл чинит форму, а не выбор. Совет в документах — привязать `recall` к модели, которая следует инструкциям (§7.4.2).
+
+*Ревью сборки* — по пяти линзам: ядро recall, движок, планировщик, CLI и «ломатель» (`core#`, `engine#`, `sched#`, `cli#`, `breaker#` в разделе K заметки). Правки раздела K вписаны в D-198…D-207; каждая идёт с регрессионным тестом, который падает на коде до правки. Главное: не больше двух своих вызовов recall; читатель не останавливается на незакрытой скобке; `prefetch_missed` — только после настоящего ожидания; guided re-roll вызывает recall заново; «Директор первым» и удержание Директора — только на одном месте общего origin; `ms` записи — собственное время recall; `memoryWait` ждёт prefetch.
+
+*Критерии приёмки M5c* (ниже) требуют живого железа и ушли в M5d вместе с замерами [D-196]; на M5c они не проверялись. *Демо* ниже: строки про свайп, таймаут и Директора рядом с recall выполнены на скриптовых моделях (Директор и recall — на скриптовом удалённом origin, не на OpenRouter); строка про llama.cpp — M5d; 300-е сообщение не прогонялось.
+
+*Не проверено:* профиль full вживую — промпт Bunraku, ремонт и добор проверены только тестами (в демо окно 4 096, всё lite); облачная модель вживую; хорошая модель recall вживую (в прогоне была только RP-модель); recall на 300-м сообщении о событии ≈ 200 сообщений назад — демо показало то же в малом масштабе (пересказ #1–#5 на #16); нетипизированные записи как выбор (отложены); всё, что ушло в M5d.
+
 *Содержание.*
 - **Recall** [D-78]:
   - индекс: дерево Bunraku в full, лексический шорт-лист в lite;
@@ -4810,6 +5308,50 @@ as_of = "2026-10-06"
 - С `--cache-ram` или с `-np 2` и `id_slot` повторная обработка промпта рассказчика ≤ 1,5 × нового хвоста.
 
 *Если затянется:* M5a и M5b дают память без модельного recall — режим `lexical` работает без вызовов. M5c тогда становится отдельной вехой после M6.
+*Рев. 19:* не понадобилось. Recall построен до M6, сразу после импорта истории RoleCall; отделилась только задержка — она стала вехой M5d [D-196].
+
+*M5d — задержка на локальных серверах* (рев. 19). Часть M5c, которой нужно живое железо: её отделило D-196 — на машине сборки M5c не было ни llama.cpp, ни koboldcpp, ни LM Studio, а Ollama через `/v1` не даёт задать опции раннера. Пункты «Проба слотов» и «Замеры», строка демо о матрице `bench ttft` и второй критерий приёмки M5c — это M5d.
+
+*Статус M5d: **готово 14.11.2026**. 6246 тестов прошли, 4 пропущены, 0 упали — 6250 тестов в 364 файлах; тест на время `test/demo-m3/fixture.test.ts` («under 3 s») под нагрузкой машины нестабилен. Новых — 140 (§14). Демо на подделках серверов — `test/demo-m5d/` и `docs/M5D-DEMO.md` (10 тестов, ≈ 9,6 с); живой прогон — ниже; решения сборки — D-209…D-218 (§19.10, ждут подтверждения — вопрос 27).*
+
+*Что построено* (§7.4.7, §8.4, §5.7, §12.3):
+- чтение сведений о локальном сервере — `providers/server-info.ts`, память на origin — `engine/server-notices.ts` [D-210 с поправкой];
+- закрепление слотов llama.cpp: рассказчик — 0, агенты — 1, по правилу D-211 или по `slot_pin`; `id_slot` уходит при любом `max_in_flight` [D-209];
+- уведомления `slots_pinned`, `slots_detected`, `ollama_reload_risk`, `lmstudio_autoevict` [D-212];
+- счёт промпта и время вызова в трассе и `/trace` [D-213];
+- `rp-core bench ttft` [D-214];
+- раздел «Local servers: speed and caching» в `docs/USER-GUIDE.md` и строка о `readTokenReport` в `PROVENANCE.md` [D-216].
+
+*Не вошло* (D-209): `--smartcache` koboldcpp; строки Ollama `NUM_PARALLEL` 1 и 2 из матрицы демо; время до первого токена всего хода с Директором и recall — его заменяют смещения вызовов в трассе; стенд качества prefetch (первый критерий приёмки), который D-196 тоже относил к M5d; зеркалирование опций раннера Ollama и `ollama_options_mismatch` — их заменил `ollama_reload_risk`.
+
+*Как прошло.*
+- **Детерминированно** — `test/demo-m5d/servers.test.ts`: настоящий CLI отдельными процессами в одном временном доме — `probe`, `new`, `chat`, `bench ttft`, `--stdio` — против подделок llama.cpp (2 слота, сборка b11901), Ollama 0.40.12 и LM Studio. Одиннадцать утверждений, 10 тестов:
+  - `probe` печатает `server info: llama.cpp b11901, 2 slots` и `slot pinning: on — narrator 0, agents 1 (2 slots, build b11901)`;
+  - в чате `slots_pinned` приходит один раз, после первого ответа: первый вызов ждёт `/props` (подделка отвечает через 300 мс). Рассказчик шлёт `id_slot` 0, Директор — 1;
+  - `/trace`: `director  +0.0 s  …  prompt 5 087 cached, 836 new` и `narrator  +0.1 s  …  prompt 452 cached, 151 new` — те же числа, что насчитала подделка; закреплённый второй промпт рассказчика в основном взят из кэша;
+  - `slot_pin = false`: `id_slot` нет, `slots_detected` называет настройку. Промпт Директора занимает слот рассказчика, и второй промпт рассказчика обрабатывается заново — 602 новых из 603 против 151 с закреплением;
+  - `bench ttft`: с закреплением — отношение 1,00 в обоих раундах, PASS, выход 0; `--pin off` — 6,98 и 7,14, FAIL, выход 1, с подсказкой;
+  - `--stdio`: после `session/open` приходит кадр `event` с `notice` `slots_pinned`;
+  - Ollama: два имени на одном блобе (`num_ctx 16384 vs 32768`) — `ollama_reload_risk`, в `/trace` у обоих вызовов `prompt 0 cached`. LM Studio: модель Директора не загружена — `lmstudio_autoevict`, строки `/trace` — только время.
+- **Вживую** (D-217; с согласия Леви, 14.11.2026) — RTX 4070 Ti SUPER, 16 ГБ; Mag-Mell R1 12B (блоб `magmell-16k` из Ollama), модель с полным вниманием; бенч по умолчанию: 3 раунда, P 4 000, A 1 500 с 50 % общего начала, T 200.
+  - **Ollama 0.40.12, один слот:** PASS, отношение 1,00 во всех раундах; медиана первого токена P+T — 0,26 с. Первый вызов первого прогона ждал 121,62 с: модель грузилась с диска. Один слот проходит, потому что Ollama запускает свой раннер llama-server с `--cache-ram 8192` по умолчанию: пока идёт A, промпт рассказчика ждёт в кэше промптов в RAM хоста. Строка §7.4.7, по которой у Ollama нет кэша хоста, для этой версии неверна — исправлена (рев. 19). Счёт — из `cached_tokens` Ollama на `/v1`.
+  - **llama-server, который идёт с Ollama**, на том же блобе, `-np 2 --no-kv-unified -c 32768` (16k на слот). Он сообщает сборку `b1-…` — rp-core показывает `b1`. Это старше b11552, но ёмкость соединения 1, так что D-211 закрепляет: `slot pinning: on — narrator 0, agents 1 (2 slots, capacity 1 (build b1))`. Лог сервера — `selected slot by id (0)` у рассказчика и `(1)` у агента.
+
+  | Схема | Закрепление | Отношение, раунды 1–3 | Медиана первого токена P+T |
+  |---|---|---|---|
+  | `-np 2 --no-kv-unified`, `--cache-ram` по умолчанию | да | 1,00, 1,00, 1,00: PASS | 0,23 с |
+  | `-np 2 --no-kv-unified`, `--cache-ram` по умолчанию | нет | 1,00, 1,00, 15,07: FAIL | 0,37 с |
+  | `-np 2 --no-kv-unified --cache-ram 0` | да | 1,00, 1,00, 1,00: PASS | 0,09 с |
+  | `-np 2 --no-kv-unified --cache-ram 0` | нет | 14,75, 14,84, 15,07: FAIL | 0,97 с |
+
+  - Без закрепления A делит с P ≈ 800 токенов, и llama.cpp по сходству промпта отдаёт ему слот рассказчика. Вызов 3 находит только это общее начало и обрабатывает остальное заново: 3 673 из 4 464 токенов в раунде 1. С кэшем хоста незакреплённый рассказчик теряет кэш лишь иногда — здесь в одном раунде из трёх.
+  - **Чат на этом сервере** (`--cache-ram` по умолчанию, Директор включён, два хода). `slots_pinned` пришло после первого ответа. `/trace` второго хода — строка на вызов: два вызова Директора в слоте 1 (`prompt 2 595 cached, 1 071 new`, затем `3 937 cached, 62 new`) и рассказчик в слоте 0 (`prompt 595 cached, 248 new`). План Директора второго хода не разобрался (`undecodable`) — известная слабость RP-модели 12B в роли Директора, не ошибка M5d.
+  - **Две правки бенча после первого прогона.** Незакреплённый прогон сразу после закреплённого слал те же промпты с тем же зерном, и сервер нашёл их в кэше — его PASS ничего не значил. Отсюда соль на запуск. И `--agent-shared`: несвязанный A llama.cpp сам клал в свободный слот, и незакреплённый прогон проходил там, где промпт настоящего агента занимает слот рассказчика.
+  - **Сервер должен работать на GPU.** Первый запуск llama-server из Ollama ушёл на CPU: эта сборка держит бэкенд CUDA в подпапке и не нашла его. Сервер на CPU тоже отвечает, поэтому лог запуска надо проверить до замеров.
+- **Приёмка.** Второй критерий M5c выполнен для `-np 2 --no-kv-unified` с закреплением: отношение 1,00 ≤ 1,5 во всех раундах, с `--cache-ram` и без. Для одного слота с `--cache-ram` он выполнен на Ollama, чей раннер — llama-server с кэшем хоста; простой `llama-server -np 1 --cache-ram N` не замерялся. Первый критерий (качество prefetch) не проверялся.
+- **Ревью интеграции** прочло швы между частями — читателем, закреплением, адаптером, уведомлениями и трассой — и нашло одну ошибку текста: `slots_pinned` дважды называл причину; исправлено. Второе ревью исправило, не меняя вывода демо: `slots_pinned` называл слот рассказчика, когда закреплены были только агенты; `id_slot` в `extra_body` модели заменялся закреплением — теперь побеждает; `probe` судил соединение `local = false` и ёмкость не так, как сессия; общий срок чтения теперь покрывает и ключ; тесты демо проверяют отношения, подсказку, счёт `/trace`, место уведомления и строки LM Studio. После ревью — поправка D-210: временный сбой чтения читается снова.
+- **Не проверено:** koboldcpp; LM Studio вживую — на машине нет его моделей, читатель и `lmstudio_autoevict` проверены только на подделках; `-np auto` с общим KV (уход простаивающего слота в RAM хоста, о котором говорит `slots_pinned`) и простой `-np 1 --cache-ram 0`; модель SWA или гибридная; полоса Compendium вживую — filing и historian в слоте 1 рядом с настоящим рассказчиком; показ уведомлений о сервере в TUI; 60 ходов на llama.cpp и «recall не добавляет вызовов до первого токена в ≥ 90 % ходов»; цена настоящей перезагрузки Ollama между двумя именами (121,62 с — первая загрузка с диска).
+- **Оставлено как есть, решить позже:** `rp-core send` не печатает уведомления о сервере — one-shot печатает события своего хода, а они на шине сессии; запись `record:` хранит usage как `{t, u}`, так что у `replay:` в `/trace` нет счёта промпта, а прогон `record:` сервер не читает и по правилу не закрепляется; соединение `local = true` на публичном имени (туннель) не читается и закрепляется только через `slot_pin = true`.
 
 ---
 
@@ -4835,9 +5377,31 @@ as_of = "2026-10-06"
 - Во время хода он правит старое сообщение → `conflict` → `turn/commitAnyway`.
 - `kill -9` сервера → `session/open` показывает восстановленный ход.
 
+*Статус: **готово 29.10.2026**. Пять коммитов, `6184ec6`…`62baf3e`; ветка `feature/m6-stdio` влита в тот же день. Новых тестов — 16 (§14). Полный прогон на момент M6 в коммитах не записан; на 14.11.2026, после M5d, — 6246 прошли, 4 пропущены, 0 упали, 6250 тестов в 364 файлах. Решения сборки — D-219…D-226 (§19.10, ждут подтверждения — вопрос 28); заметок `.notes/m6-*` нет, решения записаны по коду в рев. 19.*
+
+*Как построено* (рев. 19), по пунктам «Содержания»:
+- **Команды с валидаторами.** Формы params — `RpcCommandParams` в `commands.ts`, проверка формы — в диспетчере `rpc.ts` (`-32602`), смысла — в глаголе (`-32000`, `invalid_params`) [D-221].
+- **Конкурентная диспетчеризация.** Каждый запрос — своей задачей (`d081136`). `turn/stop`, правки и медленные методы работают во время хода [D-220].
+- **Протокол 1.** `initialize` обязателен и один; `features` — `swipes`, `events`, `models`, `memory`, `conflicts`, `draft`, `review-gate`.
+- **Снимок** — в ответах `session/new` и `session/open`: весь путь, без курсора [D-222].
+- **`conflict` / `held` / `commitAnyway` / `discard`** — в движке и на проводе; `held` переживает рестарт (§6.6) [D-223].
+- **Генерируемая схема** — `protocol.schema.json` своим генератором; версия 1 заморожена с дырами (§12.2) [D-225].
+- **`consumerSignal`** на M6 не построен: опция `runTurn` появилась только на M9 (`1ca938d`). Через `--stdio` она не передаётся: уход клиента — это закрытие stdin, то есть завершение с остановкой ходов. Сигнал остаётся у библиотеки (§12.5).
+- **Сверх плана:** умолчания `config.toml` для `session/new` (`62baf3e`); `models/list`, `caps/get` и `caps/probe` через соединения `config.toml`; сессии соединения [D-219]; справочник `docs/STDIO.md`.
+- *Источники.* Конверт JSON-RPC Bunraku не переносился: `rpc.ts` и `commands.ts` написаны заново, строк в `PROVENANCE.md` у них нет. Port в протоколе — только `coalesce.ts`, с M1a.
+
+*Демо — как прошло.*
+- Скрипт-клиент — `tools/stdio-demo.py` (83 строки на Python): открывает карточку из библиотеки, отправляет одну реплику и печатает поток ответа. Конфликта в нём нет.
+- Правка во время хода → `conflict` → `turn/commitAnyway` по проводу проверена тестом (`test/protocol/rpc.test.ts`, скриптовый провайдер), а не скриптом-клиентом.
+- `kill -9` сервера и `session/open` с восстановленным ходом по проводу не прогонялись.
+
+*Не проверено:* `--stdio` с живой моделью — живой прогон нигде не записан, все проверки идут на скриптовом провайдере и подменённом `fetch`; `kill -9` и событие `recovered` по проводу; конфликт swipe; кадры против схемы; `capabilities.approvals` (принимается и ничего не делает).
+
 ---
 
 **M7. Нативный Anthropic** · 2–4 дня, *короче: L → M*
+
+*Статус: **готово 29.10.2026** (коммит `54dd28c`, слит в `main` в тот же день). Новых тестов — 8 (§14); счёт полного прогона того дня в коммите не записан. На 14.11.2026 полный набор — 6246 прошли, 4 пропущены, 0 упали, 6250 тестов в 364 файлах. Решения сборки — D-227…D-231 (§19.10, ждут подтверждения — вопрос 28). Ни одного вызова настоящего API Anthropic не было.*
 
 *Содержание.*
 - Правило размещения поздних system (§8.5).
@@ -4850,6 +5414,8 @@ as_of = "2026-10-06"
 
 *Источники (port/adapt).* Bunraku `anthropic-request.ts` и `anthropic-reply.ts`; минимумы кэша из `core/tokens/cache.ts` — как данные.
 
+*Рев. 19:* порта не было. Адаптер написан заново по §8.4–§8.6, тесты Bunraku не переносились, строки в `PROVENANCE.md` нет [D-227]. Минимумы кэша, правила thinking, префилла и семплеров — строки `models.json` со ссылками на документацию Anthropic (`as_of` 2026-10-29).
+
 *Новое.*
 - Обёртка `[System note]`.
 - Исправления дефектов Bunraku: thinking `disabled`, безусловная `temperature`, replay рассуждений между ходами.
@@ -4861,9 +5427,19 @@ as_of = "2026-10-06"
 - Ни одного 400 из-за префилла, thinking, forced tools или mid-system.
 - Попадания в кэш видны в `/usage`.
 
+*Как прошло* — только тестами, без ключа и сети (§14):
+- **Провод.** Sonnet 5.5: system-прогон в `system`, нативный system после user перед assistant, заметка после assistant; adaptive thinking, `output_config.effort: high`; ни `temperature`, ни `top_p`, ни `stop_sequences`. Sonnet 5 — обе поздние system заметками. Sonnet 4.5 с `api_version = "2026-10-21"` — заголовок закреплён, семплеров и стопов нет.
+- **Цикл.** Повтор подписанного пустого thinking и `redacted_thinking` перед `tool_use`, `tool_result` с id вызова, метки `ttl:'1h'` на system и хвосте, `output_config.format`; повтор чужой модели отброшен.
+- **Поток.** Текст, вызов и его аргументы, usage с чтением кэша (`inputTotal` = 10 + 4), подписанный пустой thinking в `replay`; `pause_turn` — второй запрос несёт первый кусок, finish один, usage сложен.
+- **Остальное.** Каталог `GET /v1/models` с `x-api-key` и без `Authorization`; конфиг строит провайдер с ленивым ключом; 400 о подписи — `thinking_signature_mismatch`, слова сервера в `message` не попадают.
+- **Демо по плану** не проводилось: `/model narrator …` на живом Claude, «ни одного 400» и попадания кэша в `/usage` требуют ключа и сети.
+- **Не проверено:** любой вызов настоящего API — форма thinking (`display:'summarized'`, `output_config.effort`), метки `ttl:'1h'`, нативный system по строкам данных [D-231], история с `tool_use` без `tools` на финальном раунде [D-228], `stop_sequences` на 5-й серии [D-229]; `pause_turn` и `refusal` вживую; окно из `/v1/models`; активная проба на Claude; `/model narrator claude:…` в CLI — тесты CLI берут для нативного соединения Gemini; цикл тулов движка на этом адаптере.
+
 ---
 
 **M8. Нативный Gemini** · 4–7 дней
+
+*Статус: **готово 29.10.2026** (коммит `c1d7b68`, слит в `main` в тот же день, после M7). Новых тестов — 7 (§14); счёт полного прогона того дня в коммите не записан. Решения сборки — D-232…D-234 (§19.10, ждут подтверждения — вопрос 28). Ни одного вызова настоящего API Gemini не было.*
 
 *Содержание.* Новый адаптер вокруг replay `gemini-parts`:
 - подписи, в том числе на пустых частях;
@@ -4877,11 +5453,24 @@ as_of = "2026-10-06"
 
 *Источники (port/adapt).* Из RoleCall — только санитайзер схем (37 строк, с исправлением nullable) и список safety OFF.
 
+*Рев. 19:* и это не портировано: санитайзер схем свой (список разрешённых ключей, `nullable` → `anyOf` с `null`), список safety — четыре категории OFF; строки в `PROVENANCE.md` нет [D-232].
+
 *Условие.* Нужны аккаунт Gemini 3 и режим record: записанных фикстур нет ни в одном репозитории.
+
+*Рев. 19:* условие не выполнено. Аккаунта и записей нет; события SSE в тестах написаны руками.
 
 *Демо.*
 - Трёхраундовый цикл тулов на Gemini 3 без ошибок подписи.
 - Блокировка safety приходит как `content_filter`.
+
+*Как прошло* — только тестами, без ключа и сети (§14):
+- **Провод.** URL `…/v1beta/models/gemini-3-flash:streamGenerateContent?alt=sse` без ключа, ключ — в `x-goog-api-key`; `systemInstruction`; поздний system — заметка в user-ходе; `thinkingLevel: LOW` с `includeThoughts`; у 2.5 Flash `reasoning:'none'` → `thinkingBudget: 0`, у 2.5 Pro бюджета нет; `topP`, `stopSequences`; четыре категории safety OFF.
+- **Повтор.** Подписанные части, включая пустую текстовую, уходят дословно; `functionResponse` несёт настоящий id; санитайзер снимает `minLength` и `maxLength`, `nullable` даёт `anyOf` с `null`, соседи `$ref` уходят; повтор чужой модели отброшен.
+- **Поток.** Thought-часть — рассуждение, пустая подписанная часть — в `replay`, id вызова — от сервера, usage с кэшем и рассуждениями (`outputTotal` = 8 + 3), модель — из `modelVersion`.
+- **Исходы.** Блокировка промпта — finish `content_filter`; MALFORMED_FUNCTION_CALL — `tool_protocol_invalid`.
+- **Каталог** — две страницы, модель без `generateContent` отброшена, окно из `inputTokenLimit`, ключа в URL нет.
+- **Трёхраундовый цикл** — на уровне провайдера с подменённым `fetch`: второй и третий запросы несут подписанные части перед своими ответами, роли чередуются.
+- **Не проверено:** любой вызов настоящего API — форма `responseFormat` для `structuredCall` [D-234], история с `functionCall` без объявлений на финальном раунде [D-228], четыре категории safety без CIVIC_INTEGRITY [D-232], MISSING_THOUGHT_SIGNATURE и подписи вживую; цикл тулов движка на этом адаптере (тест цикла идёт мимо `narrate.ts`); id, переименованный циклом, при дословном повторе (§8.6); окно и проба на Gemini.
 
 ---
 
@@ -4907,6 +5496,20 @@ as_of = "2026-10-06"
 - Скриптовый хост выполняет `transform`-гейт. При таймауте ход падает с `host_transform_failed` и не отправляет непреобразованный запрос.
 - Настоящая интеграция — после согласия Chi.
 
+*Статус: **готово 29.10.2026** (рев. 19; коммиты `2115144`, `1ca938d`, `a92a16a`). Новых тестов — 28 (§14). Полный прогон на 14.11.2026, после M5d: 6246 прошли, 4 пропущены, 0 упали — 6250 тестов в 364 файлах; тест времени `test/demo-m3/fixture.test.ts` («under 3 s») под нагрузкой машины бывает нестабилен. Решения сборки — D-235…D-239 (§19.10, ждут подтверждения — вопрос 28). Для хостов — `docs/M9-HOST.md`. M6, M7, M8 и M9 собраны в один день, 29.10.*
+
+*Как прошло* — по демо.
+- **In-memory хранилище проходит тот же conformance, что файловое:** да. `MemoryRecordStore` и `FileRecordStore` — в `test/session/port.test.ts`; у файлового строки читает и новый экземпляр.
+- **Скриптовый хост выполняет `transform`-гейт; по таймауту ход падает с `host_transform_failed` и не отправляет запрос:** да — `test/engine/m9-gates.test.ts`. В `--stdio` гейт с правкой — `test/protocol/rpc.test.ts`.
+- **Настоящая интеграция:** нет. Адаптер пишется в репозитории Bunraku вместе с Chi и не начат; D-27 и вопрос о хранении (D-13, вопрос 3 в §18) открыты.
+- **Что вышло иначе, чем в плане** (§19.10): движок пишет синхронно, а асинхронный `RecordStore` идёт через фасад (D-235); `beforeAssemble` — первым, до Директора и recall (D-236); хук `transformRequest` и гейт `transform` — разные шаги (D-237); `transformReply` молчит на continue (D-238); `impersonate` не берёт `impersonation_prompt` пресета (D-239). `turnGate` и `applyEdits` Bunraku не портированы: всё написано заново, строк в `PROVENANCE.md` у M9 нет.
+- **Не проверено:** хранилище на SQLite и обрыв процесса посреди записи в чужом `RecordStore` — conformance проверяет только новое чтение; истечение lease между процессами (у `MemoryRecordStore` lease без срока); долгая сессия в асинхронном режиме — зеркало держит её в памяти целиком; хуки, гейты и `draft` на живой модели — все тесты на скриптовом провайдере.
+
+*Вне вех (рев. 19): импорт чата ST и дополнения TUI* — вне оценки, 28–29.10, до M6.
+
+*Статус: **готово 29.10.2026**. Импорт чата ST (`c004b57`) — §10.5 [D-240]. TUI — выбор модели и OpenRouter, обзор историй и веток с названиями, новая история, персона, настройки истории, блок Context, цвет реплик и логотип (`27961b1`, `346455f`, `c062214`, `1f5069d`, `cd4b968`, `7efe901`, `2213f53`, `8e31d23`, `3b38b91`, `587b2ee`, `3a77826`) — §12.4.1 [D-241…D-244]. Новых тестов — 33 (§14). Решения — D-240…D-244 (§19.10, ждут подтверждения — вопрос 28).*
+- **Проверено только тестами:** импорт чата ST — тесты пишут свой JSONL, настоящий экспорт ST не импортировался; окна TUI — на headless-рендерере; OpenRouter и `/api/ps` Ollama — с подставным `fetch`.
+
 ---
 
 **Что сдвинулось по сравнению с ревизией 3.**
@@ -4922,7 +5525,7 @@ as_of = "2026-10-06"
   - каталожная половина `probe`.
 - **В M3:** ручные заметки Compendium — свёртка `note`/`edit`/`retire`/`restore`, `/memory add|list|show|edit|retire|restore` (§5.8).
 - **В M4:** `rp-core compact` [D-35] и черновик чтения ответа filing.
-- **В M5:** приоритеты и вытеснение `sched` [D-37]; семафор по origin и задержка фона, закрепление `id_slot` на M5c [D-84].
+- **В M5:** приоритеты и вытеснение `sched` [D-37]; семафор по origin и задержка фона, закрепление `id_slot` на M5c [D-84] (*рев. 19:* сделано на M5d [D-211]).
 
 **Цена порядка** — та же, что в ревизии 2:
 - до M6 UI подключается только как библиотека или через one-shot `send --json`;
@@ -4932,21 +5535,21 @@ as_of = "2026-10-06"
 
 - MCP с протоколом подтверждений, ACP;
 - эмбеддинги за портом, Lookback;
-- групповой чат, именованные ветки;
-- импорт `.vnpack` (если его не возьмут на M2), чатов RoleCall и ST;
+- групповой чат, именованные ветки (*рев. 19:* названия историй и имена веток есть — строки `name` [D-242]);
+- импорт `.vnpack` (если его не возьмут на M2), чатов RoleCall и ST (*рев. 19:* истории RoleCall — §10.6, чаты ST — §10.5);
 - экспорт карточек, пресетов и лорбуков из `extras`;
 - режим review для памяти;
 - правки Директора человеком: `dirEdit`, образец — `edits.ts` Bunraku;
 - Character Minds (Plan C) — отдельным агентом на `structuredCall`;
 - части Compendium вне v1: reconcile, diagnostics, ingest, standardize, smart context (§7.4.10);
 - адаптер OpenAI Responses, regex-скрипты в CLI;
-- хранилище ключей, steering, `roll`, прогрев префикса llama.cpp (после замеров M5c).
+- хранилище ключей, steering, `roll`, прогрев префикса llama.cpp (*рев. 19:* на бенче M5d не понадобился, §7.4.7).
 
 ---
 
 ## 16. Решения
 
-Пометка «(техн.)» — техническое решение, которое Леви может подтвердить пакетом (вопросы 12 и 21–26 в §18).
+Пометка «(техн.)» — техническое решение, которое Леви может подтвердить пакетом (вопросы 12 и 21–28 в §18).
 
 | ID | Решение | Рекомендация | Альтернативы | Статус |
 |---|---|---|---|---|
@@ -4965,11 +5568,11 @@ as_of = "2026-10-06"
 | D-6 | Форматы импорта v1 | CCv2/V3 (JSON/PNG), ST-пресеты, ST world info; потом `.vnpack`, RoleCall, Marinara | `.vnpack` в v1; RoleCall первым | принято пользователем 26.10 |
 | D-7 | Активация лора | ключи с семантикой ST, re2js, вероятность → бюджет, `scanDepth` 2; у заметок Compendium — сравнение по основам; выбор записей моделью — только recall внутри Compendium [D-76]; без векторов | выбор записей моделью; векторы | принято пользователем 26.10 |
 | D-8 | Порядок вех | (рев. 4) M1a ядро хода на скриптовом провайдере → M1b локальная RP → M2 лор → M3 тулы → M4 Директор → M5 память → M6 `--stdio` → M7 Anthropic → M8 Gemini → M9 Bunraku | Anthropic до агентов; `--stdio` на M3 как нестабильный протокол 0 | принято пользователем 26.10 |
-| D-9 | Импорт старых чатов | позже: ST JSONL (свайпы → сиблинги); RoleCall — только через клиентский экспорт (E2E-шифрование) | ST-импорт на M2 | принято пользователем 26.10; *рев. 18:* истории RoleCall импортируются из экспорта `.rolecall` [D-185…D-195] |
+| D-9 | Импорт старых чатов | позже: ST JSONL (свайпы → сиблинги); RoleCall — только через клиентский экспорт (E2E-шифрование) | ST-импорт на M2 | принято пользователем 26.10; *рев. 18:* истории RoleCall импортируются из экспорта `.rolecall` [D-185…D-195]; *рев. 19:* одиночные чаты ST — `rp-core import <chat.jsonl> --card <id>` [D-240] |
 | D-10 | Групповой чат | позже; поле `speaker` зарезервировано | v1 с ротацией говорящих | принято пользователем 26.10 |
 | D-11 | Лицензия ядра | AGPL-3.0-or-later | Apache-2.0; MIT; MPL-2.0 | принято пользователем 25.10 |
 | D-12 | Конвенция глубины | ST: d = число сообщений после блока; импорт RoleCall +1 | конвенция RoleCall | принято пользователем 26.10 |
-| D-13 | Хранение | один открытый JSONL-файл-дерево на сессию, одна голова, форки — новые файлы, lock, без шифрования в v1; Bunraku хранит записи ядра в своём SQLite через порт | SQLite-журнал; шифрованные файлы; именованные ветки внутри файла | принято пользователем 26.10 |
+| D-13 | Хранение | один открытый JSONL-файл-дерево на сессию, одна голова, форки — новые файлы, lock, без шифрования в v1; Bunraku хранит записи ядра в своём SQLite через порт (*рев. 19:* построены две границы — `SessionStore` и `RecordStore` через фасад [D-235]; решение Bunraku — с Chi) | SQLite-журнал; шифрованные файлы; именованные ветки внутри файла | принято пользователем 26.10 |
 | D-14 | Kintsu | сначала предупредить Chi и договориться об общей поверхности (коды выхода, флаги провайдеров, sandbox; события — через маппинг); разговор о переезде (a) — с демо M3–M4 | сразу предлагать (a); вариант (b); независимые проекты (c) | принято пользователем 25.10 |
 | D-15 | Транспорт тулов (техн.) | по записи возможностей; неизвестная модель → prompted; без молчаливого переключения; только `caps.suggest` | native по умолчанию; авто-переключение | принято пользователем 26.10 |
 | D-16 | Текст и тулы в ответе | текст раундов накапливается; блоки тулов хранятся в сообщении, в последующие промпты не идут | «только последний раунд» (RoleCall); тулы только в трассе (Bunraku) | принято пользователем 26.10 |
@@ -4983,7 +5586,7 @@ as_of = "2026-10-06"
 | D-24 | Lookback | отложить на после v1 | опциональный проход в v1 для моделей без тулов | принято пользователем 26.10 |
 | D-25 | Параллельность ходов (техн.) | один ход на сессию; параллельно — разные сессии и форки; правка во время хода → `conflict` | один ход на именованную ветку внутри файла | принято пользователем 26.10 |
 | D-26 | Память и Compendium (рев. 5) | **Compendium целиком в ядре**; хранение — строки `mem` с типизированными `data` на пути (§5.8, §7.4, рев. 6) | Хроника (рекомендация рев. 4); Хроника с типами | принято пользователем 25.10 (вопрос 13) |
-| D-27 | Существующие сцены Bunraku при переходе на ядро | перевести один раз: сообщения, свайпы, правки, скрытые, дубли → форки, переменные → `vars0`; состояние Директора, таймеры лора и старые трассы начинаются заново | адаптер переводит и Директора, и следы лора (работа Chi, с потерями); старые сцены остаются на движке Bunraku | по умолчанию, ждёт подтверждения |
+| D-27 | Существующие сцены Bunraku при переходе на ядро | перевести один раз: сообщения, свайпы, правки, скрытые, дубли → форки, переменные → `vars0`; состояние Директора, таймеры лора и старые трассы начинаются заново | адаптер переводит и Директора, и следы лора (работа Chi, с потерями); старые сцены остаются на движке Bunraku | по умолчанию, ждёт подтверждения; *рев. 19:* M9 собрана без него, адаптера Bunraku нет |
 | D-28 | Префилл пресета и тулы | при префилле тулы рассказчика в этом ходу выключены, `notice` раз за сессию | наоборот: тулы, префилл пропускается; сливать префилл с первым раундом (не проверено на серверах) | принято пользователем 26.10 |
 | D-29 | Директор на свайпе | повторно использовать план заменяемого ответа; планировать заново при сбое прошлого плана и на guided re-roll | планировать на каждом свайпе | принято пользователем 26.10 |
 | D-30 | Время записи переменных | дифф коммитится с ответом; незакоммиченный ход переменных не меняет | как Bunraku/RoleCall: писать до отправки, при неудаче откатывать частично | принято пользователем 26.10 |
@@ -4992,13 +5595,19 @@ as_of = "2026-10-06"
 | D-33 | Пересказы (длинный контекст) | пересказы historian включены по умолчанию, один уровень, отдельные 10 % окна [D-83] | выключены по умолчанию; скользящая сводка чата; оба механизма | принято пользователем 26.10 |
 | D-34 | Вклады в ядро | DCO (`Signed-off-by`) плюс соглашение команды RoleCall `docs/TEAM-LICENSING.md` о праве на отдельную закрытую лицензию; подписать до первого внешнего коммита (§2, п. 7) | только DCO; CLA | принято пользователем 26.10 |
 | D-35…D-73 | Изменения контракта по карте портирования (рев. 4) | см. §19.10; почти все — «принять», с оговорками в D-53, D-61, D-62, D-71 | оставить контракт как есть | приняты все. D-61 и D-62 — 25.10, D-71 — 25.10 в смешанном варианте. Остальные — 26.10, D-43 с правкой для экспортов RoleCall. В D-66…D-68 там, где они расходятся с D-82, D-83, D-86 и D-87, действуют решения Compendium |
-| D-74…D-89 | Compendium в ядре (рев. 6): хранение, активация, recall, профили, планировщик, filing, historian, резерв ответа | см. §19.10, §5.8 и §7.4 | Хроника; Compendium в форме Bunraku (квитанции, undo) | приняты 26.10 (вопросы 16–20) |
-| D-90…D-97 | M3: тулы и поиск (рев. 13): запасная модель с другим транспортом, финальный раунд, выбор тулов в два прохода, комната тулов, эхо рассуждений DeepSeek (D-94 пересмотрено после ревью), `normalizeName`, заметка о пропуске и напоминание (при prompted-тулах — со строкой вызова), имя предложенного тула как тег — вызов этого тула. Плюс правка D-59: `C<n>` заметки в тулах — её хэндл `/memory` | см. §19.10 | — | ждут подтверждения (техн.) |
+| D-74…D-89 | Compendium в ядре (рев. 6): хранение, активация, recall, профили, планировщик, filing, historian, резерв ответа | см. §19.10, §5.8 и §7.4 | Хроника; Compendium в форме Bunraku (квитанции, undo) | приняты 26.10 (вопросы 16–20); *рев. 19:* D-196, D-203 и D-205 уточняют D-76, D-78 и D-89, D-209 и D-211 — D-84 (вопрос 27) |
+| D-90…D-97 | M3: тулы и поиск (рев. 13): запасная модель с другим транспортом, финальный раунд, выбор тулов в два прохода, комната тулов, эхо рассуждений DeepSeek (D-94 пересмотрено после ревью), `normalizeName`, заметка о пропуске и напоминание (при prompted-тулах — со строкой вызова), имя предложенного тула как тег — вызов этого тула. Плюс правка D-59: `C<n>` заметки в тулах — её хэндл `/memory` | см. §19.10 | — | ждут подтверждения (техн.); *рев. 19:* нативные Anthropic и Gemini отступают от D-91 [D-228] |
 | D-98…D-124 | M4: Story Director (рев. 14): контракт `structuredCall` и поиск `<plan>` сканером M3, параметры вызова, профиль lite/full, состояние на пути — чистая функция `directorAt`, повтор плана на свайпе, доставка и контракт, вход `runDirector`, чтение плана, сопоставление арок, слова ритма, личности, фильтр персоны с русскими правилами, `/director`, `rp-core compact`, уведомления. После первой волны — потолок снимка для любого письма (D-116), хвосты ядра (D-117), отступления блоков (D-118). После ревью и живого прогона — «следует за рассказчиком» значит только соединение и модель (D-119), строка языка в контракте (D-120), запрос всегда в окне и код `no_room` (D-121), узкий `transport_unsupported` (D-122), правки чистого ядра (D-123) и `compact` (D-124) | см. §19.10 | — | ждут подтверждения (техн.) |
 | D-125…D-139 | M4.5: TUI (рев. 15): команды `rp-core tui` и `new --tui`, OpenTUI 0.7.0 только на пути `tui`, порты REPL (`LineSource`, `ReplView`), раскладка и панели, клавиши, лента, правка на месте, безопасность терминала, тесты на headless-рендерере и `TMPDIR` тестов, цвета из терминала. После ревью — свои обработчики всех сигналов выхода (D-135), ни одна строка REPL не теряется (D-136), лента как чат (D-137), мелкие правки (D-138). После второго и третьего взгляда Леви — ввод, мышь, выделение, `**жирный**` и `*курсив*` без звёздочек, `/director show` с директивой целиком (D-139) | см. §19.10 и §12.4.1 | только построчный REPL | ждут подтверждения (техн.) |
 | D-140…D-169 | M5a: Compendium — данные и ручная память (рев. 16): карта модулей, затравка книг на уровне сессии и маршрутизация, свёртка (устаревание, новейшее действие по ключу, `tasks` и `effects`), операции `file`, `arc` и `edit`, пропавшая основа (отступление от D-75), точное слияние и происхождение, одна нумерация `C<n>` (правит D-59), рендер и краткий рендер, свежесть, дерево, селектор с ярусом 3, профиль и лимиты, блок и бюджет, тулы лора по Compendium, снимок мира, `[compendium]` с `enabled` по умолчанию для новых сессий, глаголы и события, правка в редакторе, команды `/memory`, импорт и экспорт `compendium-v1.0.0`, `--keep-requests`, список отступлений для Chi, фикстуры. После ревью — закреплённые строки человека (D-168); после живого прогона — имена «все значимые слова в любом порядке» (D-169) | см. §19.10, §5.8 и §7.4 | — | ждут подтверждения (техн.) |
 | D-170…D-184 | M5b: агенты Compendium (рев. 17): карта модулей; фоновая полоса — работа выводится из пути, момент включения, покрытие, группы, строки `job`, парковка, восстановление, режимы `auto` и `manual`; планировщик — приоритеты, вытеснение, правило локального origin, затвор простоя только у локального; промпты filing (full дословно с пятью правками, новый lite), снимок, ростер, user и бюджеты; терпимое чтение и постановка; historian — триггеры, водяной знак префикса, окно, промпты, применение; обзоры `[Arc]` книг; слот `{{recap}}` — только с содержимым, место, бюджет, стабильность; правка человека ждёт свою запись; глаголы `undo`, `refile`, `retry`, `wait`, `status`; вывод REPL и TUI; настройки. После ревью — строка языка (D-183, после второго живого прогона — язык называется по письменности) и порядок истории в свёртке (D-184); после финальной проверки — постановка против свёртки, ничьи, хэндлы по строке создания (правит D-150), предохранитель | см. §19.10, §5.8 и §7.4 | — | ждут подтверждения (техн.) |
 | D-185…D-195 | Импорт истории RoleCall (рев. 18): команда `rp-core import <story.rolecall>` и её флаги; свой ZIP-читатель без зависимостей, ленивое чтение; элементы библиотеки — карточка, персона, пресет в форме экспорта RoleCall с копией под настройки чата (свой маркер с текстом и текст структурного маркера отправляются, как в RoleCall), книги с тождеством по хешу, поглощённые строки выключены; сообщения — свайпы как сиблинги, детерминированные id, рассуждения портом разделителя RoleCall, `{{user}}`/`{{char}}` раскрыты; Compendium включается после импортированного прошлого; состояние Директора RoleCall на версиях головы и ответа перед ней; что не переносится; происхождение, повторный импорт, запись «всё или ничего»; размер; синтетические фикстуры. После ревью — проверка помещения при импорте и в движке до Директора (D-195) | см. §19.10 и §10.6 | — | ждут подтверждения (техн.) |
+| D-196…D-208 | M5c: recall (рев. 19): объём вехи — задержка выделена в M5d, нетипизированные записи как выбор recall отложены; индекс full и шорт-лист lite; промпты (full — текст Bunraku с правками, lite — свой), не больше двух своих вызовов; терпимое чтение; запись `recall` в prep и коммите; режимы `auto\|sync\|prefetch\|lexical\|off` и `onMiss`; prefetch — слот полосы, база без ревизии Compendium; порядок шагов хода, ярус 1 в порядке recall, новый recall на guided re-roll и `rerun`; сроки и `recall_slow`; `history_crowded` вместо правила 25 % окна; команды `/memory recall\|profile\|mode`, строка в `/trace`; швы тестов; префилл начала ответа у JSON-агентов | см. §19.10 и §7.4.2 | — | ждут подтверждения (техн., вопрос 27) |
+| D-209…D-218 | M5d: задержка на локальных серверах (рев. 19): объём, `id_slot` при любом `max_in_flight`; чтение сведений о сервере (`/props`, `/api/version`, `/api/ps`, `/api/v1/models`) без записи, повтор после временного сбоя; закрепление слотов llama.cpp — рассказчик 0, агенты 1, `slot_pin`; уведомления `slots_pinned`, `slots_detected`, `ollama_reload_risk`, `lmstudio_autoevict`; счёт промпта в трассе; `rp-core bench ttft`; тесты на подделках серверов; документация; живые проверки; совместимость | см. §19.10 и §7.4.7 | — | ждут подтверждения (техн., вопрос 27) |
+| D-219…D-226 | M6: `--stdio` (рев. 19): сессии соединения; параллельные запросы, ответы в порядке готовности; шесть кодов ошибок JSON-RPC; снимок — весь активный путь без курсора; конфликт по версии, `fork` и `configure` во время хода отказывают, `held` переживает рестарт; набор методов против плана; схема своим генератором, с дырами; `gate/request` на проводе | см. §19.10 и §12.2 | — | ждут подтверждения (техн., вопрос 28) |
+| D-227…D-234 | M7 и M8: нативные Anthropic и Gemini (рев. 19): оба адаптера написаны заново; финальный раунд без схем и `tool_choice` (отступление от D-91); thinking, семплеры и `stop_sequences` Anthropic; `pause_turn`; нативный mid-system по данным; санитайзер схем и safety Gemini; replay `gemini-parts`; форма запроса Gemini, `responseFormat` для structured output | см. §19.10 и §8.4 | — | ждут подтверждения (техн., вопрос 28) |
+| D-235…D-239 | M9: стык с Bunraku (рев. 19): две границы хранения — `SessionStore` и `RecordStore` через фасад с conformance; `beforeAssemble` первым; хук `transformRequest`, гейты `transform` и `review`; `transformReply` на видимом тексте; `draft` и `/impersonate` | см. §19.10 и §12.5 | — | ждут подтверждения (техн., вопрос 28) |
+| D-240…D-244 | Вне вех (рев. 19): импорт одиночного чата SillyTavern; смена персоны строкой журнала `persona`; названия историй и имена веток строками `name`; окна TUI F4–F8 и обзор историй через команды REPL; подключение OpenRouter из TUI с ключом только в памяти | см. §19.10, §10.5 и §12.4.1 | — | ждут подтверждения (техн., вопрос 28) |
 
 ---
 
@@ -5009,19 +5618,19 @@ as_of = "2026-10-06"
 3. **Качество Директора и агентов Compendium на слабых моделях.** Промпты RoleCall настроены под сильные облачные модели, а на локальных 7–14B могут не работать. *Меры:* промпты RoleCall как основа (рев. 3), сессии оценки через record/replay до M4 и M5, lite-профиль, честный сбой. *Рев. 14, живые прогоны M4 (Mag-Mell 12B, lite, tagged, 4 хода):* после D-119 все 5 планов прочитались с первой попытки, но модель не завела ни одной арки — три плана из четырёх не изменили состояния, кроме намерений и директивы. Под английской директивой рассказчик съезжал на английский; после строки языка [D-120] русский держался в 5 ответах из 6. Профиль full, транспорт structured, облачная модель и 30 живых ходов не опробованы (§15). *Рев. 17:* в живых прогонах M5b рассказчик снова съезжал на английский (риск 27); filing и historian — риск 25.
 4. **Prompted-тулы на маленьких локальных моделях ненадёжны:** проза вместо вызовов, битый JSON, протечки шаблонов. *Меры:* проба, цепочка починки, восстановление протечек, финальный раунд, `/search` для человека.
 5. **Префилл против тулов.** Пользователи пресетов с префиллом по умолчанию теряют поиск рассказчика [D-28]. *Меры:* видимый `notice`, статус в REPL, переключатель `prefill_vs_tools`.
-6. **Одно-слотовые бэкенды.** Вызов Директора или фоновая задача Compendium может выбить KV-кэш рассказчика, и тогда промпт обрабатывается заново целиком. *Меры:* приоритеты и вытеснение; recall заранее (prefetch); задержка фона после хода, чтобы свайп и continue не платили за вытеснение; семафор по origin; пресеты `--cache-ram`, `-np 2` с `id_slot` (M5c), `--smartcache`; отдельное соединение для агентов; прогрев — если замеры M5c покажут нужду (§7.4.7). *Рев. 14, замер ревью (o200k, профиль full, 10-й ход):* у запроса Директора (≈ 15,5 тыс. токенов) и запроса рассказчика (≈ 5,7 тыс.) общий префикс — 5 токенов. Значит, на одном слоте без кэша хоста каждый вызов Директора вытесняет весь KV-кэш рассказчика, а рассказчик — кэш Директора: каждый ход оба промпта обрабатываются заново целиком. Два соседних запроса Директора делят его system (≈ 8,8 тыс. токенов), но на одном слоте между ними стоит рассказчик.
+6. **Одно-слотовые бэкенды.** Вызов Директора или фоновая задача Compendium может выбить KV-кэш рассказчика, и тогда промпт обрабатывается заново целиком. *Меры:* приоритеты и вытеснение; recall заранее (prefetch); задержка фона после хода, чтобы свайп и continue не платили за вытеснение; семафор по origin; пресеты `--cache-ram`, `-np 2` с `id_slot` (*рев. 19:* построено на M5d), `--smartcache`; отдельное соединение для агентов; прогрев — если замеры покажут нужду (§7.4.7). *Рев. 14, замер ревью (o200k, профиль full, 10-й ход):* у запроса Директора (≈ 15,5 тыс. токенов) и запроса рассказчика (≈ 5,7 тыс.) общий префикс — 5 токенов. Значит, на одном слоте без кэша хоста каждый вызов Директора вытесняет весь KV-кэш рассказчика, а рассказчик — кэш Директора: каждый ход оба промпта обрабатываются заново целиком. Два соседних запроса Директора делят его system (≈ 8,8 тыс. токенов), но на одном слоте между ними стоит рассказчик. *Рев. 19 (M5d) [D-211]:* закрепление построено: на llama.cpp рассказчик идёт в слот 0, агенты — в слот 1. На бенче (Mag-Mell 12B, `-np 2 --no-kv-unified`, `--cache-ram 0`) закреплённый рассказчик сохранил кэш во всех раундах (отношение 1,00), незакреплённый терял его в каждом (≈ 15; первый токен P+T — 0,97 с против 0,09 с). Одному слоту помогает кэш хоста: Ollama 0.40.12 запускает свой llama-server с `--cache-ram 8192` по умолчанию, и на бенче отношение — 1,00 во всех раундах. Прогрев не понадобился (§7.4.7, §15).
 7. **Записи возможностей устаревают.** Быстро меняются правила Anthropic (семплеры, thinking, префилл, forced tools, привязка префикса), подписи Gemini и поля vLLM. *Меры:* данные в файлах, пробы, оверрайды, ошибки, которые называют поле.
 8. **Пересечение с Kintsu.** Если Kintsu выйдет первым на `scene-turn`, появятся два headless-протокола, а `--json` у них разный. *Меры:* общие коды выхода и флаги, явный маппинг, ранний разговор Леви с Chi. По решению от 25.10 Леви предупреждает Chi сейчас, демо показывает на M3–M4.
-9. **Стык с Bunraku.** Старые сцены теряют состояние Директора и таймеры лора [D-27]; трассу нужно переводить для UI Bunraku; трекеры сверяются только на стороне Bunraku; хуки должны быть fail-closed. *Меры:* решение D-27 до M9, conformance-тесты порта, явный список того, что остаётся у Bunraku (§12.5).
+9. **Стык с Bunraku.** Старые сцены теряют состояние Директора и таймеры лора [D-27]; трассу нужно переводить для UI Bunraku; трекеры сверяются только на стороне Bunraku; хуки должны быть fail-closed. *Меры:* решение D-27 до M9, conformance-тесты порта, явный список того, что остаётся у Bunraku (§12.5). *Рев. 19:* сторона ядра M9 построена без решения D-27: хуки и гейты fail-closed, `checkRecordStoreConformance` для хранилища хоста [D-235, D-237]. Перевод трассы и сцен — работа адаптера Bunraku, а его нет.
 10. **Конвенция ST и буквальные макросы.** Пресеты, настроенные под RoleCall, без конвертера окажутся на сообщение выше, и поведение будет ощущаться иначе, чем в RoleCall.
 11. **Рост файла сессии.** Его раздувают снимки Директора (≤ 16 КБ типично, потолок 32 КБ на ответ [D-61]), блоки рассуждений, чекпоинты и `prep`. *Меры:* `rp-core compact`, лимиты состояния; позже — снимки-контрольные точки и SQLite за портом. *Рев. 14, замер:* на 300 подробных русских ходах снимок — медиана ≈ 20–24 КБ, максимум 32 552 байта [D-116], то есть ≈ 6–7 МБ снимков на 300 ответов, и ещё столько же в копиях `prep`. `rp-core compact` убирает только копии в `prep` и строки `chk`; снимки `msg.dir` остаются у каждой версии ответа [D-114].
-12. **Неизвестное поведение Bun fetch** при долгом ожидании первого байта: свои таймауты могут убить валидную генерацию или пропустить зависание. Проверяется на M1.
+12. **Неизвестное поведение Bun fetch** при долгом ожидании первого байта: свои таймауты могут убить валидную генерацию или пропустить зависание. Проверяется на M1. *Рев. 19:* проверено на M1b: у Bun fetch свой таймаут простоя (5 минут), `http.ts` его выключает (`timeout: false`), таймауты — у движка (§8.8).
 13. **Качество памяти.** Дубли, галлюцинированные факты, разрастание записей. *Меры:* склейка по каноническому имени и алиасам, ключи массивов RoleCall и схлопывание почти-дублей [D-81], NO-WRITE DEFAULT и правило памяти с изменённым убеждением, подавление ещё видимого [D-80], `/memory retire|undo`, уведомление о большой записи; позже — review, reconcile и консолидация записей.
 14. **Русская морфология и Unicode.** Лёгкий стемминг даёт ложные совпадения («Мира» и «мир») и пропуски (чередования, супплетивные формы); Turkish İ JS приводит к нижнему регистру неполно. *Меры:* фикстуры `ru`, просьба к модели искать по корням, буквальные фразы в кавычках.
 15. **Открытые файлы на диске.** RP-чаты лежат в `~/.rp-core` открытым текстом, и для части сценариев это может быть неприемлемо.
 16. **Расползание объёма** против «сознательно простого» ядра. *Меры:* список «позже» в §15 и правило «новая механика только при пользователе в v1».
 17. **Compendium на слабых моделях и малых окнах (рев. 6).** Схема из 11 типов и 223 полей рассчитана на сильные модели; слабые выдумывают ключи и значения enum. 30 тысяч токенов снимка — потолок, а не типичный размер (фикстура на 233 записи — 3 741 токен), но в окно 16k не влезает и он. *Меры:* профиль lite — поля 431 токен вместо 620, ростер вместо снимка, шорт-лист вместо дерева [D-79]; терпимое чтение с отбрасыванием поля, а не элемента [D-82]; резерв ответа рассказчика на малом окне [D-89]; оценка на записях qwen3-14b до закрытия M5b. Остаток: мусор в неизвестных полях попадает в рендер. *Рев. 17:* оценки на записях qwen3-14b нет; M5b закрыта на скриптовом демо и трёх живых прогонах Mag-Mell 12B (§15). Что они показали — риск 25.
-18. **Задержка до первого токена (рев. 6).** На одно-слотовом бэкенде Директор и фоновые задачи вытесняют KV рассказчика. *Рев. 14:* для Директора вытеснение полное — общий префикс его запроса и запроса рассказчика 5 токенов (риск 6). Во втором живом прогоне M4 (Mag-Mell 12B, lite) вызов Директора на тёплой модели шёл 7,6–8,8 с до ответа рассказчика. Prefetch убирает recall с критического пути, но не повторную обработку промпта рассказчика без кэша хоста (по оценке ≈ 8 с на GPU, ≈ 40 с на CPU). Prefetch не видит сообщения игрока: новую тему без имён он ловит хуже. Фона за ход в lite — ≈ 25 с; если игрок отвечает быстрее, задачи голодают. *Меры:* prefetch с добором упоминаний, ожидание в пределах `graceSec`, задержка фона, семафор по origin, `id_slot` и пресеты бэкендов, уведомления `memory_starved` и `recall_slow`; критерии M5c — выбор prefetch не хуже 0,8 от согласованности двух sync-прогонов и повторная обработка ≤ 1,5 × нового хвоста с кэшем хоста или `-np 2` и `id_slot`.
+18. **Задержка до первого токена (рев. 6).** На одно-слотовом бэкенде Директор и фоновые задачи вытесняют KV рассказчика. *Рев. 14:* для Директора вытеснение полное — общий префикс его запроса и запроса рассказчика 5 токенов (риск 6). Во втором живом прогоне M4 (Mag-Mell 12B, lite) вызов Директора на тёплой модели шёл 7,6–8,8 с до ответа рассказчика. Prefetch убирает recall с критического пути, но не повторную обработку промпта рассказчика без кэша хоста (по оценке ≈ 8 с на GPU, ≈ 40 с на CPU). Prefetch не видит сообщения игрока: новую тему без имён он ловит хуже. Фона за ход в lite — ≈ 25 с; если игрок отвечает быстрее, задачи голодают. *Меры:* prefetch с добором упоминаний, ожидание в пределах `graceSec`, задержка фона, семафор по origin, `id_slot` и пресеты бэкендов, уведомления `memory_starved` и `recall_slow`; критерии M5c — выбор prefetch не хуже 0,8 от согласованности двух sync-прогонов и повторная обработка ≤ 1,5 × нового хвоста с кэшем хоста или `-np 2` и `id_slot`. *Рев. 19:* prefetch построен (M5c) [D-202, D-203]. В живом прогоне M5c принятый prefetch не мог знать, что игрок спросит о купце по описанию: запись новой темы в ярус 1 не попала. Записи, названные в сообщении, всё равно идут ярусом 0; `sync` читает сообщение и стоит ожидания; guided re-roll и `onSwipe = 'rerun'` вызывают recall заново. Второй критерий выполнен на M5d для `-np 2 --no-kv-unified` с закреплением и для одного слота Ollama с кэшем хоста; первый (качество prefetch) не замерялся (§15).
 19. **Локальная модель не тянется к тулам в RP-промпте, даже когда ей говорят (рев. 13).** На первом живом демо M3 ни одна локальная модель не позвала тул: Mag-Mell 12B (prompted) и gemma4:26b (native) отвечали по видимой части чата, как будто это весь чат. Подсказка про тулы стояла только в голове запроса, у Mag-Mell — за ≈ 9 000 токенов до вопроса. Повторные прогоны 27.10 с заметкой о пропуске, напоминанием со строкой вызова и тегом с именем тула [D-96, D-97] тоже не дали ни одного вызова: обе модели отвечали по видимой части и часто выдумывали имя. gemma4:26b в коротком промпте с одним тулом зовёт его через `/v1` Ollama, а в полном RP-промпте решает не искать. Думающая модель к тому же тратит бюджет ответа на рассуждения: при `max_tokens` 300 они заняли у gemma4:26b большую часть ответа, при 1024 вторая попытка ушла в `reasoning_only` [D-31]. *Меры:* recall Compendium до ответа (M5; на локальном origin — prefetch [D-1, D-78]) — путь, который не зависит от решения модели; модели, обученные вызовам тулов (облачная модель, например DeepSeek, — не опробована, нужно согласие Леви на расход); запас `max_tokens` или выключенный thinking для думающих моделей на Ollama; уже сделаны — заметка о пропуске и напоминание [D-96], тег с именем тула как вызов [D-97], детерминированные демо и живой тест `test/live/m3-ollama.test.ts` (`RP_CORE_LIVE=1`).
 20. **Эхо рассуждений DeepSeek не проверено вживую (рев. 13).** С тулами DeepSeek требует `reasoning_content` всех прошлых ответов. Ответ без своих рассуждений (приветствие, ответ другой модели, ответ с выключенным thinking) уходит с заглушкой — одним пробелом [D-94]. Что DeepSeek её примет, — ожидание, а не проверка: пустую строку он, по стороннему сообщению, отвергает. Так же вживую не проверена перекладка `reasoning_details` OpenRouter при переименовании id вызова. *Меры:* на 400 `bad_request` в запросе с заглушками — `notice` раз за сессию с выходом `tools = "none"` в `[caps."conn:model"]`; проверка на живом API.
 21. **OpenTUI — пакет версии 0.x (рев. 15).** За ним ≈ 350 версий. Ломающие изменения выходят в минорных релизах, однажды — в патче (0.6.7). ScrollBox на `main` уже переписан после 0.7.0 (#1805). Открытые баги 0.7.0 TUI обходит сам: режим 2027 после выхода (#1727), незакрытая вставка (#1270). Нижняя граница Bun у 0.7.0 — 1.3.14, ровно наша. *Меры:* версия закреплена ровно (`0.7.0`, без `^`), `bun.lock` в репозитории; OpenTUI грузит только путь `tui`, так что ядро, `chat`, `send` и библиотека от него не зависят; обновление — отдельным шагом, с `test/tui` и pty.
@@ -5039,7 +5648,7 @@ as_of = "2026-10-06"
     - *Пропуски.* Беглые гласные и чередования не сходятся: «Уголёк» и «Уголька», «Разлив» и «разлило», «паром» → `пар`.
     - *Любой порядок в одном сообщении* [D-169]. Имя собственное из нескольких слов совпадает, когда все его слова есть в одном тексте где угодно: длинное сообщение со словами «фонарь» и «Гордей» в разных фразах назовёт «Фонарь Гордея». Чем длиннее сообщение и чем обычнее слова имени, тем чаще ложное совпадение. Раздел I сузил правило: фраза с коротким словом или стоп-словом, названия событий, сюжетов и пересказов и ключи книг требуют слов подряд. Слова из двух разных сообщений окна не складываются.
     - *Цена ошибки* — лишняя краткая запись в блоке (место в бюджете, но не неправда) или пропущенная запись, которую модель может найти `search_lore`.
-    - *Меры:* алиасы и ключи книги как дополнительные имена; персонаж карточки и персона — последними в ярусе; пределы блока по профилю; `/trace` показывает, что и почему выбрано. Возможная мера (не спроектирована): точное совпадение `normalizeName` для имён из одного короткого слова. Recall M5c добавит выбор моделью.
+    - *Меры:* алиасы и ключи книги как дополнительные имена; персонаж карточки и персона — последними в ярусе; пределы блока по профилю; `/trace` показывает, что и почему выбрано. Возможная мера (не спроектирована): точное совпадение `normalizeName` для имён из одного короткого слова. Recall M5c добавит выбор моделью. *Рев. 19:* recall построен на M5c: выбор модели идёт ярусом 1 в порядке recall [D-203]; на RP-модели он слабый (риск 29).
 25. **Качество filing и historian на слабой модели (рев. 17).** Чтение терпимое, и в живых прогонах M5b (Mag-Mell 12B, lite) все ответы прочитались с первого вызова. Но что модель решает записать — её выбор.
     - *Повторы карточки.* В первом прогоне первый проход завёл записи персонажа карточки (Марфа) и персоны (Елисей), а каждый следующий дописывал Марфу: в `/memory` её запись — 1.5k символов JSON после трёх проходов и 2.0k после четвёртого и его refile. Эти записи потом занимают места в блоке: на последнем ходу среди 7 выбранных — Марфа и Елисей, которые и так есть в карточке и персоне, и Марфа вошла в блок.
     - *Сюжеты.* Historian то переиспользует сюжет книги («Пропавший обоз», прогоны 1 и 3), то заводит свой («The Sleeping Goose's History», прогон 2). Дайджест просит «REUSE these names», но не заставляет.
@@ -5052,6 +5661,20 @@ as_of = "2026-10-06"
     - *Меры:* `compendium.language` задаёт язык явно и сильнее угадывания; общая строка остаётся, когда язык не назван. Возможная мера (не спроектирована): распознавание языка внутри латиницы.
 27. **Рассказчик съезжает на английский (рев. 17; риск 3, D-120).** Слабость M4 видна и в прогонах M5b: в обоих длинных прогонах Mag-Mell 12B с третьего ответа переходил на английский — в первом и повествованием, и репликами (в третьем ответе ещё и с испанскими фразами), во втором — повествованием при русских репликах. Строка языка в контракте Директора [D-120] держит не всегда, а директива по-английски тянет за собой. Агенты Compendium от этого защищены — язык назван им прямо (D-183, раздел J), — а рассказчик нет. *Цена:* история на смеси языков, а заодно и `storyLanguage`: если английского текста станет больше 40 %, письменность перестанет быть преобладающей, и агенты получат только общую строку (риск 26). *Меры:* строка языка в контракте Директора; возможные меры (не спроектированы) — называть язык и рассказчику тем же `storyLanguage`, писать директиву на языке истории; проверка на модели сильнее 12B.
 28. **Импортированная история не помещается в окно локальной модели (рев. 18) [D-195].** Пресет и лорбуки долгой истории RoleCall рассчитаны на облачное окно: на настоящем экспорте запросу нужно ≈ 40 тыс. токенов, а у рассказчика на 16 384 с резервом ответа 8 000 их 8 384 — каждый ход отказывает. *Меры:* импорт предупреждает и называет числа; движок отказывает до вызовов Директора; выход — рассказчик с окном ≥ 64k (на 65 536 запрос собирается) или `/preset builtin`. Сборка запроса этой истории — 1,3–1,5 с (лор по пяти большим книгам), и её платит каждый ход.
+29. **Recall на RP-модели выбирает плохо (рев. 19) [D-208].** В живом прогоне Mag-Mell 12B, привязанный рассказчиком, сначала ответил на промпт recall в роли — прозой, без хэндлов. С префиллом начала ответа JSON стал читаемым (0,4–0,6 с), но модель почти всегда выбирала первую строку индекса. Recall по умолчанию следует за recorder, а тот — за рассказчиком, так что на локальной RP-сессии это случай по умолчанию. *Цена:* вызов на каждый ответ (sync — до первого токена) ради шума в ярусе 1, который занимает место в блоке. *Меры:* префилл чинит форму; совет в документах — привязать `recall` к модели, которая следует инструкциям (`/model recall`), или `/memory mode lexical`; `/memory profile` показывает привязку. Хорошая модель recall вживую не проверялась.
+30. **Общий KV llama-server по умолчанию (рев. 19).** При `-np auto` KV общий, и простаивающий слот рассказчика уходит в RAM хоста, как только начинается другая задача: закрепление тогда держит кэш только через `--cache-ram`. Вживую не замерено — матрица M5d шла на `-np 2 --no-kv-unified`. *Меры:* `slots_pinned` советует `-np 2 --no-kv-unified`; `rp-core bench ttft` проверяет свою схему за 9 вызовов.
+31. **Сборка llama.cpp неизвестна или старая (рев. 19) [D-211].** llama-server из Ollama сообщает сборку `b1`. При ёмкости ≥ 2 закрепление на такой сборке выключено, при ёмкости 1 — включено на любой, и это безопасно, только пока ядро не шлёт в занятый слот. *Меры:* правило D-211 закрепляет старую или неизвестную сборку только при ёмкости 1; `slots_detected` объясняет, почему закрепления нет; `slot_pin` задаёт его вручную.
+32. **Счёт промпта есть не у всех серверов (рев. 19) [D-213].** LM Studio его не даёт, а запись `record:` его не хранит, так что у `replay:` и LM Studio `/trace` и бенч показывают только время. По ним не видно, что агент забрал кэш рассказчика. *Меры:* поле неизвестно, а не ноль; бенч говорит, почему вердикта нет. Хранить счёт в записи — открытая мелочь.
+33. **Схема протокола 1 неполна и отстала (рев. 19) [D-225].** В `src/protocol/protocol.schema.json` нет `session/draft`, `turn/answerGate`, `inspect` у `turn/run` и запроса `gate/request`, а с M9 (`1ca938d`) нет и `agent: 'host'`: `bun run schema:check` на 14.11.2026 падает, и ни один тест этого не ловит. *Цена:* клиент, который генерирует типы по схеме, не увидит гейтов и черновиков; клиент, который проверяет кадры по схеме, отвергнет событие `agent` от хуков хоста. *Меры:* внести четыре формы в `commands.ts` (`RPC_METHODS`, `RpcCommandParams`, тип запроса ядра), перегенерировать, добавить тест на `schema:check`; до тех пор справочник — `docs/STDIO.md`.
+34. **Отложенный ответ из `--stdio` запирает сессию для REPL и TUI (рев. 19) [D-223].** Если клиент `--stdio` получил `conflict` и не вызвал `turn/commitAnyway` или `turn/discard`, ход остаётся открытым и после рестарта. REPL и TUI такой сессии отказывают `held_pending`, а команды «сохранить / отбросить» у них нет (это «не в v1» D-125). *Цена:* история не идёт дальше в терминале, пока её не решит другой клиент. *Меры (не спроектированы):* команда REPL для отложенного ответа или вопрос при открытии.
+35. **Второй SIGINT в `--stdio` убивает хост в любой момент (рев. 19).** В `cli/main.ts` флаг первого SIGINT не сбрасывается после хода: первый сигнал останавливает ходы, а любой следующий — хоть через час — сразу выход с кодом 130. *Цена:* хост, который останавливает ходы сигналом, на второй остановке теряет процесс; сессии не закрываются, и следующее открытие восстанавливает ход, как после краша. *Меры:* сбрасывать флаг, когда ходов нет (в one-shot он живёт один ход); клиентам — останавливать ход `turn/stop`, а не сигналом.
+36. **Снимок без курсора растёт с историей (рев. 19) [D-222].** `session/open` и `session/new` отдают весь активный путь одним кадром; импортированная история RoleCall на 809 сообщений приходит целиком на каждый `session/open`, а `docs/STDIO.md` советует обновлять снимок после хода. *Цена:* размер кадра и время на долгих историях; не замерено. *Меры:* замерить на импортированной истории; при нужде — необязательный курсор в протоколе 1.
+37. **Нативные Anthropic и Gemini не проверены вживую (рев. 19) [D-228, D-231, D-234].** M7 и M8 собраны без ключей и сети. Все 15 их тестов идут на событиях SSE, написанных руками; записей настоящего API нет — условие M8 «аккаунт Gemini 3 и режим record» не выполнено. Под вопросом форма запроса там, где API может быть строже описания: финальный раунд с историей вызовов, но без объявлений тулов [D-228]; `responseFormat` Gemini для `structuredCall` [D-234]; `display:'summarized'` и `output_config.effort`; нативный system по строкам данных [D-231]. Цикл тулов движка на этих адаптерах не прогонялся. *Цена:* 400 на первом ходе с тулами или у Директора, а не тихая порча: адаптер сводит её к `bad_request` или `thinking_signature_mismatch`. *Меры:* `rp-core probe <conn:model> --active` перед игрой (пинг, тулы с финальным раундом, JSON по схеме); `--provider record:` на первом живом прогоне — эти записи станут golden-фикстурами §14; оверрайды `[caps."conn:model"]`.
+38. **Окно и стопы Claude по умолчанию (рев. 19) [D-229].** Данные не знают окна Claude. Без `rp-core probe <conn:model> --write` (если каталог `/v1/models` его называет) или `context_length` сборка берёт удалённое умолчание 32 768 (§11), и большое окно модели не используется. У Claude 4.6+ и 5-й серии не уходит `stop_sequences`: стопы пресета не работают, а prompted-раунд держится только на `cutAtPromptedStop`. *Меры:* строка `[caps."conn:model"] context_length`; транспорт пресета — native; проверить `stop_sequences` вживую.
+39. **Асинхронный `RecordStore` пишет строку за строкой и держит сессию в памяти (рев. 19) [D-235].** Хранилище хоста получает `append` на каждую строку журнала, `chk` тоже; открытая сессия целиком лежит в зеркале `MemorySessionStore`. Conformance не устраивает обрыв процесса посреди записи, а у `MemoryRecordStore` lease без срока. *Цена:* медленная база хоста задерживает ход на барьерах `turn`, `prep` и ответа; ошибки долговечности адаптера Bunraku найдутся только на его стороне. *Меры:* барьеры только на трёх строках хода; очередь на сессию — одна сессия не держит другую (тест); сбой записи отравляет очередь и не пускает вызов провайдера; `checkRecordStoreConformance` для адаптера. Не сделано: запись пачками, тест обрыва.
+40. **Трасса не видит всего, что сделал хост (рев. 19) [D-237, D-238].** Правки гейта `review` и `note` из `transformReply` не записываются; `blocks` и `tokens` трассы описывают запрос до правок хоста. *Цена:* `/preview --turn` и отладка показывают запрос ядра, а не ушедший; хост, который правит запрос, не докажет этого трассой. *Меры:* `trace.hooks` называет, какие хуки и гейты сработали; ушедший запрос пишет `--keep-requests`.
+41. **Список сессий читает каждый журнал целиком (рев. 19) [D-242].** Чтобы показать текущее название (строки `name`), `listSessions` разбирает весь журнал, а не первую строку. *Цена:* `rp-core sessions`, `/sessions` и обзор F5 замедляются с ростом историй; журнал импортированной истории RoleCall — 1,9 МБ (§15). Не мерили. *Меры:* пока нет; возможные — индекс названий или чтение журнала с конца.
+42. **Ключ OpenRouter из TUI живёт только до конца процесса (рев. 19) [D-244].** F9 дописывает в `config.toml` соединение с `key_env = "OPENROUTER_API_KEY"`, а сам ключ держит в памяти. *Цена:* на следующем запуске соединение в конфиге есть, а ключа нет, пока его не положат в окружение; вызов кончается ошибкой ключа. *Меры:* `docs/USER-GUIDE.md` говорит положить ключ в `OPENROUTER_API_KEY`; ключ не попадает ни в файл, ни в чат (тест).
 
 ---
 
@@ -5078,7 +5701,7 @@ as_of = "2026-10-06"
    - На обычном свайпе план повторно используется, без нового вызова. Устраивает?
    - Нужны ли в v1, кроме агентов Compendium, трекеры, Character Minds или выбор лора моделью? [D-17, D-29, D-4]
 9. ~~Поиск.~~ **Отвечено 26.10:** ключевые слова со стеммингом; эмбеддинги и Lookback — позже [D-2, D-24]. Исходный вопрос: Хватит ли в v1 поиска по ключевым словам с лёгким стеммингом, с эмбеддингами позже? Можно ли отложить Lookback для моделей без тулов? [D-2, D-24]
-10. ~~Импорт и охват.~~ **Отвечено 26.10:** как в документе: ST-пресеты, world info, CCv2/V3; `.vnpack`, групповой чат и импорт старых чатов — позже [D-6, D-9, D-10]. Исходный вопрос:
+10. ~~Импорт и охват.~~ **Отвечено 26.10:** как в документе: ST-пресеты, world info, CCv2/V3; `.vnpack`, групповой чат и импорт старых чатов — позже [D-6, D-9, D-10]. *Рев. 19:* импорт истории RoleCall (рев. 18) и одиночного чата ST [D-240] уже построены; групповой чат и `.vnpack` — нет. Исходный вопрос:
     - Хватит ли в v1 ST-пресетов, world info и карточек CCv2/V3? Или `.vnpack` с твоими самыми подробными листами персонажей нужен уже на M2?
     - Можно ли отложить групповой чат и импорт старых чатов ST/RoleCall на после M9? [D-6, D-9, D-10]
 11. ~~Совместимость: семантика ST против Bunraku.~~ **Отвечено 26.10:** принято пакетом [D-7, D-12, D-21, D-30, D-31, D-22, D-16]. Исходный вопрос: Подтверди по умолчанию:
@@ -5178,6 +5801,24 @@ as_of = "2026-10-06"
     - D-195 — проверка помещения. Импорт говорит, если история не помещается в окно рассказчика, а движок отказывает в таком ходе до вызовов Директора. Это меняет любой ход с Директором, не только в импортированной сессии: раньше Директор планировал, и ход отказывал после.
 
     Принимаем пакетом? Рекомендация — **принять**. [D-185…D-195]
+27. **(рев. 19) Решения M5c и M5d: D-196…D-218.** Их можно подтвердить пакетом, как в вопросах 12 и 21–26. Код им уже следует; подробно — §19.10, §7.4.2 и §7.4.7. Отдельного взгляда заслуживают шесть:
+    - D-196 — объём M5c. Задержка на локальных серверах ушла в отдельную веху M5d: на машине сборки M5c не было llama.cpp, koboldcpp и LM Studio. Нетипизированные записи книг как выбор recall отложены: recall выбирает только типизированные записи Compendium. Это отступает от принятого D-76 и попадёт в список для Chi;
+    - D-203 — порядок хода. Сначала проверка помещения, потом recall и Директор; sync recall идёт рядом с Директором, на одном месте Директор первым; prefetch ждётся не дольше `graceSec`. Ярус 1 держит порядок recall (правит D-153), а guided re-roll и `onSwipe = 'rerun'` вызывают recall заново, а не повторяют выбор с ярусом 0, как было в §6.3;
+    - D-205 — `history_crowded`. Уведомление приходит, когда перед сообщением игрока ушло меньше 4 сообщений истории, хотя на пути их больше. Правило D-89 «меньше 25 % окна» заменено: оно молчало, когда история уходила почти вся;
+    - D-208 — префилл начала ответа у JSON-агентов (`{"entry_ids": [` у recall, `{"filings": [` у filing и historian). Без него RP-модель отвечала на промпт recall в роли. Это отступление от Bunraku и RoleCall, они префилла не шлют, и оно меняет запросы filing и historian тоже. Выбор префилл не чинит: Mag-Mell 12B почти всегда брал первую строку индекса (риск 29);
+    - D-209 и D-211 — закрепление слотов llama.cpp: рассказчик — слот 0, все агенты — слот 1. Само включается при ≥ 2 слотах и сборке от b11552 или при ёмкости 1; `slot_pin` в `[caps]` задаёт его вручную. `id_slot` уходит при любом `max_in_flight`, а не только при 2, — это правит D-84. Вживую закреплённый рассказчик сохранил кэш во всех раундах, незакреплённый без кэша хоста терял его в каждом;
+    - D-212 — уведомления о сервере: `slots_pinned`, `slots_detected` с новым смыслом (llama.cpp без закрепления), `ollama_reload_risk`, `lmstudio_autoevict`. Зеркалирования опций раннера Ollama и `ollama_options_mismatch` из плана нет: через `/v1` этих опций не задать.
+
+    Принимаем пакетом? Рекомендация — **принять**. [D-196…D-218]
+28. **(рев. 19) Решения M6, M7, M8, M9 и работы вне вех: D-219…D-244.** Их можно подтвердить пакетом, как в вопросах 12 и 21–27. Код им уже следует; подробно — §19.10, §12.2, §8.4 и §12.5. Заметок решений у этих вех нет: записи сделаны при ревизии 19 по коду и тестам. Отдельного взгляда заслуживают шесть:
+    - D-235 — хранение. Движок пишет синхронно через `SessionStore`; асинхронный `RecordStore` хоста подключается фасадом `Engine.openWithRecordStore` с зеркалом в памяти, очередью и барьерами на строках `turn`, `prep` и ответа. План §5.12 ставил `RecordStore` прямо под движком; перевод всех записей на `await` переписал бы движок. Это касается разговора с Chi о хранении Bunraku [D-13];
+    - D-236 — `beforeAssemble` идёт первым, до проверки помещения, recall и Директора, а не параллельно, как читался шаг 3 §6.2. Так вставки хоста попадают в проверку помещения D-195; цена — медленный хук задерживает Директора;
+    - D-223 — конфликт. Во время хода принимаются только `edit`, `hide` и `select`; `fork` и `configure` отказывают `session_busy`, хотя план §6.1 называл и `fork`. Отложенный ответ переживает рестарт и до решения запирает `send`, `submit` и `runTurn`. У REPL и TUI нет команды «сохранить / отбросить», так что ответ, отложенный клиентом `--stdio`, запирает сессию в терминале (риск 34);
+    - D-225 — схема протокола 1. Её строит свой скрипт на компиляторе TypeScript, без новой зависимости. Но в ней нет `session/draft`, `turn/answerGate`, `inspect` и `gate/request`, с M9 нет `agent: 'host'`, и `bun run schema:check` падает. Закрыть до первого внешнего клиента (риск 33);
+    - D-228 — на финальном раунде нативные Anthropic и Gemini не шлют ни схем, ни `tool_choice` / `toolConfig`. Это отступление от D-91: оба хоста `'none'` знают. Вместе с ним проверить первым живым вызовом `stop_sequences` Anthropic [D-229] и `responseFormat` Gemini для structured output [D-234] (риск 37);
+    - D-244 — F9 в TUI подключает OpenRouter: ключ живёт только в памяти процесса, а в `config.toml` атомарно дописывается несекретный блок с `key_env`. Это первая запись в `config.toml` не из `rp-core init`; ключа в файле по-прежнему нет [D-73] (риск 42).
+
+    Принимаем пакетом? Рекомендация — **принять**. [D-219…D-244]
 
 ---
 
@@ -5252,7 +5893,7 @@ as_of = "2026-10-06"
 - `agents/director/edits.ts` — reference, M, после M9;
 - части Compendium вне v1 — §7.4.10;
 - Plan C, `agents/minds/*` — reference, XL, ≈ 2 000 строк, после M9;
-- `formats/vnpack.ts` — fresh, S, ≈ 200 строк. Позже либо на M2, если так решит вопрос 10.
+- `formats/vnpack.ts` — fresh, S, ≈ 200 строк. Позже либо на M2, если так решит вопрос 10. *Рев. 19:* вопрос 10 решил «позже»; на M2 не взят и не построен.
 
 **Отличия от предварительной таблицы §2:**
 - **`providers/gemini`** — новый код. В Bunraku нативного Gemini нет. `google.ts` из RoleCall кладёт ключ в URL и теряет вызовы и подписи из стрима, поэтому из него портируются только санитайзер схем и константы safety.
@@ -5271,25 +5912,26 @@ as_of = "2026-10-06"
 | `session/tree.ts` | fresh | — (`BR:src/stage/contracts/chat-store.ts` (499) — только адресация (message, position)) | Индексы id / дети / правки; `path`, `siblings`, спуск к новейшему потомку, `tails`, индекс свайпа | S | M1a |
 | `session/fold.ts` | fresh | `BR:src/studio/scene-turn-load.ts` (266) — поведение `fires` | `PathView` с кэшем по версии. Порядок наполнения: путь, правки, свайпы, vars (D-30) → `fires` (M2) → `directorAt` (M4) → Compendium (§19.7). Редьюсеры агентов инъецируются | M | M1a → M2/M3/M4/M5 |
 | `session/fork.ts` | fresh | `BR:src/kit/sessions/session-model.ts` `forkFrom` (126) — только идея ссылки на родителя | Копия пути в новый файл; перенумерация `seq`; `mem` с `on:null` | S | M1a |
-| `session/port.ts` | fresh | `BR:src/stage/contracts/chat-store.contract.ts` (422), `chat-store.contract-turns.ts` (454) — паттерн «один набор тестов, много бэкендов» | `RecordStore` выделяется из log.ts; in-memory реализация; `Lease` | M | M9 |
-| `engine/engine.ts` | fresh | `BR:src/studio/scene-turn-running.ts` (13), `compendium-queue.ts` (20) — берётся идея, не код (это синглтоны модуля) | `Engine.open({home, config, fetch, keys, clock, random, hooks})`; реестр сессий; ходы на экземпляре; `events()`; порядок shutdown | M | M1a |
+| `session/port.ts` | fresh | `BR:src/stage/contracts/chat-store.contract.ts` (422), `chat-store.contract-turns.ts` (454) — паттерн «один набор тестов, много бэкендов» | `RecordStore` выделяется из log.ts; in-memory реализация; `Lease`. *Рев. 19:* из log.ts ничего не выделено — `FileRecordStore` оборачивает прежний журнал; рядом синхронный `SessionStore` (`backend.ts`) и мост `record-backend.ts` [D-235] | M | M9 |
+| `engine/engine.ts` | fresh | `BR:src/studio/scene-turn-running.ts` (13), `compendium-queue.ts` (20) — берётся идея, не код (это синглтоны модуля) | `Engine.open({home, config, fetch, keys, clock, random, hooks})`; реестр сессий; ходы на экземпляре; `events()`; порядок shutdown. *Рев. 19:* как построено — `Engine.open({home, connections, sessionStore?, hooks?, hookTimeoutMs?, …})`, `Engine.openWithRecordStore`, `addConnection` (§12.1) | M | M1a |
 | `engine/turn.ts` | adapt | `BR:src/studio/scene-turn.ts` (436); `scene-turn-fallback.ts` (15); `src/core/assembly/continuation.ts` (33); `scene-turn-load.ts` стр. 136–153. Справочно: `RC:ai/generation-retry.ts` (266) | Соответствие: beginTurn → `turn`, первый saveCheckpoint → `prep`, saveCheckpoint → `chk`, commitTurn(guard) → `msg`/`edit` с `base`, dropTurn → `end`, конфликт → `held`. Вырезается ~60 % файла: recall, трекеры, regex, Final Cut, Inspector, meter. Добавляется: один повтор той же модели до fallback, типизированные отказы [D-38], завершающий таймер чекпоинта | L | M1a (Директор — M4, held — M6, хуки — M9) |
 | `engine/recover.ts` | adapt | `BR:src/studio/scene-turn-resume.ts` (59) | Правило безусловного коммита из ядра: ответ — хвостом под исходным U, continue — `end{abandoned}`. Задачи Compendium восстанавливаются по ключам `file:`/`hist:` | M | M1a (задачи — M5, held — M6) |
 | `engine/lane.ts` | fresh | `BR:src/studio/compendium-queue.ts` (20), `serial.ts` (19) — только сериализация. `BR:src/stage/worker-lane.ts` не подходит | FIFO {job, key, task, attempt} на сессию; `preempted` → обратно в очередь; парковка после `maxAttempts` | M | M5 |
 | `engine/sched.ts` | fresh | — (`BR:src/kit/loop/scheduler.ts` — планировщик пачки тулов, он уходит в `tools/run.ts`) | M1a — простой семафор на соединение; M5 — семафор по origin, приоритеты, вытеснение, задержка фона на локальном origin [D-37, D-84] | M | M1a / M5 |
 | `engine/abort.ts` | fresh | — (паттерны `AbortSignal.any` в `scene-turn.ts` и `scene-director-call.ts`) | Типизированные причины, `child(parent)`, `reasonOf`. Таймер никогда не даёт `user_stop` | S | M1a |
-| `engine/hooks.ts` | adapt | `BR:src/studio/scene-turn-gate.ts` `turnGate` (34), `scene-turn-review.ts` `applyEdits` (24) | Гейты на экземпляре Engine с ключом (session, turn, gate); `answerGate` возвращает boolean [D-39]. Раннер `HostHooks` (fail-closed) — новый | M | точки вызова — M1a, реализация — M9 |
-| `protocol/events.ts` | adapt | `RC:ai/streaming/stream-delta.ts` (88) | Типы `Event` по §12.2; `applyDelta(text, ev)` по одному `offset`, без `full` | S | M1a (заморозка — M6) |
-| `protocol/commands.ts` | fresh | Справочно: `BR:src/ui/server-chats-turn.ts` (279) | Объединение `Command` и валидаторы params → `invalid_params`; генерация JSON Schema | M | M6 |
-| `protocol/rpc.ts` | adapt | `BR:src/mcp/protocol.ts` (134) — конверт JSON-RPC, ~60 строк; `BR:src/mcp/server.ts` (195) — антипример | Чтение через jsonl.ts; конкурентная диспетчеризация, чтобы `turn/stop` работал во время хода; ошибки `{-32000, data:{code}}`; `gate/request` на M9 | M | M6 (+M9) |
+| `engine/hooks.ts` | adapt (*рев. 19:* по факту fresh) | `BR:src/studio/scene-turn-gate.ts` `turnGate` (34), `scene-turn-review.ts` `applyEdits` (24) | Гейты на экземпляре Engine с ключом (session, turn, gate); `answerGate` возвращает boolean [D-39]. Раннер `HostHooks` (fail-closed) — новый. *Рев. 19:* код Bunraku не взят, строк в `PROVENANCE.md` нет. Гейт ждёт на идущем ходе сессии, ключ — `gateId` `<turnId>:<kind>`; гейты — в `turn.ts` [D-237] | M | точки вызова — M1a, реализация — M9 |
+| `protocol/events.ts` | adapt | `RC:ai/streaming/stream-delta.ts` (88) | Типы `Event` по §12.2; `applyDelta(text, ev)` по одному `offset`, без `full`. *Рев. 19:* схема — с M6 (`protocol.schema.json`); M9 добавила `agent: 'host'`, в схему он не попал [D-225] | S | M1a (заморозка — M6) |
+| `protocol/commands.ts` | fresh | Справочно: `BR:src/ui/server-chats-turn.ts` (279) | Объединение `Command` и валидаторы params → `invalid_params`; генерация JSON Schema. *Рев. 19, как построено:* `RPC_METHODS`, `RpcCommandParams` — формы для схемы, без результатов; помощники разбора params → `InvalidParams` (`-32602`) [D-221]. `session/draft` и `turn/answerGate` (M9) сюда не внесены | M | M6 |
+| `protocol/rpc.ts` | adapt (*рев. 19:* fresh) | `BR:src/mcp/protocol.ts` (134) — конверт JSON-RPC, ~60 строк; `BR:src/mcp/server.ts` (195) — антипример | Чтение через jsonl.ts; конкурентная диспетчеризация, чтобы `turn/stop` работал во время хода; ошибки `{-32000, data:{code}}`; `gate/request` на M9. *Рев. 19:* написан заново, строки в `PROVENANCE.md` нет. Сессии соединения, снимок, события восстановления после ответа, `gate/request` с ответом по `id` [D-219, D-220, D-226]; сигналы `--stdio` — в `cli/main.ts` | M | M6 (+M9) |
 | `protocol/jsonl.ts` | adapt | `BR:src/kit/mcp/connections.ts` `readLines` (~18 из 297) | `lines(stream)` для stdin и `splitLines(bytes) → {lines, torn}` для журнала; CR, пустые строки, EOF. Один сплиттер на всё ядро [D-36] | S | M1a |
 | `protocol/coalesce.ts` | port | `BR:src/ui/server-chats-turn.ts` `coalesceTurnEvents` (стр. 43–104) | Без ветки `full`; ключ пачки (session, turn, type); планировщик инъецируется [D-36] | S | M1a |
-| `cli/main.ts` | fresh | `BR:docs/KINTSU-PLAN.md` K4 — спецификация; `BR:src/cli-io.ts` — стиль строгого разбора флагов | Подкоманды `init`/`new`/`chat` (REPL открытой сессии)/`send`/`sessions`/`show`/`import`/`probe`/`models`/`compact`; `--stdio`, `--home`, `--sandbox`/`--seed`, `--debug` | M | M1a–M1b (`compact` — M4 [D-35]; `probe`: каталог — M1b, активные пробы — M3) |
-| `cli/repl.ts` | fresh | — (REPL Kit на OpenTUI/React не подходит). Урок RoleCall vvs-805: Stop, нажатый до появления id хода, не должен теряться | readline + ANSI; набранная строка держится до конца хода; вопрос про `held`; Ctrl+C во время допуска | L | M1b, растёт до M5 |
+| `tools/generate-protocol-schema.ts` (рев. 19) | fresh | — | Схема из типов `commands.ts` компилятором TypeScript; `--check` сверяет файл в репозитории [D-225] | S | M6 |
+| `cli/main.ts` | fresh | `BR:docs/KINTSU-PLAN.md` K4 — спецификация; `BR:src/cli-io.ts` — стиль строгого разбора флагов | Подкоманды `init`/`new`/`chat` (REPL открытой сессии)/`send`/`sessions`/`show`/`import`/`probe`/`models`/`compact`; `--stdio`, `--home`, `--sandbox`/`--seed`, `--debug`. *Рев. 19:* подкоманд больше — ещё `preview` (M2), `tui` (M4.5) и `bench` (M5d); `--seed` не построен, `--sandbox` даёт пустой временный дом («Примечания к ревизии», п. 34) | M | M1a–M1b (`compact` — M4 [D-35]; `probe`: каталог — M1b, активные пробы — M3) |
+| `cli/repl.ts` | fresh | — (REPL Kit на OpenTUI/React не подходит). Урок RoleCall vvs-805: Stop, нажатый до появления id хода, не должен теряться | readline + ANSI; набранная строка держится до конца хода; вопрос про `held`; Ctrl+C во время допуска. *Рев. 19:* вопроса про `held` нет: REPL отказывает `held_pending`, команды «сохранить / отбросить» нет [D-223] (риск 34) | L | M1b, растёт до M5 |
 | `cli/render.ts` | fresh | — | Курсив для действий; свёрнутые рассуждения; строка статуса; `notice` раз за сессию | M | M1b |
 | `cli/oneshot.ts` | fresh | `BR:docs/KINTSU-PLAN.md` K4 | `send … --json` через coalesce.ts; коды выхода §12.3; `onError:'keep'` | S | M1a |
-| `cli/signals.ts` | fresh | `BR:src/kit/mcp/connections.ts` `hookExit` — антипример | Первый SIGINT → stop, второй → выход; SIGTERM → shutdown с сохранением частичного текста | S | M1a |
-| `testing/index.ts` | fresh | Паттерн `BR:chat-store.contract.ts`; `BR:scripts/test-sandbox.ts` (99) | `describeRecordStoreConformance`; `test/preload.ts` с `RP_CORE_HOME` во временном каталоге | M | preload — M1a, экспорт — M9 |
+| `cli/signals.ts` | fresh | `BR:src/kit/mcp/connections.ts` `hookExit` — антипример | Первый SIGINT → stop, второй → выход; SIGTERM → shutdown с сохранением частичного текста. *Рев. 19:* `installTurnSignals` ставит обработчики только на ход one-shot `send`; у REPL они в `chat.ts` и `repl.ts`, у TUI — свои в `cli/tui/` [D-135], у `--stdio` — в `cli/main.ts` (риск 35) | S | M1a |
+| `testing/index.ts` | fresh | Паттерн `BR:chat-store.contract.ts`; `BR:scripts/test-sandbox.ts` (99) | `describeRecordStoreConformance` (*рев. 19:* построено — `checkRecordStoreConformance`, `MemoryRecordStore`, `FileRecordStore` и помощники скриптового провайдера; record/replay не экспортируются [D-235]); `test/preload.ts` с `RP_CORE_HOME` во временном каталоге | M | preload — M1a, экспорт — M9 |
 | `providers/scripted.ts` | fresh | `BR:src/studio/scene-turn.test.ts` `scripted()` (стр. 21–44); `BR:src/stage/provider/test-fetch-harness.ts` (36) — портируется как помощник | Шаги в JSONL, проверка хеша запроса, шаг `{pause}` [D-40]; record/replay с вырезанием секретов — *рев. 12:* в отдельном `providers/record.ts` | M | M1a (script), M2 (record/replay) |
 
 - **Bunraku выигрывает везде, где есть что брать.**
@@ -5394,17 +6036,20 @@ as_of = "2026-10-06"
 | `providers/sse.ts` | port | `BR:src/stage/provider/transport-core.ts` `createLineSplitter` (20) и разбор `data:` из ридеров | Генератор `sseEvents`. `data:` принимается с пробелом и без, комментарии пропускаются. Чтение продолжается после finish. EOF без терминального сигнала — `truncated_stream` | S | M1b |
 | `providers/reasoning-tags.ts` | fresh | `BR:src/core/reasoning-capture.ts` — таблица `closingForOpening` (~25 строк); тесты из `reasoning-tags.ts` (196); `RC:ai/streaming/openai.ts` — антипример | Стриминговый сплиттер по `caps.reasoning.tags`. Carry-буфер держит начало любого маркера. Флаг `startInside` | S | M1b |
 | `providers/openai-chat.ts` | adapt | `BR:src/stage/provider/openai-compatible-request.ts` (250), `-reply.ts` (236), `openai-compatible.ts` + `provider-send.ts` (121), `reasoning-wire.ts` (66, уходит в данные). Только список причуд: `RC:providers/adapters/openai.ts` (741), `base.ts` | Рендер из блоков; эхо рассуждений по `caps.reasoning.echo`; семплеры по записи возможностей. Ридер выдаёт события tool/usage/finish/error. Реестр PARAMS не переносится | M | M1b (тулы в цикле — M3) |
-| `providers/anthropic.ts` | adapt | `BR:src/stage/provider/anthropic-request.ts` (295), `anthropic-reply.ts` (183), `anthropic.ts` (29), `src/core/tokens/cache.ts` (311, уходит в данные); `RC:providers/adapters/anthropic.ts` (631) — антипример | Дословный replay внутри цикла тулов, без thinking между ходами. Mid-system по §8.5. Thinking по записи; без семплеров при `fixed`. Кэш-метки `ttl:'1h'` по `cacheMinTokens` | M | M7 |
-| `providers/gemini.ts` | reference | `RC:providers/adapters/google.ts` (515), `base.ts` `toGoogleMessages` (118); `VV:packages/managed-ai/src/contracts/gemini-safety.ts` (87) | Новый адаптер вокруг replay `gemini-parts`. Ключ — в заголовке, id вызовов — настоящие `functionCall.id`. Портируются санитайзер схем (37 строк, с исправлением nullable) и список safety OFF | L | M8 |
+| `providers/anthropic.ts` | adapt → *рев. 19:* fresh | `BR:src/stage/provider/anthropic-request.ts` (295), `anthropic-reply.ts` (183), `anthropic.ts` (29), `src/core/tokens/cache.ts` (311, уходит в данные); `RC:providers/adapters/anthropic.ts` (631) — антипример | Дословный replay внутри цикла тулов, без thinking между ходами. Mid-system по §8.5. Thinking по записи; без семплеров при `fixed`. Кэш-метки `ttl:'1h'` по `cacheMinTokens`. *Рев. 19:* написан заново по §8.4, кода и тестов Bunraku нет, строки в `PROVENANCE.md` нет [D-227] | M | M7 |
+| `providers/gemini.ts` | reference → *рев. 19:* fresh | `RC:providers/adapters/google.ts` (515), `base.ts` `toGoogleMessages` (118); `VV:packages/managed-ai/src/contracts/gemini-safety.ts` (87) | Новый адаптер вокруг replay `gemini-parts`. Ключ — в заголовке, id вызовов — настоящие `functionCall.id`. Портируются санитайзер схем (37 строк, с исправлением nullable) и список safety OFF. *Рев. 19:* санитайзер и список safety тоже свои (четыре категории); строки в `PROVENANCE.md` нет [D-232] | L | M8 |
 | `providers/caps.ts` | fresh | Правило «нет поля — выключено» из `BR:openai-compatible-request.ts` и `src/kit/providers/spoke.ts`. Правило «неизвестно — не отправлять» из `VV:packages/managed-ai/src/reasoning-facts.ts` | Резолвер hosts → models (glob) → catalog → probe → user, со следом `source`. Пессимистичные умолчания | M | M1b → M3/M7/M8 |
-| `providers/caps-data/{hosts,models}.json` | adapt | `BR:src/kit/providers/spokes/*.ts` (scene-декларации, 196); `src/stage/params/dialects.ts` (58); `reasoning-wire.ts` + `cache.ts`. `RC:providers/definitions.ts` (2 645, из ST); `adapters/openai.ts` стр. 170–370; `adapters/reasoning-effort.ts` (949, из ST); `managed-ai` reasoning-facts + nanogpt-reasoning (202) | Факты в JSON с полями `as_of` и `src` [D-54] | M | M1b (локальные и роутеры) → M7 (Claude) → M8 (Gemini) |
-| `providers/probe.ts` | adapt | `BR:src/kit/providers/models.ts` (111); `RC:models/fetcher.ts` `parseCapabilities` (стр. 110–135); `RC:providers/tool-call-test.ts` — антипример (forced tool) | Лестница `/models` и разбор ответа (~60 строк) — порт. `/props`, `/api/show`, koboldcpp и активные пробы — новые; *рев. 13:* активные пробы — в отдельном `providers/probe-active.ts`. Проба только советует | M | M1b (каталог), M3 (активные пробы) |
+| `providers/caps-data/{hosts,models}.json` | adapt | `BR:src/kit/providers/spokes/*.ts` (scene-декларации, 196); `src/stage/params/dialects.ts` (58); `reasoning-wire.ts` + `cache.ts`. `RC:providers/definitions.ts` (2 645, из ST); `adapters/openai.ts` стр. 170–370; `adapters/reasoning-effort.ts` (949, из ST); `managed-ai` reasoning-facts + nanogpt-reasoning (202) | Факты в JSON с полями `as_of` и `src` [D-54]. *Рев. 19:* строки Claude (14) и Gemini (6) и пресеты двух хостов, все с `as_of` 2026-10-29 | M | M1b (локальные и роутеры) → M7 (Claude) → M8 (Gemini) |
+| `providers/probe.ts` | adapt | `BR:src/kit/providers/models.ts` (111); `RC:models/fetcher.ts` `parseCapabilities` (стр. 110–135); `RC:providers/tool-call-test.ts` — антипример (forced tool) | Лестница `/models` и разбор ответа (~60 строк) — порт. `/props`, `/api/show`, koboldcpp и активные пробы — новые; *рев. 13:* активные пробы — в отдельном `providers/probe-active.ts`. Проба только советует. *Рев. 19:* каталоги `anthropic` (`GET /v1/models`) и `gemini` (`GET /v1beta/models` по страницам) — новые | M | M1b (каталог), M3 (активные пробы) |
+| `providers/server-info.ts` *(новый, рев. 19)* | fresh | — (кода сведений о сервере, закрепления слотов или бенча кэша исследование не нашло ни в Bunraku, ни в RoleCall); опции раннера — факт `needsReload` Ollama (`server/sched.go` v0.40.12), без кода | Чтение `/props` llama.cpp, `/api/version`, `/api/ps` и `/api/show` Ollama, `/api/v1/models` LM Studio со сроками 1,5 и 3 с; `pinVerdict` и `pinLine` [D-210, D-211]. Разбор `/props`, `/api/show` и моделей LM Studio — общий с `probe.ts` (`readLlamaCppProps`, `isLlamaCppProps`, `ollamaParameter`) | — | M5d |
+| `providers/openai-chat.ts` — доля M5d *(рев. 19)* | adapt | `BR:src/core/tokens/usage.ts` `readTokenReport` (Coneja-Chibi, `e95d90db`, `4cd5b724`; @702d8120) — только правило | `timings` без `cache_n` не дают всего промпта, поэтому `usageOfTimings` больше не считает `prompt_n` всем промптом. Своё: `promptOfUsage` и `promptOfTimings` — счёт `processed` и `cached`, сначала `cached_tokens` из usage, затем `timings` с `cache_n` (порядок — ядра: `shapeOf` Bunraku читает `timings` с `cache_n` раньше блока usage); `id_slot` по агенту из `caps.slotPin` [D-211, D-213]. Остальное из `readTokenReport` не берётся | — | M5d |
 
 - **Bunraku выигрывает для openai-chat и anthropic.** Все файлы `stage/provider` написаны Coneja-Chibi. У них:
   - чистые половины запроса и ответа;
   - ридер-замыкание на каждый запрос;
   - поддержка, объявленная явно;
   - тесты.
+  - *Рев. 19:* для anthropic этот довод не сработал: адаптер написан заново [D-227]. Список «не переносить» ниже соблюдён: `disabled` на 5.5 не уходит, безусловной `temperature` нет, thinking между ходами не повторяется, бета-заголовка кэша нет, метки — по `cacheMinTokens`.
 - **RoleCall — только источник фактов**, потому что:
   - синглтон Anthropic держит общее `_pendingToolBlocks`;
   - `parseStreamChunk` теряет вызовы тулов и заканчивает поток на `: OPENROUTER PROCESSING`;
@@ -5433,7 +6078,7 @@ as_of = "2026-10-06"
   - `test-fetch-harness.ts` (36) — как утилита.
 - **Тесты RoleCall.**
   - `inhouse-nonstream-toolcall-sse.test.ts` стр. 464–600 уходит в `fixtures/sse/openai-chat`.
-  - `gemini-thinking-parts.test.ts` (80) и `gemini-safety-extra-body.test.ts`.
+  - `gemini-thinking-parts.test.ts` (80) и `gemini-safety-extra-body.test.ts`. *Рев. 19:* не перенесены; тесты M8 — свои (§14).
 - **Сколько стоит перенос тестов.** Все 19 тестовых файлов Bunraku построены на строковом `ProviderMessage`. Перевод на блоки займёт около половины времени порта. Каждый тест разбирается отдельно: оставить, перевернуть или выбросить.
 
 ### 19.5 Рассказчик, тулы, поиск
@@ -5581,12 +6226,19 @@ as_of = "2026-10-06"
 | `agents/compendium/recall/{index,prompt,parse}.ts` | port | `BR:recall-index.ts` (95), `recall-prompt.ts` (55), `recall-parse.ts` (58) | Индекс зажат окном, tagline выводится, беседа ограничена и по токенам; lite-промпт и шорт-лист; чтение голого массива, имён и выловленных хэндлов | M | M5c |
 | `agents/compendium/recall/run.ts` | adapt | `BR:studio/compendium-recall.ts` (152); порядок — `BR:studio/scene-turn.ts` стр. 175–183. Справочно: `RC:ai/tv-stream/pregen-retrieval.ts` (1 604), `pregen-retrieval-cache.ts` (262) | Режимы, prefetch и ожидание в пределах `graceSec`, Stop без потери prefetch, дедлайн от гранта, бюджет на рассуждения, лексический откат, `RecallRecord` в `prep` и коммите вместо LRU [D-78] | L | M5c |
 | `agents/compendium/{profile,lexical}.ts` | fresh | — | Таблица профилей [D-79]; шорт-лист и ростер через `lexScore`; проверка запроса рассказчика на малом окне и `history_crowded` [D-89] | S | M5c |
-| `providers/probe.ts` — доля слотов | fresh | — | `GET /slots` и `total_slots` в `/props` → `notice{slots_detected}`, ёмкость не поднимает; проверка закрепления `id_slot` по `/slots` [D-84] | S | M5c |
-| `cli/bench.ts` и документация пресетов | fresh | — | `rp-core bench ttft`: скриптовый прогон, TTFT и `timings.prompt_n`; матрица M5c | M | M5c |
+| `providers/probe.ts` — доля слотов | fresh | — | `GET /slots` и `total_slots` в `/props` → `notice{slots_detected}`, ёмкость не поднимает; проверка закрепления `id_slot` по `/slots` [D-84]. *Рев. 19 — сделано на M5d иначе:* совет о ёмкости — строка `notes` в `rp-core probe` (была и раньше); закрепление — по `/props` и правилу D-211, без проверки по `/slots`, в `providers/server-info.ts` и `engine/server-notices.ts` (§19.4); `slots_detected` — llama.cpp, который ядро не закрепляет [D-212] | S | M5c → M5d |
+| `cli/bench.ts` и документация пресетов | fresh | — | `rp-core bench ttft`: скриптовый прогон, TTFT и `timings.prompt_n`; матрица M5c. *Рев. 19 — сделано на M5d:* три настоящих вызова на раунд (P, A, P+T) через `streamCall`; отношение — по счёту промпта сервера (`cached_tokens` или `timings` с `cache_n`, D-213); соль на запуск и `--agent-shared`; схемы сервера запускает человек [D-214]. Документация — раздел «Local servers: speed and caching» руководства [D-216] | M | M5c → M5d |
 
 *Рев. 16 — статус строк после M5a.* Сделаны все строки с вехой M5a: `types.ts`, `merge.ts`, `render.ts`, `apply.ts`, `session/fold.ts` (свёртка), `tree.ts`, `{select,place}.ts`, `world.ts`, `formats/compendium-v1.ts`, доля Compendium в `cli/repl.ts` и `tools/builtin/lore.ts`. Из строки M5c `{profile,lexical}.ts` сделана часть `profile.ts` — профиль и лимиты блока, `resolveCompendium`. Строки M5b и M5c не начаты. Отличия от карты — ниже, после итога группы.
 
 *Рев. 17 — статус строк после M5b.* Сделаны все строки с вехой M5b, кроме долей recall: `engine/lane.ts` и `engine/sched.ts` (задачи `file` и `hist`; `prerecall` и ожидание prefetch — M5c), `agents/compendium/filing.ts`, `historian.ts` со слотом `{{recap}}`, доля Compendium в `agents/structured.ts` (агенты `filing` и `historian`, `tag: null`), события `agent` и `memory` в `protocol/events.ts` (команды `memory/*` на проводе — M6). Строки M5c (recall, `lexical.ts`, проба слотов, `bench`) не начаты. Отличия — ниже, «как построено на M5b».
+
+*Рев. 19 — статус строк после M5c.* Сделаны строки recall: `recall/{index,prompt,parse}.ts` и `recall/run.ts` — одним файлом `agents/compendium/recall.ts` плюс `engine/recall.ts`; доли recall в `engine/lane.ts` и `engine/sched.ts` (prefetch и ожидание в полёте); из `{profile,lexical}.ts` — профиль recall и `history_crowded` [D-205]. Строки «проба слотов» и `cli/bench.ts` ушли в M5d [D-196]. Отличия:
+- **Один файл вместо четырёх.** `agents/compendium/recall.ts` (1 179 строк по `wc -l`, с комментариями) — индекс, промпты, чтение, запись и её страж, чистые функции. Запуск в ходе и полосе — `engine/recall.ts` (477), а не `recall/run.ts`: ему нужны маршрут, планировщик и `structuredCall`. `lexical.ts` нет: шорт-лист — в `recall.ts`, `history_crowded` — в `engine/request.ts` (результаты `assemble` закреплены тестами, D-205).
+- **Происхождение** (`PROVENANCE.md`, `.notes/m5c-provenance-recall.md`): `recallIndex` — adapt `BR:recall-index.ts` (`buildRecallIndex`; линия — `formatTreeOverview` RoleCall с оговоркой об импорте `660a7d67a`); `RECALL_SYSTEM`, `recallRequest` full и `moreNudge` — port `BR:recall-prompt.ts` с перечисленными правками; `readRecall` — adapt `BR:recall-parse.ts`; температура, `MAX_OUTPUT_TOKENS`, статусы и «добор только с большим числом выборов» — adapt `BR:studio/compendium-recall.ts`, с `calls < 2`. Свежие: lite-промпт, `skippedRecord`, `missedRecord`, `reusedRecord`, `checkRecallRecord`, сроки, `rawRead` и начало ответа в `structured.ts`, `engine/recall.ts`, повышение и `ordered()` в `sched.ts`, слот prefetch в `lane.ts`. Порядок вызовов — по `BR:studio/scene-turn.ts:175-183`.
+- **Не переносится** (как и было в карте): LRU-кэш recall (его место заняли запись и база prefetch), `REPAIR_NUDGE` (корректирующий проход `structuredCall`), Guide recall, настройки индекса `detail`, `depth` и `bookDisplay`, разрешение имён и лестница разбора RoleCall (`pregen-retrieval.ts`) — прочитаны как векторы тестов, кода не взято.
+- **Тесты Bunraku:** все 12 случаев `recall-core.test.ts`, отрендеренные тексты `recallMessages` и `moreNudge` на 702d8120 (golden), `fixture-book.ts` как `test/recall-m5c/harbor.ts`. `studio/scene-turn-recall.test.ts` не портирован (в `PROVENANCE.md` его нет): ход проверяют свои тесты на скриптовом провайдере (`test/recall-engine-m5c/`). Из RoleCall — векторы парсера P1–P8 и тексты отказов.
+- Список отступлений для Chi — раздел F `docs/COMPENDIUM-DEVIATIONS.md` (14.11).
 
 **Итог группы:**
 - 20 строк: port — 4, adapt — 9, fresh — 7;
@@ -5721,6 +6373,7 @@ as_of = "2026-10-06"
   - `formats/rolecall-story.ts` — port `generatePersonaXml` (тот же вывод), adapt экспорта пресета RoleCall (`export/route.ts`, `presets-core`), остальное — fresh по фактам `per-chat-export.ts` и соседних файлов; 1 446 строк;
   - `agents/director/import-rc.ts` — adapt правил `dm-stream` RoleCall (указатель текущей главы, хранитель общего id главы, якорь `lastProgressTurn`, возраст семян, умолчания новых арок, правило включения Директора); 1 077 строк;
   - fresh: `formats/zip.ts` (403 строки, по описанию формата PKWARE APPNOTE; у RoleCall читателя ZIP нет), `formats/rolecall-import.ts` (556), `cli/import-story.ts` (910); `test/rcimport/kit.ts` — adapt макета экспорта из `per-chat-export.ts`.
+- *Рев. 19 — импорт чата ST и TUI, вне карты* [D-240…D-244]. Всё — fresh, строк в `PROVENANCE.md` нет: `formats/st-chat.ts` (124 строки; формат — по экспорту ST, разбор времени — `rcIsoTime` импорта RoleCall), `cli/import-st-chat.ts` (117); TUI — `model-picker.ts` (158), `openrouter.ts` (45), `story-picker.ts` (205), `new-story.ts` (130), `persona-picker.ts` (79), `settings-picker.ts` (118), `context-pane.ts` (121), `speech.ts` (45). `config/secrets.ts` получил `provide(spec, key)` — ключ только в памяти процесса [D-244].
 
 ### 19.9 Что не портируем и почему
 
@@ -5752,13 +6405,13 @@ as_of = "2026-10-06"
 - **Устаревшие таблицы моделей:** `models.ts` RoleCall (эпоха gpt-4o) и `known-context.ts` Bunraku. Их заменяют записи с `as_of` [D-54].
 - **Позже:**
   - экспорт карточек, пресетов и лорбуков;
-  - импорт RoleCall, Marinara и ST-чатов (*рев. 18:* истории RoleCall импортируются — §10.6);
-  - `.vnpack` (или на M2 по вопросу 10);
+  - импорт RoleCall, Marinara и ST-чатов (*рев. 18:* истории RoleCall импортируются — §10.6; *рев. 19:* одиночные чаты ST тоже — §10.5 [D-240]; групповой чат и Marinara — нет);
+  - `.vnpack` (*рев. 19:* вопрос 10 решён «позже» [D-6]; после M9 его всё ещё нет);
   - правки Директора человеком (`edits.ts`).
 
-### 19.10 Изменения контракта по итогам порта (D-35…D-195)
+### 19.10 Изменения контракта по итогам порта (D-35…D-244)
 
-*Статус на 28.10:*
+*Статус на 14.11 (рев. 19):*
 - D-35…D-73 приняты: D-61, D-62, D-71 — 25.10, остальные — 26.10 пакетом, D-43 с правкой;
 - D-74…D-89 приняты 26.10 (вопросы 16–20);
 - D-90…D-97 (сборка M3) и правка D-59 ждут подтверждения (вопрос 21). Правки рев. 13 к D-55, D-56 и D-58 уточняют принятые решения по реализации;
@@ -5767,6 +6420,9 @@ as_of = "2026-10-06"
 - D-140…D-169 (сборка M5a) ждут подтверждения (вопрос 24). Шесть из них правят или уточняют принятые решения: D-150 правит D-59 (и его правку рев. 13) — одна нумерация `C<n>`; D-147 отступает от D-75 — оверлей без основы не хранится; D-152 уточняет D-80 — граница видимости по `trimmed`; D-153 и D-169 уточняют D-77 — ярус 3, порядок внутри яруса, слова в любом порядке; D-166 переносит список отступлений D-88 из `PROVENANCE.md` в `docs/COMPENDIUM-DEVIATIONS.md`.
 - D-170…D-184 (сборка M5b) ждут подтверждения (вопрос 25). Пять из них правят или уточняют принятые решения: D-171 уточняет D-86 и D-23 (что такое принятый ответ, момент включения, задачи на облаке стартуют после хода); D-172 уточняет D-84 и D-37 (затвор простоя только у локального origin); D-178 уточняет D-83 (слот только с содержимым, стабильность); D-183 уточняет D-88 (к дословным промптам Bunraku добавлена строка языка при пустом `compendium.language`); D-184 и правка раздела K правят D-150 (хэндлы записей сессии — по строке создания) и уточняют D-74 (порядок применения строк).
 - D-185…D-195 (импорт истории RoleCall, рев. 18) ждут подтверждения (вопрос 26). D-185 выполняет D-9 (RoleCall — только через клиентский экспорт); D-187 уточняет D-71 — свой маркер с текстом и текст структурного маркера в экспорте пресета RoleCall отправляются, как в RoleCall; D-189 опирается на момент включения D-171; D-195 меняет порядок шагов 3–4 §6.2 для хода с Директором — проверка помещения идёт до Директора.
+- D-196…D-208 (сборка M5c — recall, рев. 19) ждут подтверждения (вопрос 27). Пять из них правят или уточняют принятые решения: D-196 откладывает часть D-76 (нетипизированные записи как выбор recall) и переносит из D-84 и D-78 закрепление `id_slot`, пробу слотов и замер качества prefetch в M5d; D-203 правит D-153 (ярус 1 — в порядке recall) и уточняет D-78 и D-29 (guided re-roll вызывает recall заново); D-205 заменяет правило `history_crowded` из D-89; D-208 уточняет D-88 (к дословным промптам Bunraku добавлен префилл начала ответа); D-198 с правкой раздела K уточняет §6.6 (общий повтор — вне предела двух вызовов recall).
+- D-209…D-218 (задержка на локальных серверах, M5d, рев. 19) ждут подтверждения (вопрос 27). D-209 и D-211 правят D-84: `id_slot` уходит при любом `max_in_flight`, по `/props` и правилу сборки или ёмкости, без проверки по `/slots`; D-212 заменяет зеркалирование опций раннера Ollama и `ollama_options_mismatch` (D-84, §7.4.7) уведомлением `ollama_reload_risk` и даёт `slots_detected` новый смысл; D-213 меняет чтение `timings` llama.cpp без `cache_n` (раньше `prompt_n` считался всем промптом); D-210 правлено после ревью (раздел B): временный сбой чтения читается снова.
+- D-219…D-244 (рев. 19) ждут подтверждения (вопрос 28): D-219…D-226 — сборка M6 (`--stdio`), D-227…D-231 — M7 (нативный Anthropic), D-232…D-234 — M8 (нативный Gemini), D-235…D-239 — M9 (стык с Bunraku), D-240…D-244 — работа вне вех (импорт чата ST и TUI). Все записаны задним числом, по коду и тестам: заметок решений у этих вех нет. Правят или уточняют принятые и план: D-223 уточняет §6.1 — во время хода `fork` и `configure` отказывают `session_busy`; D-228 отступает от D-91 — на финальном раунде нативные адаптеры не шлют схем и `tool_choice`; D-235 меняет план §5.12 — движок пишет синхронно, `RecordStore` подключается через фасад, и касается D-13; D-236 меняет шаг 3 §6.2 — `beforeAssemble` идёт до проверки помещения, recall и Директора, а не параллельно; D-240 выполняет D-9 для чатов ST; D-242 вводит имена веток, не трогая одну голову D-13; D-244 — первая запись в `config.toml` не из `rp-core init`, ключа в файле по-прежнему нет [D-73].
 
 Оценщики предложили эти изменения там, где исходник лучше или проще контракта. Синтез отбросил предложения, которые нарушают обязательные правила документа: глубину ST [D-12], запрет принудительного `tool_choice`, один цикл на все вызовы, хранение в JSONL-дереве и простоту. Статус каждого решения — в списке выше и в его записи. Отдельного внимания требовали D-61 (форма состояния Директора), D-62 (строгость директивы, вместе с D-17) и D-71 (выключенные маркеры ST-пресетов, вместе с вопросом 11); все три приняты 25.10, D-71 — в смешанном варианте.
 
@@ -6219,6 +6875,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 - **Рекомендация.** Принять, с доступом `read` по умолчанию, как в Bunraku. Один путь и один бюджет для типизированных записей — условие того, что персонаж помещается в окно 16k.
 - **Альтернативы.** Как в Bunraku: типизированные записи срабатывают и по ключам в движке лора (полным текстом, на позиции записи), и через recall. Recall читает только Compendium сессии и типизированные книги, а книги ST остаются чистым ST. Признак «книга Compendium» по доле типизированных записей — книга может переключаться сама.
 - **Статус.** Принято 26.10 (вопрос 17): recall может выбирать и записи обычных ST-книг, доступ `read` по умолчанию, `off` — по книге.
+- *Рев. 19 (D-196).* Выбор нетипизированных записей recall отложен: на M5c recall выбирает только типизированные записи, а запись обычной книги срабатывает по ключам. Ждёт подтверждения (вопрос 27).
 
 #### D-77
 - **Решение.** Активация и размещение. Каждый ход без модели работает селектор с тремя ярусами: 0 — записи, упомянутые в U (по основам имени и алиасов); 1 — выбор recall; 2 — упомянутые в последних 4 сообщениях. Всё приходит одним блоком `[Retrieved World Knowledge]` на глубине 1, источник `compendium`: при равной глубине он ниже лора и выше директивы, причин выбора в нём нет. Пол — 40 % доли лора, лимиты зависят от профиля; срез идёт по ярусам и пишется в трассу. Глубина 4 остаётся только заметкам человека.
@@ -6238,6 +6895,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 - **Рекомендация.** Принять. На локальном бэкенде recall перестаёт добавлять 4–12 с до первого токена (оценка), а на облаке ведёт себя как в Bunraku. Качество prefetch проверяется на M5c: доля записей синхронного выбора, попавших в итоговый блок с prefetch, — не ниже 0,8 от той же доли между двумя синхронными прогонами; иначе `auto` переходит на sync.
 - **Альтернативы.** Всегда sync, как в Bunraku: на одном слоте +4–12 с к каждому ответу. `auto` по числу слотов (prefetch только при одном слоте): на локальном `-np 2` sync recall всё равно делит GPU с ходом. Только лексика, без модели. Recall как поле в ответе Директора — после замеров M5c.
 - **Статус.** Принято 26.10 (вопрос 16): `auto` — prefetch на локальном origin, sync на облаке; замер M5c может перевести `auto` на sync.
+- *Рев. 19 (D-196…D-208).* Построено, с уточнениями: guided re-roll и `onSwipe = 'rerun'` вызывают recall заново; повторяется только удачная или пустая запись; `timeoutSec` задаёт и срок prefetch; у recall не больше двух своих вызовов, общий повтор §6.6 — сверх них. Замер качества prefetch D-196 отнесло к M5d, но и там его не было (§15). Ждёт подтверждения (вопрос 27).
 
 #### D-79
 - **Решение.** Профили full и lite. `compendium.profile` — `auto`, `full` или `lite`; `auto` выбирает lite при окне агента < 24 576 (тот же порог у Директора в `auto`, §7.3). Профиль меняет то, что видит модель, и лимиты числа и размера элементов. В lite это:
@@ -6298,6 +6956,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 - Prefetch в полёте ход ждёт в пределах `graceSec`.
 - Агенты не шлют `cache_prompt:false`. Агенты, работающие с той же моделью Ollama, шлют опции раннера рассказчика.
 - Закрепление `id_slot` (рассказчик — 0, агенты — 1) при `max_in_flight = 2` — на M5c, если проба подтвердит, что сервер его принимает. Прогрев префикса — после замеров M5c.
+- *Рев. 19 (M5d) [D-209…D-212]:* построено иначе. `id_slot` уходит при любом `max_in_flight`, по ответу `/props` и правилу D-211, без проверки по `/slots`; `slots_detected` говорит о llama.cpp, который ядро не закрепляет; опции раннера Ollama не зеркалятся (через `/v1` их не задать) — вместо этого `ollama_reload_risk`. Прогрева нет.
 - **Рекомендация.** Принять.
 - **Альтернативы.** Семафор на имя соединения, как в §8.8 сейчас: два имени на одном llama-server молча выбивают друг другу кэш. Ёмкость из пробы `/slots`: на стоковом llama-server четыре запроса в пуле на одно окно. Фон сразу после хода: свайп через 2 с платит полной обработкой промпта рассказчика. `-np 2` без закрепления: вторая подряд фоновая задача берёт LRU-слот рассказчика.
 - **Статус.** Принято 26.10 пакетом (вопросы 19–20).
@@ -6349,6 +7008,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 - **Решение.** Резерв ответа рассказчика на малом окне (§11): `min(maxTokens ?? (window < 24 576 ? 2 048 : 8 192), window / 2)`, если `max_tokens` не задан привязкой или пресетом. Для окна 16 384 это оставляет истории ≥ 5 000 токенов при полной доле лора и слоте пересказов (§7.4.6; с рев. 12 доля лора считается от окна минус резерв, и истории остаётся ≥ 5 500). Если на историю остаётся меньше 25 % окна — `notice{history_crowded}` раз за сессию.
 - **Рекомендация.** Принять. Рассуждающей модели на малом окне `max_tokens` стоит задать явно.
 - **Альтернативы.** Оставить 8 192: на окне 16k на голову, лор, блок Compendium, слот и историю остаётся 8 192, и истории почти нет. Резерв 4 096: истории ≈ 3 000 токенов, 4–5 обменов. Урезать долю лора на малом окне вместо резерва.
+- *Рев. 19 (D-205).* Правило уведомления заменено: не «меньше 25 % окна», а «перед U ушло меньше 4 сообщений, хотя на пути их больше» (§7.4.6). Резерв ответа — как был. Ждёт подтверждения (вопрос 27).
 - **Статус.** Принято 26.10 пакетом (вопросы 19–20).
 
 #### Решения M3: тулы и поиск
@@ -7133,6 +7793,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 - Известные пределы (записаны, приняты): столкновения односложных основ («Мира» ~ «мир»), беглые гласные («Уголёк» / «Уголька»). Дополнительные триггеры типизированных записей **срабатывают** (ключи книги) — это смягчает D-76.
 - **Рекомендация.** Принять. Без модели и каждый ход: блок детерминирован, `/trace` объясняет каждый выбор.
 - **Альтернативы.** `lexScore` внутри яруса, как в §7.4.1. Пропускать имена карточки и персоны на ярусах 0 и 2 (кандидат C6 черновика списка отступлений) — тогда их записи не попадали бы в блок вовсе.
+- *Рев. 19 (D-203).* Ярус 1 этим порядком не сортируется: он держит порядок recall — ранжирование модели и есть то, чего селектор не знает.
 - **Статус.** Ждёт подтверждения (вопрос 24).
 
 #### D-154
@@ -7279,7 +7940,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 
 *Уточнения текста без своих номеров (из исследования, пункты G-n и C-n заметки):*
 - `prerecall` и ожидание prefetch в полёте приходят с recall на M5c (C-10): без recall им нечего считать;
-- зеркалирование опций раннера Ollama, `ollama_options_mismatch`, `lmstudio_autoevict`, `id_slot` и `history_crowded` — M5c (G-22);
+- зеркалирование опций раннера Ollama, `ollama_options_mismatch`, `lmstudio_autoevict`, `id_slot` и `history_crowded` — M5c (G-22). *Рев. 19:* на M5c построен только `history_crowded`, с новым правилом [D-205]; `id_slot` и `lmstudio_autoevict` построены на M5d [D-196, D-211, D-212]; зеркалирования опций Ollama и `ollama_options_mismatch` нет — вместо них `ollama_reload_risk` [D-212];
 - CLI в пайпе и one-shot не ждут полосу (G-7): ждёт `/memory wait`;
 - записи лора с `position:'recap'` остаются там, куда их ставит M2, — перед областью чата (G-10): слот `{{recap}}` — только Compendium;
 - `memory_backlog` — когда непокрытых принятых ответов больше `everyN + 3` (C-1); `historian.interval = 0` выключает historian (C-2).
@@ -7550,6 +8211,453 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 - **Альтернативы.** Только предупреждение при импорте; проверка без оценки (≈ 1,2 с на каждый ход Директора); отказ по одной оценке — ложные отказы (это ловит тест-страж).
 - **Статус.** Ждёт подтверждения (вопрос 26).
 
+#### Решения M5c: recall
+
+*Приняты при сборке M5c (`.notes/m5c-decisions.md`). D-196…D-207 — до сборки; правила раздела G — после первой волны, H — после второй, I — после третьей (правка D-202); D-208 и правила раздела J — после живого прогона на Ollama; раздел K — после ревью; правка раздела K от 14.11 — после проверки документов. Номера те же, что в заметке; правила G–K вписаны в решения, которые они меняют. Код им уже следует. Подтверждаются пакетом — вопрос 27. Контракты блоков и их отступления — `.notes/m5c-contract-*.md`, строки происхождения — `.notes/m5c-provenance-recall.md` и `PROVENANCE.md`, список отступлений для Chi — раздел F `docs/COMPENDIUM-DEVIATIONS.md`. Основа — исследование кода Bunraku @702d8120 (Coneja-Chibi) и RoleCall @fb8dc623e (строки промпта и дерева — с оговоркой об импорте `660a7d67a`); его черновики лежат в рабочей папке сессии и в репозиторий не входят.*
+
+#### D-196
+- **Решение.** Объём M5c. Строятся: агент recall (индекс full и lite, промпты, терпимое чтение, добор), типизированная `RecallRecord`, режимы `auto|sync|prefetch|lexical|off` с `onMiss` и `graceSec`, prefetch в полосе, повышение prefetch в планировщике на время ожидания и «Директор первым» на одном месте, ярус 1 селектора, трасса, повтор на свайпе и continue, `/memory recall|profile|mode`, строка `recall:` в `/trace`, recall в панели Agents TUI, `history_crowded` (D-89), уведомления `recall_slow`, `prefetch_missed`, `recall_index_truncated`.
+
+  | Файл | Что |
+  |---|---|
+  | `src/agents/compendium/recall.ts` | индекс, промпты, чтение, запись и её страж; чистые функции |
+  | `src/engine/recall.ts` | режим, маршрут, база prefetch, `runRecall`, события и уведомления |
+
+- Изменены: `engine/turn.ts` (решение, ожидание, recall рядом с Директором), `engine/lane.ts` (слот prefetch), `engine/sched.ts` (повышение, `ordered()`, локальность), `engine/request.ts` (ярус 1, `history_crowded`), `engine/session.ts`, `admit.ts`, `recover.ts`, `engine.ts`, `agents/structured.ts` (`rawRead`, начало ответа), `agents/compendium/select.ts` (порядок яруса 1), `session/entries.ts` (`RecallRecord`), `providers/scripted.ts`, `providers/openai-chat.ts` (выключение рассуждений на проводе), CLI и TUI.
+- **Перенесено в веху M5d (задержка):** закрепление `id_slot` и проба `/slots` (`slots_detected`), зеркалирование опций раннера Ollama и `ollama_options_mismatch`, `lmstudio_autoevict`, `rp-core bench ttft`, стенд качества prefetch. На этой машине нет llama.cpp, koboldcpp и LM Studio, а Ollama доступна через `/v1`, где опций раннера не задать: проверить всё это было нечем.
+- **Отложено:** нетипизированные записи книг как выбор recall (расширение D-76). Recall M5c выбирает только типизированные записи Compendium (отступление из списка для Chi).
+- **Рекомендация.** Принять. То, что построено, проверено тестами и демо; то, что требует железа, ждёт железа, а не пишется вслепую.
+- **Альтернативы.** Строить задержку без проверки; держать M5c открытой до железа.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-197
+- **Решение.** Индекс. Кандидаты — живые типизированные записи вида (сессии и читаемых книг) свежими копиями (D-152 `visibleCopy`, граница ближайшего предка-ответа), не в слоте `{{recap}}` (`trace.recap.ids` ближайшего предка), не списанные. Заметки и обзоры арок — не кандидаты. Хэндлы `e1…eN` в порядке печати, на один запрос.
+  - **Full:** производное дерево (`deriveTree`, D-165) до глубины 2, строки `[eN] Имя (aka a, b) - tagline`, под одним заголовком `World Knowledge` с заголовками корзин и групп; бюджет ≤ min(20 000, 25 % окна recall).
+  - **Lite:** шорт-лист ≤ 40 — сначала записи, названные в U или в последних 4 сообщениях (`mention.ts`), затем по `lexScore` к последним 6 сообщениям (имя, алиасы, tagline); строки те же, без заголовков дерева; бюджет ≤ min(2 000, 15 %).
+  - Переполнение: строки кончаются, `(+N more entries not shown)`, `notice{recall_index_truncated}` раз за сессию. Пустой индекс — вызова нет, запись `skipped`.
+  - *Как построено:* заголовок full — `=== World Knowledge (N entries) ===`, один `deriveTree` по всем кандидатам, без заголовков книг и без настроек `detail`, `depth`, `bookDisplay`. Lite — под `## Knowledge Index`; после `lexScore` идут остальные кандидаты, новейшие первыми, так что маленький Compendium показывается целиком. Код пустого индекса — `empty_index`.
+  - *Ревью (раздел K):* одноимённые записи не повторяют строку — каждая запись встречается один раз; счёт группы — записи, показанные под ней. Запрос `lexScore` шорт-листа выбрасывает служебные слова и режет письменность без пробелов на пары знаков; попадание в имя — первым.
+- **Рекомендация.** Принять. Дерево Bunraku на большом окне, короткий список на 16k: дерево из сотен записей в 16k не помещается.
+- **Альтернативы.** Дерево и в lite; заголовок на каждую книгу, как у Bunraku.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-198
+- **Решение.** Промпты и вызовы. Full — `RECALL_SYSTEM` Bunraku, HARD REQUIREMENT, блок указаний, раскладка user и форма ответа дословно, плюс перечисленные правки: строка prefetch («The player has not answered yet; pick what the narrator will most likely need for the next reply.») последней строкой user в prefetch; беседа — последние `contextMessages` видимых сообщений (full 20, lite 6) не больше min(8 000, 20 % окна) токенов, длинные режутся на начало и конец. Строка языка D-183 к recall не относится: ответ — хэндлы. Lite — новый короткий текст (≈ 80 токенов o200k; без WILD CARD). Ремонт — корректирующий проход `structuredCall` (один механизм, как на M5b). Добор («меньше `minEntries`») — второй вызов в том же сроке, только full; он заменяет первый ответ, только если читается и выбирает больше. Температура 0,3; maxTokens 2 000 full и 200 lite (+1 024, если рассуждения не выключить); `AGENT_OUTPUT_FLOOR` к lite не относится.
+  - *Как построено:* добор — второе сообщение user `Your last answer: {"entry_ids":[…]}` и `moreNudge` Bunraku (у `structuredCall` хода ассистента нет). Указания — только `compendium.recall.guidance` сессии, Guide нет. Lite — сообщения без пустых, каждое ≤ 1 200 символов, весь запрос ≤ min(6 000, 40 % окна), указания ≤ 1 000 символов, ответу нужно ≥ 100 токенов.
+  - *Ревью (раздел K):* своих вызовов не больше двух — добор только тогда, когда первый `structuredCall` сделал один вызов модели (`calls < 2` Bunraku). Минимум не выше `maxEntries` и числа показанных записей. Сообщения беседы full — снова как у Bunraku: последние `contextMessages`, пустые тоже, тексты не подрезаются; правка, которой нет в списке, убрана, а не вписана.
+  - *Правка раздела K (14.11):* «не больше двух» считает только вызовы recall — первый ответ, затем один ремонт или один добор. Общий повтор §6.6 сверх этого, как у любого агента: с ним вызовов бывает три, а с повтором вызова ремонта — четыре. `docs/COMPENDIUM-DEVIATIONS.md` это говорит.
+- **Рекомендация.** Принять. Промпт full — текст Chi; правки — только там, где их требует окно или prefetch.
+- **Альтернативы.** Переписать промпт full; ремонт отдельным промптом, как `REPAIR_NUDGE` Bunraku; WILD CARD и в lite.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-199
+- **Решение.** Чтение. Для агентов `tag: null` `structuredCall` отдаёт сырой текст ответа читателю (новый крючок `rawRead`). Читатель recall принимает `{picks:[…]}`, `{entries:[…]}` и голый массив; элементы — хэндлы (`e12`, `[e12]`), имена (точное `normalizeName` имени или алиаса, единственное) или объекты `{id|handle|name, reason?}`. Если ничего не читается, хэндлы вылавливаются из прозы (`salvaged`); неизвестные, повторные и сверх `maxEntries` считаются (`unknown`, `repeated`, `trimmed`). Ответ, чей единственный JSON лежит в рассуждениях, не читается (правило инцидента RoleCall, §7.4.2).
+  - *Правило после первой волны (раздел G):* поле ответа — `entry_ids`: его просит дословный промпт Bunraku; читатель принимает и `picks`. Схема `structured` — `entry_ids` (с `enum` хэндлов до 200) и в full необязательный `reasons`.
+  - *Как построено:* ключи сравниваются без регистра, `_` и `-`, есть и `entry_names` RoleCall; строка-значение делится по `,;\n`; `null` — пустой выбор; хэндлы — в любом регистре и с нулями; строка индекса целиком читается как её хэндл; обрезанный JSON сохраняет закрытые элементы (`cutOff`). Нечётких имён нет.
+  - *Живой прогон (раздел J):* текст без читаемого выбора — `undecodable` (в `/memory recall` — «its answer could not be read»), никогда `no_output`; `no_output` («the answer was empty») — только пустой ответ.
+  - *Ревью (раздел K):* незакрытая скобка поиск не останавливает; целое значение формы recall после неё сильнее обрезка и починки остатка; пример из промпта, повторённый перед ответом, не побеждает никогда. `{"e1": "reason"}` читается как хэндл; несколько хэндлов в одном элементе считаются все. Обрезок без закрытых элементов — не успех.
+- **Рекомендация.** Принять. Слабые локальные модели оборачивают, переименовывают и пересказывают; то, что они назвали, годится.
+- **Альтернативы.** Читать строго, как Bunraku (`bad_shape`, `no_json`), и чинить вторым вызовом; нечёткие имена (Dice RoleCall).
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-200
+- **Решение.** `RecallRecord`. Форма — §7.4.2, `picks` — ключи записей. Запись пишется в `prep` и в коммит, только когда recall работал или prefetch промахнулся: `status` — `recalled`, `empty`, `skipped` или `failed`; `source` — `sync`, `prefetch`, `lexical` или `reused` (`lexical` — промах или сбой ушёл в откат, и `code` говорит почему). `source: 'off'` не пишется: `off` записи не пишет. Тип и страж — `session/entries.ts`; плохая сохранённая запись читается как отсутствующая.
+  - *Правила после первой волны (раздел G):* нечитаемый ответ lite — `failed` с кодом `undecodable`, как в full; на свайпе не повторяется. Запрос, который не помещается в окно recall, пишет `skipped` с кодом `no_room`, и ход идёт `lexical`.
+  - *Как построено:* коды ещё `empty_index` и `no_room`; поле `usage` — токены вызовов для `/usage`. `calls` — каждый вызов модели, повторы и добор тоже. Страж: обязательные поля строго, плохие необязательные поля и выборы выбрасываются, причины режутся до 200, выборов ≤ 64.
+  - *Ревью (раздел K):* `ms` — собственное время recall от первого гранта, без ожидания места за Директором.
+- **Рекомендация.** Принять. Повтор и восстановление переживают перезапуск без кэшей в памяти.
+- **Альтернативы.** Хранить выбор только в трассе, как `RecallRun` Bunraku; LRU-кэш.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-201
+- **Решение.** Режимы. `auto` — prefetch, если origin привязки recall локальный (локальность планировщика), иначе sync. `sync` — recall рядом с Директором. `prefetch` — только принять prefetch (ждать ≤ `graceSec`), промах решает `onMiss` (`auto`: lexical локально, sync удалённо). `lexical` — без recall: ярусы селектора 0, 2 и 3, без замены яруса 1 через `lexScore`. `off` — без recall и без яруса 1. С полосой в `manual` и в one-shot командах prefetch не идёт никогда: `auto` на локальном origin ведёт себя как `onMiss`. Recall нужен включённый Compendium и непустой индекс; иначе ничего не запускается.
+  - *Правило после первой волны (раздел G):* `RP_CORE_RECALL` подменяет только умолчание режима; явный конфиг и `/memory mode` сильнее. Локальность: у настроенного соединения — его `local` (иначе догадка по URL); у соединения в процессе — только если провайдер сам говорит (`localOrigin`, скриптовый файл может попросить); иначе `isLocalOrigin`; если флаги на одном origin расходятся — локальный.
+- **Рекомендация.** Принять. Человек выбирает между ожиданием и угадыванием; умолчание следует за сервером.
+- **Альтернативы.** `auto` по числу слотов; без `onMiss` — промах всегда lexical.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-202
+- **Решение.** Prerecall в полосе. Работа выводится (D-171): когда голова — закоммиченный ответ ассистента и режим хочет prefetch, полоса выводит `prerecall:<id головы>`. Он идёт раньше задач file и hist, строк `job` не пишет, в журнал не попадает и не восстанавливается (это промах), вытесняется любым интерактивным запросом и начинается снова после затвора простоя. Результат хранится в памяти по базе. Ход принимает prefetch, чья база совпала с родителем U и текущими настройками, и пишет его в `prep` как `source:'prefetch'`.
+  - *Правила после второй волны (раздел H):* приветствие — тоже база (иначе первый ответ локальной сессии в `auto` всегда промахивался бы). Prefetch — слот полосы, а не `LaneTask`; `MemoryStatus` получает необязательное `prefetch?: {basis, state}` для `/memory status`; `idle{background}` его считает.
+  - *Правка после третьей волны (раздел I).* База — голова, новейшее касание пути (правка, скрытие) и число скрытых до головы, отпечаток настроек recall — **без** ревизии Compendium. Демо показало: каждая строка, которую полоса писала после prefetch (filing включён по умолчанию), делала его негодным — второй, побайтно тот же prefetch на каждый ответ. Выбор — ключи записей, блок читает их текущий текст; запись, созданная после prefetch, достижима по имени и поиском.
+  - *Ревью (раздел K):* голова базы — новейший ответ ассистента перед U; сообщения игрока, сложенные под ним, пропускаются.
+- **Рекомендация.** Принять. Prefetch стоит одного вызова на ответ и не платит за вытесненный KV рассказчика.
+- **Альтернативы.** Задача `LaneTask` со строками `job`; ревизия Compendium в базе — два prefetch на ответ.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-203
+- **Решение.** Ход. Порядок: проверка помещения D-195 (ход, который не помещается, не вызывает и recall), затем recall и Директор. Sync recall идёт рядом с Директором (`Promise.allSettled`); на одном месте первым место берёт Директор. Ожидание: prefetch для нужной базы, который ещё в полёте, повышается до интерактивного приоритета и ждётся ≤ `graceSec`; Директор тем временем работает на удалённом origin и после ожидания — на локальном. Промах → `onMiss`; Stop кончает ожидание (prefetch дорабатывает для следующего раза). Выбор идёт в селектор ярусом 1 в порядке recall (правка D-153: ярус 1 держит ранжирование модели). Свайп и continue повторяют запись отвеченного сообщения (`source:'reused'`, `reusedFrom`), если она `recalled` или `empty`; проваленная или отсутствующая — по режиму; guided re-roll (`/regen <указание>`) вызывает recall заново. `trace.compendium.source` — источник записи (без неё — `lexical` или `off`), `trace.agents.recall` — статус, код и транспорт.
+  - *Правила после первой и второй волн (разделы G и H):* prefetch, который ещё в очереди, когда пришло сообщение игрока, повышается так же, как идущий. Опоздавший после `graceSec` prefetch прерывается (`superseded`); Stop во время ожидания оставляет его дорабатывать в фоне. Вызовы принятого prefetch считаются через его запись (`/usage`), а не в `trace.calls` хода и не в `CALL_CEILING`. Превью следующего хода — `lexical` (превью recall не вызывает); `/preview --turn` берёт ярус 1 из записи ответа.
+  - *Ревью (раздел K):* guided re-roll и `onSwipe: rerun` вызывают recall заново (sync) и никогда не принимают prefetch, который читала первая версия. Ожидание держит Директора, только когда оба делят единственное место origin recall; sync recall после промаха на одном месте становится за Директором; `ordered()` — только на origin с одним местом. `/preview --turn` и `/trace` ответа с continue берут запись того запроса, который показывают.
+- **Рекомендация.** Принять. Игрок не ждёт угадывания дольше `graceSec`, а Директор и recall не толкаются на одном слоте.
+- **Альтернативы.** Recall после Директора всегда; ждать prefetch без предела; на guided re-roll повторять выбор с ярусом 0 по указанию, как было в §6.3.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-204
+- **Решение.** Сроки и уведомления. Срок — от гранта: sync — 30 с локально и 20 с удалённо, prefetch — 60 с; `recall.timeoutSec` задаёт все три. `recall_slow` — раз за сессию после трёх sync recall медленнее 8 с (совет: prefetch, дешёвая модель `recall`); `prefetch_missed` — раз за сессию (совет: длиннее `grace_sec`, второй слот); `recall_index_truncated` (D-197). Вызовы принятых prefetch и sync recall считаются в `/usage` по `calls` и `model` записи; вызовы prefetch, который так и не приняли, в журнал не попадают (как вытесненные проходы полосы).
+  - *Ревью (раздел K):* `prefetch_missed` (уведомление и запись) — только когда ход правда ждал prefetch, который был. Проваленный prefetch — откат со своим кодом и без уведомления. Слова говорят, что случилось: опоздал (с длиной ожидания и советом про `grace_sec`) или кончился без выбора. `recall_slow` считает собственное время recall, а не ожидание места за Директором.
+- **Рекомендация.** Принять. Человек узнаёт, сколько стоит recall и что он пропустил.
+- **Альтернативы.** Срок Bunraku 90 с; уведомление на каждый промах.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-205
+- **Решение.** `history_crowded` (D-89). После сборки, если в отправленной истории перед U меньше 4 сообщений, хотя на пути их больше, — `notice{history_crowded}` раз за сессию: он называет размер неизменной части и советует больше окно или лёгкий пресет (случай импортированной истории RoleCall).
+  - *Как построено:* `historyCrowded` в `engine/request.ts`, а не в `assemble`: результаты `assemble` закреплены тестами M2, и запрос не меняется ни на байт. Тесно — когда ушло меньше 4 сообщений, что-то срезано и ушло меньше, чем пресет отправил бы по своему `context.maxMessages`: пресет, который нарочно держит мало сообщений, тесным не считается. Приветствие считается, скрытые и пустые — нет; на continue «перед U» — перед U, на который отвечает цель. Уровень — `warn`. Неизменная часть — строки запроса, кроме истории, плюс префилл и объявления тулов, в токенах бюджета; комната тулов — отдельно. Ход говорит раз за открытую сессию, превью — каждый раз; проверка помещения D-195 и отказ его не дают.
+- **Рекомендация.** Принять. Правило D-89 «меньше 25 % окна» молчало, когда история уходила почти вся; число сообщений человек проверяет сам.
+- **Альтернативы.** Правило D-89 как было; предупреждение при импорте (вопрос контракта, не построено).
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-206
+- **Решение.** Команды. `/memory recall [--turn <id>]` — запись головного ответа (или того хода): источник, статус, выборы с именами и `C<n>`, причины, счёты, вызовы, время. `/memory profile` — профиль каждого агента (блок, recall, filing, historian) и почему. `/memory mode <auto|sync|prefetch|lexical|off>` задаёт `compendium.recall.mode` сессии. `/trace` получает строку `recall:`; панель Agents TUI показывает блоки recall (sync и prefetch); `MEMORY_LATER` пуст.
+  - *Как построено:* `/memory recall` принимает и просто `#n` или id; голый `/memory mode` показывает режим, откуда он и что делает здесь; `/memory status` показывает prefetch. Вывод — §7.4.9.
+  - *После третьей волны (раздел I):* `memoryWait` движка ждёт и prefetch в очереди или в работе. Не построены `/memory recall test <текст>` и отметки начала вызовов в трассе: их нет в D-206. *Рев. 19:* отметки начала построила M5d — поле `at` строки `calls` [D-213].
+  - *Ревью (раздел K):* при полосе `manual` и в one-shot вывод не обещает prefetch; строки после свайпа и regen говорят, что будет; проза — `undecodable`, словами «its answer could not be read»; статус после пропущенного prefetch говорит, что сделает следующий ответ.
+- **Рекомендация.** Принять. Каждое решение recall видно человеку без журнала.
+- **Альтернативы.** Только `/trace`; `/memory profile` с аргументом, меняющим профиль.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-207
+- **Решение.** Швы тестов и демо. `RP_CORE_RECALL=lexical|off` (читается раз в `createEngine`, как `RP_CORE_LANE`) подменяет умолчание режима; `test/preload.ts` ставит `lexical`, так что скриптовые тесты до M5c и запущенные ими CLI вызовов recall не делают; тесты M5c включают его сами. Планировщик берёт локальность из флага `local` соединения (так соединение `script:` в тестах может быть локальным), иначе — `isLocalOrigin`. Скриптовый провайдер отдаёт строку с тегом `agent` вызовам этого агента: Директор и recall, идущие одновременно, детерминированно берут свои строки.
+  - *Как построено:* флаг `local` понимается так, как в D-201 (почти каждое тестовое соединение — `local: true` на origin `script:`, и буквальное прочтение сделало бы их локальными); скриптовый файл говорит `"local": true` первой строкой.
+  - *Ревью (раздел K):* скрипт без строки с тегом `recall` даёт умолчание `lexical` — старые демо без тегов работают без `RP_CORE_RECALL`; origin `replay:` берёт локальность из записи; тексты ошибок называют настоящую строку скрипта.
+- **Рекомендация.** Принять. Старые тесты не меняются, новые решают сами.
+- **Альтернативы.** Выключать recall в каждом тесте отдельно; один общий порядок строк скрипта.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-208
+- **Решение.** Префилл JSON у JSON-агентов (после живого прогона, раздел J). Для агентов `tag: null` на транспорте `tagged`, если запись возможностей модели принимает префилл ассистента, `structuredCall` префиллит начало ответа (`{"entry_ids": [` у recall, `{"filings": [` у filing и historian), а читатель читает начало плюс ответ. Выключено на транспорте `structured` и у моделей, чьи caps префилла не принимают. Отступление из списка для Chi: Bunraku и RoleCall префилла не шлют.
+  - **Слова.** Ответ с текстом, но без читаемого выбора — `undecodable`, никогда `no_output`. *Как построено:* `/memory recall` пишет «its answer could not be read» и «the answer was empty» (`cli/repl-render.ts`).
+  - **Совет в документах.** Когда рассказчик — RP-тюн, привязывать `recall` (и `recorder`) к модели, которая следует инструкциям; `/memory profile` показывает привязку.
+  - *Как построено:* начало шлёт каждый вызов, и корректирующий проход, и добор. Текст модели читается один, если сам повторяет начало, открывает fence или список после начала на `[`.
+- **Почему.** В живом прогоне Mag-Mell 12B, привязанный рассказчиком, ответил на промпт recall в роли — 270 токенов прозы, без хэндлов. С префиллом та же модель ответила `e1]}`. Позже sync recall с префиллом отвечал читаемым JSON за 0,4–0,6 с, но почти всегда выбирал первую строку индекса: префилл чинит форму, не выбор.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Без префилла — RP-модель отвечает в роли; принудительный `tool_choice` (запрещён правилами документа).
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### Решения M5d: задержка на локальных серверах
+
+*Приняты при сборке M5d (`.notes/m5d-decisions.md`): раздел A — до кода, раздел B — решения после ревью; они вписаны в решения, которые меняют. Код им уже следует. Подтверждаются пакетом — вопрос 27. M5d — часть M5c, которой нужно живое железо (D-196). Основа — исследование исходников llama.cpp (upstream `4f2187e7`, 14.11.2026), Ollama v0.40.12, LM Studio 0.4.26, Bunraku и RoleCall; черновики лежат в рабочей папке сессии и в репозиторий не входят.*
+
+#### D-209
+- **Решение.** Объём M5d: чтение сведений о локальном сервере (D-210), закрепление слотов llama.cpp (D-211), четыре уведомления (D-212), счёт промпта и время вызова в трассе (D-213), `rp-core bench ttft` (D-214).
+- **Одно изменение плана.** §7.4.7 и D-84 закрепляли `id_slot` «при `max_in_flight = 2`». Теперь он уходит при любом `max_in_flight`. На локальном origin фоновая задача никогда не идёт рядом с рассказчиком или Директором (`preempt` и `backgroundReady` в `sched.ts`), так что закрепление нужно не ради параллельности. Оно держит кэш каждого слота за одним видом промпта, а это помогает серверу `-np 2` и при `max_in_flight = 1`.
+- **Не в M5d:** `--smartcache` koboldcpp; строки Ollama `NUM_PARALLEL` из старой матрицы демо; время до первого токена всего хода с Директором и recall — то, что нужно человеку, дают смещения вызовов в трассе (D-213).
+- **Рекомендация.** Принять. В M5d — то, что можно проверить на этом железе; остальное названо.
+- **Альтернативы.** Закреплять только при `max_in_flight = 2`, как в плане: сервер `-np 2` при ёмкости 1 терял бы кэш рассказчика без нужды — в матрице M5d незакреплённый `-np 2` без кэша хоста терял его в каждом раунде (§15).
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-210
+- **Решение.** Чтение сведений о сервере — новый `providers/server-info.ts`. Помощники разбора он делит с `probe.ts`, а не копирует (§7.4.7).
+  - **Что читается.** Только локальные соединения диалекта `openai-chat`, с коротким сроком: 1,5 с на запрос и 3 с на всё. По порядку: `GET /props` — llama.cpp, если в ответе есть `default_generation_settings` или `total_slots` (читаются `total_slots`, `build_info` и `endpoint_slots`; номер сборки 0 или нет поля — неизвестно); иначе `GET /api/version` и `GET /api/ps` Ollama; иначе `GET /api/v1/models` LM Studio — у какой модели есть `loaded_instances`; иначе `unknown`.
+  - **Модели Ollama.** `ollamaModel(name)` шлёт `POST /api/show` и возвращает блоб (путь `FROM` в `modelfile`) и опции раннера из `parameters`: `num_ctx`, `num_batch`, `num_gpu`, `main_gpu`, `use_mmap`, `num_thread`. Это опции, которые сравнивает `needsReload` Ollama (`server/sched.go` v0.40.12); семплеры и `keep_alive` он не сравнивает никогда.
+  - **Без сбоев.** Любая неудача — `unknown` с причиной. Ни в `caps-cache.json`, ни в журнал ничего не пишется.
+  - **Когда.** Раз на origin на процесс движка, с памятью. Чтение начинается при открытии сессии, для локальных origin её ролей, и открытия не держит. Первый вызов модели на таком origin ждёт его до 3 с и идёт дальше с ответом или без.
+  - **Когда никогда.** Для `script:`, `record:` и `replay:` и для удалённых origin. Ещё — при `EngineOptions.serverInfo: 'off'` или `RP_CORE_SERVER_INFO=off`. Preload тестов ставит эту переменную, как `RP_CORE_LANE` и `RP_CORE_RECALL`; тесты M5d включают чтение сами.
+  - **`rp-core probe <conn>`** печатает то же и вердикт закрепления для моделей соединения.
+  - *Поправка после ревью (раздел B).* Ревью нашло, что неудачное чтение хранилось всю жизнь движка. Сервер, который ещё грузится (503), запущен после открытия сессии или чей ключ не уложился в свою долю срока (401), до перезапуска оставался без закрепления и уведомлений. Теперь до конца процесса хранится только определённый ответ — известный вид сервера или «сервер не известен» по 404 и 200. Временный сбой — ничего не ответило, срок, «timed out», HTTP 5xx, 401 или 403 — читается снова при следующем `start`, не чаще раза в `SERVER_INFO_RETRY_MS` (30 с). Сессия проверяет сервер и в начале хода (как и при открытии и после `configure`), так что сервер, поднятый позже, получает закрепление и уведомления со следующего хода. Первый вызов после повтора ждёт в той же границе 3 с. Тест — `test/serverinfo-m5d/serverinfo.test.ts`, «a passing failure is read again». Остальные находки ревью исправлены, как записаны.
+- **Рекомендация.** Принять. Что сервер говорит о себе, — факт; короткий срок не даёт первому ходу долго ждать молчащий сервер, а чтение без записи не оставляет устаревших фактов.
+- **Альтернативы.** Хранить и неудачу до конца процесса, как до поправки: сервер, запущенный после открытия сессии, оставался бы без закрепления до перезапуска.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-211
+- **Решение.** Закрепление слотов llama.cpp.
+  - **Ключ caps.** `ModelCaps.slotPin?: {narrator: number; agents: number}`, в `PATCHABLE`. Человек задаёт его в конфиге: `[caps."conn:model"] slot_pin = true | false`. `true` закрепляет на 0 и 1, не спрашивая сервер; `false` не закрепляет никогда (`slotPin: null`).
+  - **Адаптер.** `buildChatRequest` openai-chat при `req.caps.slotPin` добавляет `id_slot` по `req.agent`: `narrator` (и черновики) — `narrator`, любой другой агент — `agents`. Поле ставится до `extra_body` и `exclude_body` соединения, так что они по-прежнему побеждают (D-53). *После ревью:* `id_slot` в `extra_body` самой модели тоже побеждает, правило тогда не закрепляет, а `slots_detected` говорит, что человек задал его сам.
+  - **Когда движок закрепляет без `slot_pin`.** Нужно всё сразу: сервер — llama.cpp; `total_slots ≥ 2`; сборка 11552 или новее (PR #30295 llama.cpp: до него закрепление занятого слота могло загрузить в него другой промпт посреди генерации) **или** ёмкость origin — 1, и ядро никогда не шлёт в занятый слот. Движок ставит закрепление на caps вызова там, где начинается каждый вызов (`streamCall` в `narrate.ts`), так что Директор, recall, filing и historian тоже покрыты. `rp-core preview --wire` его показывает.
+  - **Почему все агенты делят слот 1.** Мест два, так что Директор и sync recall могут оба пойти в слот 1. Тогда llama.cpp ставит второй в очередь и никогда не отказывает (`server-context.cpp`). Это и есть цена: слот 0 для одного из них опустошил бы кэш рассказчика.
+  - **id по модулю.** llama.cpp берёт `id_slot` по модулю числа слотов, и `id_slot: 1` на сервере с одним слотом попадает в слот 0. Поэтому D-211 требует двух слотов.
+- **Рекомендация.** Принять. Вживую закреплённый рассказчик сохранил кэш во всех раундах обеих схем, незакреплённый терял (§15).
+- **Альтернативы.** Закреплять любую сборку при ёмкости ≥ 2: до PR #30295 занятый закреплённый слот мог взять чужой промпт. Отдельный слот каждому агенту: слотов два, и слот 0 — у рассказчика.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-212
+- **Решение.** Четыре уведомления о сервере (§7.4.7, «Уведомления о сервере»). Каждое говорится раз за сессию, по коду и предмету: при открытии, когда пришёл ответ сервера, и снова после того, как `/model` или `session/configure` меняет роли; после поправки D-210 — и на ходу, когда сервер впервые ответил. От того, включён ли Compendium, они не зависят.
+  - **Роли, которые считаются:** рассказчик; Директор, если включён; recorder, если включён Compendium; recall, если его режим не `lexical` и не `off`.
+  - `slots_pinned` (info) — D-211 закрепил: N слотов, рассказчик держит слот 0, агенты идут в слот 1, а кэш рассказчика остаётся в VRAM только с `-np 2 --no-kv-unified` (при `-np auto` KV общий, и простаивающий слот уходит в RAM хоста, как только начинается другая задача).
+  - `slots_detected` (info) — llama.cpp с ≥ 2 слотами без закрепления (старая сборка при ёмкости 2, `slot_pin = false`): почему ядро не закрепляет и как закрепить (`slot_pin = true`, новее сборка или `max_in_flight = 1`).
+  - `ollama_reload_risk` (warn) — две роли на одном origin Ollama называют разные модели с одним блобом и разными опциями раннера (например, вариант на 16k и на 32k одной модели): каждое переключение перезагружает модель; привязать обе роли к одному имени.
+  - `lmstudio_autoevict` (warn) — роли на одном origin LM Studio называют две модели и больше, и хотя бы одна не загружена: JIT-загрузка с Auto-Evict (умолчание LM Studio) каждый раз выгружает другую; загрузить обе через `lms load` или привязать агентов к модели рассказчика.
+  - О разных блобах Ollama на одном origin уведомления нет: останутся ли обе модели загружены, зависит от VRAM и `OLLAMA_MAX_LOADED_MODELS`, а API этого не показывает.
+  - *После ревью интеграции:* `slots_pinned` называл причину дважды — теперь только когда она что-то добавляет (ёмкость 1 на старой сборке, `slot_pin = true`); если закреплены только агенты, он называет только их.
+- **Рекомендация.** Принять. Каждое уведомление называет причину и выход — строку конфига или команду.
+- **Альтернативы.** `ollama_options_mismatch` и зеркалирование опций раннера из плана: через `/v1` их не задать (D-196). Предупреждать и о разных блобах Ollama: API не показывает, останутся ли они в памяти вместе.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-213
+- **Решение.** Счёт промпта и время вызова в трассе.
+  - **`CallResult.prompt?: {processed?, cached?}`.** Из usage OpenAI: `prompt_tokens_details.cached_tokens` — `cached`, `processed` — `prompt_tokens − cached`; так работают llama.cpp и Ollama на `/v1`. Иначе из `timings` llama.cpp, только с `cache_n`: `processed = prompt_n`, `cached = cache_n`.
+  - **Правило из Bunraku.** Адаптировано из `readTokenReport` (`src/core/tokens/usage.ts`; Coneja-Chibi `e95d90db`, `4cd5b724`; 702d8120): `timings` без `cache_n` никогда не дают всего промпта. Тем же правилом исправлен `usageOfTimings`, который читал `prompt_n` как весь промпт, когда `cache_n` нет. У Ollama `timings.prompt_n` — весь промпт, а `cache_n` она не шлёт, так что `processed` из него не читается никогда.
+  - **Строки `Trace.calls`** получают три необязательных поля: `at` — мс от начала хода до начала вызова; `ttftMs` — первый токен вызова от его собственного начала, ожидание очереди включено, как и раньше; `prompt`. Страж журнала их пропускает — строки `calls` он не проверяет, — и старые строки читаются как раньше. Поля пишут вызовы хода (рассказчик, Директор, sync recall); вызовы полосы — нет.
+  - **`/trace`** печатает строку на вызов, например `narrator  +2.1 s  first token 0.4 s  1.8 s  prompt 3 412 cached, 96 new`.
+- **Рекомендация.** Принять. Строка рассказчика, у которой почти весь промпт `new` после вызова агента, — видимый признак, что агент забрал его кэш.
+- **Альтернативы.** Читать `timings.prompt_n` как обработанное всегда: у Ollama это весь промпт, и `/trace` показывал бы «всё новое» на каждом вызове.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-214
+- **Решение.** `rp-core bench ttft` — `src/cli/bench.ts`, одна запись в `COMMANDS` `main.ts`; `bench` берёт позиционный `ttft` (§12.3).
+  - **Вызов:** `rp-core bench ttft [conn:model] [--rounds N] [--prompt-tokens N] [--tail-tokens N] [--agent-tokens N] [--agent-shared PCT] [--pin auto|on|off] [--json]`. Модель по умолчанию — роль рассказчика. Умолчания: 3 раунда, P 4 000, T 200, A 1 500, `--agent-shared 50`, `--pin auto` (правило D-211).
+  - **Промпты** синтетические и детерминированные, из генератора слов с зерном; фикстуры и текст истории в них не попадают.
+  - **Раунд — три вызова,** каждый со стримом, `temperature 0` и не больше 16 токенов ответа: промпт рассказчика P; промпт агента A как агент `filing`, чтобы действовало правило закрепления; P и новый хвост T.
+  - **На вызов** — первый токен по часам клиента, всё время и `prompt` (D-213). У вызова 3 ещё `ratio = processed / хвост`, где число токенов T — `prompt_tokens` вызова 3 минус вызова 1, по счёту сервера.
+  - **Печатает** сведения о сервере и вердикт закрепления, таблицу на раунд, медианы и PASS при `ratio ≤ 1,5` (критерий §15). Если `processed` неизвестен (LM Studio), печатает только время и говорит почему. До всего прочего — сколько настоящих вызовов будет. Сессию не трогает. Схемы сервера из матрицы (`-np 1` с `--cache-ram` и с `--cache-ram 0`; `-np 2 --no-kv-unified`) запускает человек; справка их называет.
+  - **Коды выхода:** 0 — все раунды прошли или отношение неизвестно, 1 — FAIL, 3 — упал вызов, 64 — неверный флаг.
+  - *После первого живого прогона (§15).* В решении A не был связан с P, а промпты не солились. Незакреплённый прогон сразу после закреплённого нашёл всё в кэше и прошёл, ничего не измерив. Теперь перед P стоит случайная соль на запуск (`RP_CORE_BENCH_SALT` её заменяет, тесты ставят `''`), а A начинается с доли P (`--agent-shared`): иначе llama.cpp по сходству клал несвязанный A в свободный слот, и незакреплённый прогон проходил там, где промпт настоящего агента занимает слот рассказчика.
+- **Рекомендация.** Принять. Отношение считается только по числам сервера и не зависит от скорости GPU.
+- **Альтернативы.** Несвязанный A и промпты без соли — первый вид бенча, его незакреплённый PASS ничего не значил.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-215
+- **Решение.** Тесты и подделки. Поведение движка и адаптера проверяется на подделках `Bun.serve`: llama.cpp — `/props`, `/slots`, чат с `timings` и запись `id_slot` каждого тела; Ollama — `/api/version`, `/api/ps`, `/api/show`, usage `/v1` с `cached_tokens`; LM Studio — `/api/v1/models`. Новые каталоги: `test/serverinfo-m5d`, `test/pin-m5d`, `test/trace-m5d`, `test/bench-m5d` и `test/demo-m5d` со сценарием в `docs/M5D-DEMO.md`. Читатель видят только тесты, которые включают его сами (D-210).
+- **Рекомендация.** Принять. Подделки дают точные и повторяемые счёт и слоты; чего они не моделируют (выбор слота по сходству, цену кэша на GPU), говорит демо и показывает живой прогон.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-216
+- **Решение.** Документация. В руководстве — раздел «Local servers: speed and caching»: схемы серверов (среди них llama.cpp `-np 2 --no-kv-unified`, одно имя модели Ollama на блоб, `lms load` для LM Studio), четыре уведомления, `slot_pin`, счёт промпта в трассе, `bench ttft`. Ещё: таблицы статуса теряют строку M5d; `PROVENANCE.md` получает адаптацию `usage.ts`; написан `docs/M5D-DEMO.md`.
+- **Рекомендация.** Принять.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-217
+- **Решение.** Живые проверки — каждый раз с согласия Леви и с малым числом вызовов: `bench ttft` на Ollama с `magmell-16k` (9 вызовов); llama-server, который идёт с Ollama, на её блобе magmell, запущенный с `-np 2 --no-kv-unified`, — чтобы увидеть закрепление и отношение. Скачивать ничего не нужно, но это запуск процесса на GPU, поэтому согласие спрашивается отдельно. У LM Studio на машине нет моделей: её уведомление проверено только на подделках. Итоги — §15.
+- **Рекомендация.** Принять.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### D-218
+- **Решение.** Совместимость. Новые поля везде необязательны: caps, строки трассы и вывод `probe`. Адаптер rp-core в Bunraku (`src/studio/core-ollama-provider.ts`) `id_slot` не видит никогда: это транспорт Ollama, а D-211 на Ollama не закрепляет.
+- **Рекомендация.** Принять.
+- **Статус.** Ждёт подтверждения (вопрос 27).
+
+#### Решения M6: --stdio
+
+*Приняты при сборке M6 (29.10.2026, коммиты `6184ec6`…`62baf3e`). Заметок `.notes/m6-*` нет: решения записаны в рев. 19 задним числом, по коду (`src/protocol/rpc.ts`, `commands.ts`, `cli/main.ts`) и по `docs/STDIO.md`. Здесь только то, что автор клиента должен знать сверх плана §12.2. Код им уже следует. Подтверждаются пакетом — вопрос 28.*
+
+#### D-219
+- **Решение.** Сессии соединения (§12.2). Метод с `sessionId` работает, только если это соединение открыло сессию через `session/new` или `session/open`. Иначе — `-32000` с `session_not_found` и текстом «is not open in this connection». `turn/stop` знает только ходы, начатые в этом соединении (иначе `not_found`), и только они попадают в `openTurns` как `running`. `session/fork` отдаёт id новой сессии, но не открывает её. Повторный `session/open` открытой сессии отдаёт свежий снимок той же ручки. Сессии закрывают `session/close` и завершение.
+- **Почему.** У движка одна ручка на сессию, и за ней стоит lock. Соединение держит свою карту открытых ручек и при выходе закрывает их. Неявное открытие в любом методе брало бы lock без ведома клиента.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Открывать сессию при первом упоминании `sessionId`; открывать форк сразу.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-220
+- **Решение.** Порядок и параллельность (§12.2). Строки stdin разбираются по порядку, и метод каждой начинается сразу, синхронно, до чтения следующей. Дальше запросы идут параллельно, ответы приходят в порядке готовности. Синхронная часть метода — проверки, допуск, запись строки журнала — кончается до следующей строки, поэтому `message/send` и следующий за ним `turn/run` видят друг друга без ожидания ответа. Медленный метод (`models/list`, `caps/probe`, `memory/wait`, `session/draft`) не держит ни другие методы, ни `turn/stop`. События восстановления, которые нашёл `session/open`, уходят один раз, сразу после его ответа. Их забирают синхронно, при старте метода, чтобы второй `session/open` во время медленного запроса не унёс чужие. Уведомление (без `id`) ответа не получает, даже при ошибке.
+- **Почему.** Первая сборка ждала ответа метода, прежде чем читать следующую строку, и медленный каталог моделей держал весь провод; правка — `d081136`, с тестом `a slow catalog request does not block another JSON-RPC request`.
+- **Рекомендация.** Принять. Клиент обязан сводить ответы по `id` — так JSON-RPC и устроен.
+- **Альтернативы.** Строгий порядок ответов; отдельная очередь для медленных методов.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-221
+- **Решение.** Ошибки (§12.2). Шесть кодов: `-32700`, `-32600`, `-32601`, `-32602`, `-32603` и `-32000`. Params проверяют два слоя: форму (тип поля, обязательность, перечисления) — диспетчер, с `-32602`; смысл — глагол движка. Отказ движка `invalid_params` приходит как `-32000` с `data.code: 'invalid_params'`. `-32602` — ещё вызов до `initialize`, второй `initialize` и неизвестный id библиотеки в `session/new`. `-32603` скрывает подробности (`Internal error`).
+- **Почему.** §12.2 плана знал только `-32000`; разбор формы до глагола даёт стандартный код JSON-RPC, а отказы глаголов остаются теми же `Refusal`, что в библиотеке и в one-shot.
+- **Цена.** Неверные params приходят двумя путями. Клиент, который смотрит только на `-32602`, пропустит `-32000`/`invalid_params`.
+- **Рекомендация.** Принять как есть и описать оба пути (так в `docs/STDIO.md`). Свести всё в один код — ломать протокол 1.
+- **Альтернативы.** Всё как `-32000` с `data.code`; всё неверное — `-32602`.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-222
+- **Решение.** Снимок (§12.2). `Snapshot` несёт `sessionId`, `header`, `config`, `version`, `head`, **весь** активный путь (`path`, без курсора подгрузки), `tails`, `openTurns`, `background` (`memoryStatus().backlog`), `director: {turn, arcs, seeds}` и `compendium: {entries, pending}`. По плану было: последние 200 сообщений с курсором, `director.chapter` и `compendium.byType`, `draft` у идущего хода. У идущего хода `draft` нет (текст идёт событиями `text`), у отложенного — есть.
+- **Почему.** В коммитах не записано. Метода подгрузки по курсору нет, и хвост пути без него был бы тупиком; счёты по типам даёт `memory/list`.
+- **Цена.** Размер снимка растёт с историей: импортированная сессия RoleCall на 809 сообщений (§15, рев. 18) приходит одним кадром на каждый `session/open`, а `docs/STDIO.md` советует обновлять снимок после хода. Не замерено.
+- **Рекомендация.** Принять для протокола 1; курсор, если понадобится, — необязательным полем.
+- **Альтернативы.** Хвост пути и метод подгрузки; `byType` в снимке.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-223
+- **Решение.** Конфликт по версии (§6.1, §6.6). Во время хода движок принимает `edit`, `hide` и `select` от любого вызывающего; `configure`, `fork` и пишущие глаголы Compendium по-прежнему отказывают `session_busy`. В момент коммита (`done`, `stopped` с текстом, сбой с `onError:'keep'`) ход сравнивает версию с `base` своей строки `turn`. Другая версия — строка `held` (тело коммита плюс `addition` и `cont`), событие `conflict{turnId, draft}`. Отложенный ход живёт и после рестарта, а до решения `send`, `submit` и `runTurn` отказывают `held_pending`. `commitAnyway` применяет правило безусловного коммита и возвращает `{outcome: 'committed' | 'dropped' | 'discarded', version, message?}`; `discard` пишет `end{discarded}`. REPL правки во время хода по-прежнему отклоняет сам.
+- **Почему.** План §6.1 называл и `fork`. Но `fork` и `configure` отказывают `session_busy` с M1a, и M6 этого не меняла: конфликт дают только глаголы, которые меняют путь, на который отвечает ход.
+- **Остаток.** У REPL и TUI нет команды «сохранить / отбросить» (это «не в v1» D-125): если `--stdio`-клиент оставил ответ отложенным, сессия в терминале отказывает `held_pending`, пока другой клиент её не решит (риск 34, §17).
+- **Рекомендация.** Принять.
+- **Альтернативы.** Принимать и `fork`; конфликт по смыслу правки, а не по версии.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-224
+- **Решение.** Набор методов против плана (§12.2, §7.4.9).
+  - `session/draft` (`{kind:'impersonate'}` или `{kind:'quiet', prompt}` → `{text, usage?}`) вместо зарезервированного `draft/run` — по имени глагола `draft` (§6.1).
+  - `turn/answerGate` — метод в дополнение к ответу на `gate/request` (D-226).
+  - Добавлены `memory/status` и `memory/wait`. `memory/add` берёт `keys` необязательно; `memory/edit` — ещё `title` и `content`; `memory/restore` — без `reason`; `memory/export` — с `force`; у `memory/undo` и `memory/refile` — `task`. Всё — как у глаголов.
+  - `memory/recall` без `test`: отдаёт `{messageId, record, compendium}` для последнего ответа на пути или для `turnId`.
+  - `caps/probe` берёт `active`. `session/list` обходится без `params`.
+  - `features` в ответе `initialize`: `swipes`, `events`, `models`, `memory`, `conflicts`, `draft`, `review-gate` (план: `swipes`, `tools`, `director`, `memory`, …).
+  - Нет в протоколе: смены персоны, имён истории и веток (работа вне вех, TUI), `/memory profile` и `/memory mode` (M5c). Режим recall меняется через `session/configure` (`compendium.recall.mode`); `/memory profile` ничего не меняет, он только показывает профиль и привязку.
+- **Рекомендация.** Принять. Методы повторяют глаголы библиотеки, а не план, который писался до M5b.
+- **Альтернативы.** Держаться плана: `draft/run`, обязательные `keys`, `test` у `memory/recall`.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-225
+- **Решение.** Схема (§12.2, §4, §14). Отдельной dev-зависимости нет: `tools/generate-protocol-schema.ts` строит `src/protocol/protocol.schema.json` (JSON Schema 2020-12, `$id: urn:rp-core:protocol:1`) компилятором TypeScript из `RpcCommand`, `RpcResponse` и `RpcEventNotification`. Схема разрешает лишние поля; `result` — любой JSON, результаты методов не описаны. `bun run schema` пишет, `bun run schema:check` сверяет. Версия 1 заморожена так: `initialize` требует `protocol: 1`, дальше — только необязательные поля, новые методы и типы событий.
+- **Дыры на 14.11.2026.** В схеме нет `session/draft`, `turn/answerGate`, `inspect` у `turn/run` и запроса `gate/request`: M9 добавила их в диспетчер, но не в `RPC_METHODS` и `RpcCommandParams`, а проверка покрытия (`RpcMethodCoverage`) сверяет только эти два списка между собой. Файл отстал с `1ca938d` (M9): нет `agent: 'host'`, и `schema:check` падает. Ни один тест не гоняет `schema:check` и не сверяет кадры со схемой, хотя §14 это обещал.
+- **Рекомендация.** Принять генератор. Дыры закрыть до первого внешнего клиента: внести четыре формы в `commands.ts`, перегенерировать, добавить тест на `schema:check`.
+- **Альтернативы.** Библиотека-генератор (`ts-json-schema-generator` и подобные) — зависимость ради одного файла; схема руками.
+- **Статус.** Ждёт подтверждения (вопрос 28); дыры — риск 33, §17.
+
+#### D-226
+- **Решение.** Гейты на проводе (M9 поверх M6; §12.2). `gate/request` — запрос JSON-RPC от ядра, его `id` равен `gateId` (`<turnId>:review` или `<turnId>:transform`), `params: {turnId, gateId, kind, payload: {messages}}`. Уходит, только если гейт объявлен в `initialize`; событие `gate` приходит всем. Ответ клиента — кадр с тем же `id` и `result: {action, edits?}`; ответ-ошибка, другой `action` и испорченные `edits` — `cancel`. Хост узнаёт ответ по форме кадра: строковый `id`, нет `method`, есть `result` или `error`. То же можно сказать методом `turn/answerGate`. `inspect` без `review` — `gate_unsupported`. Объявленный `transform` включает гейт на каждом `turn/run` и `turn/submit`. Срока у гейта в `--stdio` нет: ход ждёт ответа, `turn/stop` или завершения.
+- **Почему.** Ответ на запрос — обычный путь JSON-RPC; `turn/answerGate` повторяет глагол `answerGate` библиотеки (§6.1) для клиентов, которые отвечают методами. Всё непонятное — `cancel`: это fail-closed правило хуков (§12.5).
+- **Рекомендация.** Принять.
+- **Альтернативы.** Только метод; срок гейта по умолчанию.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### Решения M7 и M8: Anthropic и Gemini
+
+*Приняты при сборке M7 и M8 (коммиты `54dd28c` и `c1d7b68`, 29.10). Файла решений у этих вех нет: записи восстановлены по коду и тестам на 14.11. Код им уже следует. Подтверждаются пакетом — вопрос 28. Ни одно из решений не проверено на настоящем API.*
+
+#### D-227
+- **Решение.** `providers/anthropic.ts` написан заново по §8.4–§8.6, а не портирован из Bunraku (`anthropic-request.ts`, `anthropic-reply.ts`), как планировали карта портирования (adapt) и оценка M7 (≈ 65 % из Bunraku). Кода и тестов Bunraku в адаптере нет, строки в `PROVENANCE.md` нет. Адаптер — 262 строки на блоках `PromptMsg` поверх общих `http.ts`, `sse.ts` и `wire.ts` (проверка протокола, `normalizeFinish`, `applyOverrides`); минимумы кэша и правила thinking, префилла и семплеров — строки `models.json`.
+- **Почему.** Коммит причины не называет. По коду видно, что всё, что из Bunraku пришлось бы переписывать (строковый `ProviderMessage`, дефекты из списка «не переносить» §19.4), здесь просто не появилось.
+- **Рекомендация.** Принять. Строка в `PROVENANCE.md` не нужна, раз кода оттуда нет; карта §19.4 исправлена.
+- **Альтернативы.** Порт Bunraku с переводом тестов на блоки — по §19.4 около половины времени порта.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-228
+- **Решение.** На финальном раунде цикла (`toolChoice:'none'`) нативные Anthropic и Gemini не шлют ни схем тулов, ни `tool_choice` / `toolConfig`. На обычном раунде — схемы и `auto`. Это касается обоих адаптеров (M7 и M8).
+- **Почему отступление.** D-91 говорит: на финальном раунде схемы остаются объявленными, а `tool_choice:'none'` уходит, если запись его знает; без схем — только когда сервер `tool_choice` не соблюдает (Ollama). Пресеты обоих хостов `'none'` знают и соблюдают (`toolChoice: ['auto', 'none']`, `toolChoiceHonored:true`), так что по D-91 схемы должны уйти.
+- **Цена.** Тулы стоят первыми в префиксе (§8.7): у Anthropic финальный раунд, скорее всего, не читает кэш, который прочли раунды до него. И в истории этого запроса есть `tool_use` / `functionCall` без объявлений тулов — примет ли это API, не проверено. Вызовы финального раунда и так не исполняются (§7.1), а `FINAL_CUE` просит закончить без тулов.
+- **Рекомендация.** Привести к D-91: схемы оставить, слать `tool_choice:{type:'none'}` у Anthropic и `functionCallingConfig.mode:'NONE'` у Gemini. До правки — проверить живой пробой `rp-core probe <conn:model> --active`: её `tools_result` шлёт как раз финальный раунд.
+- **Альтернативы.** Оставить как есть, если живой API историю без схем принимает, а промах кэша на финальном раунде дёшев.
+- **Статус.** Ждёт подтверждения (вопрос 28); стоит посмотреть отдельно.
+
+#### D-229
+- **Решение.** Thinking и семплеры у Anthropic.
+  - `adaptive` (4.6–4.8 и 5-я серия) — `{type:'adaptive', display:'summarized'}` всегда, а не только когда UI показывает рассуждения; effort — `output_config.effort`; `reasoning:'none'` опускает `thinking` (не `disabled`); `offShape` Sonnet 5.5 (`between_tools`) не читается.
+  - `budget` (4–4.5) — 1 024 / 4 096 / 8 192 на `low` / прочее / `high`, не больше половины `max_tokens`, меньше 1 024 — без thinking; `reasoning:'none'` при `canDisable` — `disabled`.
+  - Семплеры не уходят при фиксированных семплерах, при закреплённой версии от `2026-10-21` (сравнение строкой) и при включённом thinking. При фиксированных семплерах и закреплённой версии не уходит и `stop_sequences`, хотя строки 4.6+ и 5-й серии принимают `stop` (`accepted: ['stop', 'max_tokens']`).
+- **Почему.** Коммит причины не называет. По коду: поле уходит, только если запись его разрешает, так что на моделях, которые поле отвергают, 400 из-за него нет.
+- **Цена.** Без `stop_sequences` `PROMPTED_STOP` до Claude не доходит: prompted-раунд держится на `cutAtPromptedStop` (§8.3), модель может писать после `<tool_result` до `max_tokens`. Транспорт пресета — native, так что это только явный `tools = "prompted"`. Пользовательские стопы пресета на этих моделях тоже не работают.
+- **Рекомендация.** Форму thinking принять. `stop_sequences` проверить на живом API и, если 5-я серия их принимает, слать по строке (`stop` в `accepted`), а не выключать вместе с семплерами.
+- **Альтернативы.** `display:'summarized'` только при показе рассуждений (как в плане); `between_tools` при `reasoning:'none'` у Sonnet 5.5.
+- **Статус.** Ждёт подтверждения (вопрос 28); стоит посмотреть отдельно (стопы).
+
+#### D-230
+- **Решение.** `pause_turn`: адаптер сам повторяет запрос, дописав полученные блоки последним assistant-сообщением (у `tool_use` — с разобранным `input`). Всего не больше трёх запросов на вызов. Наверх идёт один поток: индексы блоков продолжаются, usage складывается, подписанные блоки всех запросов уходят одним `replay`, finish один. Третья пауза — finish `length` с `raw:'pause_turn'`.
+- **Что даёт.** План говорил только «отправить повторно». Цикл и `/usage` паузы не видят, а предел в три запроса не даёт серверу, который паузит без конца, держать ход.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Без предела; пауза как отдельный раунд цикла (счёт раундов вырос бы без вызовов тулов).
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-231
+- **Решение.** Нативный mid-system по данным уже, чем список §8.5: `anthropic-native` дают строки `*claude-opus-5*`, `*claude-{opus,sonnet,haiku,fable,mythos}-5-5*` и `*claude-opus-4-8*`. Fable 5.1 и Mythos 5 и 5.1, которые §8.5 называет, под них не попадают и получают поздние system заметкой `[System note]`.
+- **Почему.** Коммит причины не называет. Заметка — безопасная сторона: она не может нарушить правило места из §8.5.
+- **Рекомендация.** Оставить, пока строки не проверены на живом API; потом дописать строки Fable 5.1 и Mythos 5/5.1. Обойти можно уже сейчас: `[caps."conn:model"] mid_system = "anthropic-native"`.
+- **Альтернативы.** Дописать строки сразу по §8.5.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-232
+- **Решение.** `providers/gemini.ts` написан заново; из RoleCall не взято и то, что план собирался портировать. Санитайзер схем свой: остаются только ключи подмножества Gemini (`type`, `format`, `title`, `description`, `enum`, `items`, `prefixItems`, пределы чисел и массивов, `anyOf`, `oneOf`, `properties`, `additionalProperties`, `required`, `propertyOrdering`, `$id`, `$defs`, `$ref`), у `$ref` соседи снимаются, `nullable:true` ниже корня становится `anyOf` с `{type:'null'}`. Список safety — четыре категории с порогом OFF: HARASSMENT, HATE_SPEECH, SEXUALLY_EXPLICIT, DANGEROUS_CONTENT. Строки в `PROVENANCE.md` нет.
+- **Почему.** Коммит причины не называет. Следствие списка разрешённых ключей: новое или неизвестное поле схемы просто не уходит.
+- **Цена.** Строка Gemini через OpenRouter в `models.json` (из VAUDEVILLE, сверена с валидатором OpenRouter) выключает пять категорий — с CIVIC_INTEGRITY; нативный адаптер — четыре. Срезанные ограничения (`minLength`, `maxLength`, `pattern`) модель не видит: их проверяет только чтение ответа.
+- **Рекомендация.** Принять санитайзер. CIVIC_INTEGRITY добавить, если живой API её принимает.
+- **Альтернативы.** Порт санитайзера RoleCall (37 строк); список запрещённых ключей.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-233
+- **Решение.** Подписи и исходы Gemini.
+  - Поток собирает **все** части ответа в исходном порядке и отдаёт одним `replay` `gemini-parts`. Внутри цикла этот `replay` заменяет блоки model-хода целиком: уходят те же части дословно, с thought-частями и пустыми подписанными. Model-ход с подписанной частью ни с чем не склеивается.
+  - MALFORMED_FUNCTION_CALL — ошибка `tool_protocol_invalid`, MISSING_THOUGHT_SIGNATURE и 4xx о подписи — `thinking_signature_mismatch`, а не finish, как писал план. `promptFeedback.blockReason` — finish `content_filter`.
+- **Что даёт.** Подпись остаётся на своей части без сопоставления частей с блоками. Сломанный вызов и потерянная подпись приходят типизированным сбоем, а не тихим концом ответа.
+- **Цена.** `rekeyReplay` `gemini-parts` не трогает: если цикл переименовал id вызова, в повторённом `functionCall` остаётся старый id, а в `functionResponse` — новый (§8.6). Gemini обычно отдаёт id в алфавите `SAFE_ID`, но тестов на это нет.
+- **Рекомендация.** Принять; переименование в `rekeyReplay` для `gemini-parts` — отдельной правкой с тестом.
+- **Альтернативы.** Подпись на блоке и сборка частей из блоков; MALFORMED_FUNCTION_CALL как finish `end`.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-234
+- **Решение.** Форма запроса Gemini там, где план её не задавал.
+  - Thinking: `level` — effort в верхнем регистре, `reasoning:'none'` → `MINIMAL` только там, где он есть (3 Flash, 3 Flash Lite), `auto` не шлётся; `budget` — 1 024 / 8 192 / 24 576 на `low` / `medium` / `high`, не больше `max(512, maxTokens − 512)`, `thinkingBudget:0` только при `canDisable`; `includeThoughts:true` у любой модели с управлением thinking.
+  - Structured output — `generationConfig.responseFormat.text = {mimeType:'APPLICATION_JSON', schema}` (план говорил о `responseSchema`).
+  - Поздние system — заметкой в user-ходе: нативного system посреди диалога у Gemini нет.
+  - `stopSequences` — не больше 5; id модели проверяется до отправки, ключ — только в заголовке, и в каталоге тоже.
+- **Почему.** Поля только из строк данных: модель вне строк не получает ни уровня, ни бюджета, то есть умолчание сервера.
+- **Цена.** Форма `responseFormat` не проверена на живом API: если сервер её не знает, `structuredCall` Директора и агентов Compendium на Gemini упадёт на первом же вызове.
+- **Рекомендация.** Принять, но первым живым вызовом проверить `responseFormat` (`rp-core probe <conn:model> --active`, проба `json_schema`).
+- **Альтернативы.** `responseMimeType` с `responseJsonSchema` в `generationConfig`.
+- **Статус.** Ждёт подтверждения (вопрос 28); стоит посмотреть отдельно (форма structured output).
+
+#### Решения M9: стык с Bunraku
+
+*Приняты при сборке M9 (29.10, коммиты `2115144`, `1ca938d`, `a92a16a`). Отдельной заметки решений у M9 нет: записи ниже собраны при ревизии 19 по коду, тестам и `docs/M9-HOST.md`. Код им уже следует. Подтверждаются пакетом — вопрос 28.*
+
+#### D-235
+- **Решение.** Две границы хранения вместо одного `RecordStore` под движком (§5.12).
+  - **Синхронный `SessionStore`** — `create`, `open`, `fork`, `list`; `open` возвращает `SessionLog`, чей `append` долговечен до возврата. Его принимает `Engine.open({sessionStore})`. `FileSessionStore` — прежний журнал, по умолчанию; `MemorySessionStore` — журнал в памяти хоста с эксклюзивным открытием, переживает `engine.close()`.
+  - **Асинхронный `RecordStore`** — через `Engine.openWithRecordStore`; он возвращает `AsyncEngineHandle` с теми же методами, но каждый — `Promise`. Внутри — `RecordSessionStore`: зеркало открытой сессии в `MemorySessionStore`, очередь записей на сессию, lease на время открытия с продлением раз в 10 с. Ход ждёт очереди до вызовов агентов, до вызова рассказчика и в конце; фасад — после каждой операции и перед каждым событием. Сбой записи отравляет очередь сессии: дальше она не пишет, провайдер не вызывается, из событий проходит только `failed`; lease отпускается и тогда.
+  - **Conformance** — функция `checkRecordStoreConformance(make, header, entries, reopen?)` из `rp-core/testing`, без `bun:test` внутри; эталоны — `FileRecordStore` и `MemoryRecordStore`. Record/replay из `rp-core/testing` не экспортируются.
+- **Почему.** Свёртки, допуск и правила коммита синхронны с M1a, а синхронным API живут CLI и тесты. Перевести каждую запись хода на `await` значило бы переписать движок. Зеркало оставляет его как есть, а асинхронный хост получает те же барьеры долговечности: `turn` до агентов, `prep` до рассказчика, ответ до `done`.
+- **Цена.** Хранилище хоста получает `append` на каждую строку, `chk` тоже. `home` нужен и с `RecordStore`: библиотека и `--keep-requests` — файлы.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Асинхронный движок целиком; только синхронный `SessionStore` — тогда хосту без синхронной базы пришлось бы строить мост самому.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-236
+- **Решение.** `beforeAssemble` идёт первым — после долговечной `turn`, до проверки помещения, recall и Директора, — а не параллельно с ними, как читалось в §6.2 и §12.5. Вставки — `{depth, role, text, src:'host'}`; при равной глубине источник `host` стоит после `director` и перед `guidance` (§10.1). Статус — события `agent{agent:'host'}`: `started`, `done` с числом вставок, `failed`. Ошибка, неверный результат или срок — `notice{code:'host_before_assemble_failed'}` и ход без вставок; Stop — ход кончается без сообщения.
+- **Почему.** Проверка помещения D-195 идёт до вызовов Директора и должна видеть все вставки запроса; параллельный хук пришёл бы после неё.
+- **Цена.** Медленный хук задерживает Директора и recall на своё время — не дольше `hookTimeoutMs`, если срок задан.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Параллельно, как в плане, и проверка помещения без вставок хоста.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-237
+- **Решение.** Хост меняет запрос в трёх шагах после `prep`, всегда в одном порядке: хук `transformRequest` (в процессе: копия приведённых сообщений → `{edits:[{index, text}]}`); гейт `transform` (по `transformGate` у `runTurn` и `submit`; у клиента `--stdio`, объявившего этот гейт, — на каждом ходу); гейт `review` (по `inspect`).
+  - Правка заменяет сообщение одним текстовым блоком; индекс — один раз, вне диапазона — сбой. Ход ждёт один гейт за раз: событие `gate{turnId, gateId, kind, payload:{messages}}`, `gateId` — `<turnId>:<kind>`; `answerGate` возвращает `false` на неизвестный или уже отвеченный гейт [D-39].
+  - Исходы. Хук: ошибка, срок или Stop — `failed{code:'host_transform_failed'}`. Гейт `transform`: `cancel`, срок или уход потребителя — тоже `host_transform_failed`; Stop — `stopped`. Гейт `review`: `cancel`, срок, Stop или уход потребителя — `stopped{message:null}`, в журнале `end{stopped-empty}` (план называл `end{dropped}`). Запрос не уходит ни в одном из них.
+  - Запрос запасной модели (§6.6) проходит хук и гейт `transform` ещё раз (строки трассы `…:fallback`), гейт `review` — нет.
+  - Срок — `hookTimeoutMs`, один на каждый хук и гейт; без него хук и гейт ждут ответа или Stop.
+- **Почему.** Хук — для хоста в процессе, гейт — для UI или клиента за процессом; хосту бывают нужны оба. `review` — последний взгляд на то, что уйдёт, поэтому он после правок.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Один механизм — гейт `transform` как форма хука (так читался шаг 7 §6.2); `review` до `transform`.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-238
+- **Решение.** `transformReply` получает видимый текст ответа после постобработки (шаг 9 §6.2), до коммита. На continue и на ответе из одних рассуждений, сохранённом по `emptyReply:'keep'`, он не вызывается. У ответа с раундами тулов блоки тулов остаются, новый текст — последним блоком. `{veto}` — `failed{code:'host_veto'}`; ошибка, неверный результат, срок или Stop — `host_transform_failed`; черновик в обоих случаях — сам ответ. `note` принимается, но пока не пишется. `trace.hooks` — строки `{name, ok}` (§5.7); гейт `review` своей строки не пишет.
+- **Открыто.** Final Cut и Smart Recovery Bunraku должны идти через `transformReply` (§12.5), а continue хук сейчас обходит. Нужен ли он на continue — по целому ответу или по добавке — покажет адаптер Bunraku.
+- **Рекомендация.** Принять как есть; хук на continue и запись `note` — отдельным решением, когда понадобятся.
+- **Альтернативы.** Хук и на continue; `note` в трассе сразу.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-239
+- **Решение.** `draft({kind:'impersonate'} | {kind:'quiet', prompt})` — один вызов модели рассказчика поверх `preview({draft: инструкция})`: инструкция — непосланное сообщение игрока в голове пути. Директора нет (заглушка, как у `preview`), тулов нет, не больше 1024 токенов; отмена — переданный сигнал. Ничего не пишет: ни `turn`, ни `chk`; версия не меняется. Во время хода — `session_busy`, пустой `prompt` — `invalid_params`. `impersonate` — постоянная строка «Write the next message as <персона>…». В REPL `/impersonate` печатает черновик в чат; в поле ввода он не попадает.
+- **Отступление.** ST берёт для impersonate `impersonation_prompt` пресета и префилл `assistant_impersonation`; импорт хранит оба с M2 (`Preset.impersonation`), а `draft` их не читает.
+- **Рекомендация.** Принять как первый шаг; `impersonation_prompt` пресета — следующим.
+- **Альтернативы.** Сразу промпт и префилл пресета; черновик в поле ввода REPL.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### Решения вне вех: импорт SillyTavern и TUI
+
+*Сделаны 28–29.10, до M6, без вехи и без заметки решений (коммиты — §15). Записи ниже собраны при ревизии 19 по коду, тестам и `docs/USER-GUIDE.md`. Код им уже следует. Подтверждаются пакетом — вопрос 28.*
+
+#### D-240
+- **Решение.** `rp-core import <chat.jsonl> --card <id>` (§10.5): одиночный чат ST становится сессией. Карточка — уже в библиотеке, пресет и книги — умолчания `config.toml`, персона — `--persona` или `user_name`. Свайпы — сиблинги; выбранная версия — `swipe_id`, если он указывает на `mes`, иначе последний свайп с текстом `mes`, иначе `mes` — ещё одна версия. `extra.reasoning` — блок `reasoning`, `is_system` — `hide` на каждую версию. Id детерминированы хешем файла; повтор — отказ, `--new` — следующий id; `imported {from:'sillytavern', hash, file}`. Compendium включается после прошлого строкой `config`, как в D-189. Групповой чат — отказ. Журнал пишется целиком одной записью (`createSessionLogWith`).
+- **Отличия от импорта RoleCall** [D-185…D-195]: карточку не ищут в файле — её там нет; проверки помещения нет; чекпоинты ST — отдельные файлы — форками не связываются.
+- **Почему.** Выполняет D-9 для ST: «позже: ST JSONL (свайпы → сиблинги)».
+- **Рекомендация.** Принять. Проверку помещения можно добавить тем же `preview`, что у истории RoleCall.
+- **Альтернативы.** Искать карточку в библиотеке по `character_name`; групповой чат с `speaker` [D-10].
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-241
+- **Решение.** Персона сессии меняется строкой журнала `{t:'persona', persona}`; заголовок не переписывается. Текущая персона — последняя такая строка (`currentHeader`): её видят `header()`, сборка, поиск по истории, Директор и форк. Строка меняет версию и шлёт `changed{change:'persona'}`; во время хода — `session_busy`. API — `SessionHandle.setPersona(persona)`; REPL — `/persona [show|use <id>|name <текст>|description <текст>]`; TUI — F7. Прошлые сообщения, в том числе приветствие со старым именем, не меняются.
+- **Следствие.** `expectedVersion`, взятая до смены персоны, устаревает.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Переписывать заголовок — это нарушает append-only (§5.3); персона в `config`.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-242
+- **Решение.** Название истории и имя ветки — строка `{t:'name', title, leaf?}`. Без `leaf` — название истории поверх `header.title`; с `leaf` — имя ветки на этом сообщении, и ветку называет ближайшее имя на пути от её листа вверх, так что продолжение наследует имя. Версию не меняет. 1–120 знаков в одну строку; неизвестный `leaf` — `invalid_params`, во время хода — `session_busy`. API — `SessionHandle.name`, `EngineHandle.nameSession` (открывает и закрывает неоткрытую сессию сам, асинхронный фасад тоже). В REPL команды нет, в TUI — F2 в обзоре F5. Форк берёт текущее название и имена веток своего пути. `listSessions` теперь читает журнал целиком, чтобы найти текущее название.
+- **Отношение к принятому.** D-13 и §5.3 держат одну голову и резервируют поле `branch`; имена его не вводят: голова одна, ветка — по-прежнему лист, имя — подпись к нему. Это «именованные ветки» из списка «Позже» §15 в самой простой форме.
+- **Цена.** `rp-core sessions`, `/sessions` и обзор F5 читают каждый журнал целиком, а не первую строку; на больших историях список медленнее (не мерили).
+- **Рекомендация.** Принять. Если список станет медленным — хранить название в индексе или читать журнал с конца.
+- **Альтернативы.** Поле `branch` в `msg` и `head` (§5.3); переписывать заголовок.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-243
+- **Решение.** Окна TUI F4–F8 и обзор историй при запуске без id (§12.4.1). Всё, что меняет сессию, они делают строкой команды через источник ввода REPL — `/model narrator`, `/open`, `/goto`, `/persona use`, `/preset`, `/lore add|rm`, — поэтому удержание строки и отказ во время хода действуют как есть [D-127]. Исключения: названия — `nameSession` напрямую; новая история — тем же `cmdNew`, что у `rp-core new`, затем `/open`. Набранный текст в поле ввода остаётся. Блок Context в панели Agents — последний запрос той же привязки рассказчика против окна без резерва; у локального Ollama — окно загруженной модели из `/api/ps` (срок 1,5 с). Реплики в кавычках — цвет 6 палитры, при `NO_COLOR` — цвет текста; при запуске — логотип.
+- **Отличия от принятого.** D-134 называл цвета 2, 5, 4, 3, 1, 8 — добавлен 6. F4 опрашивает каталоги всех соединений, блок Context — `/api/ps`; оба запроса только читают.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Окна, которые зовут методы движка напрямую, — тогда правила удержания и отказа пришлось бы повторять в каждом.
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
+#### D-244
+- **Решение.** F9 в окне F4 подключает OpenRouter без правки конфига руками. Ключ вводится скрыто, проверяется (`isHeaderSafeKey`) и уходит резолверу процесса — новый `SecretResolver.provide(spec, key)`; в `config.toml`, окружение и чат он не попадает, `scrub()` его знает. Если соединения `openrouter` нет, в `config.toml` дописывается блок без ключа (`base_url = "https://openrouter.ai/api"`, `key_env = "OPENROUTER_API_KEY"`): временный файл, fsync, rename; режим файла сохраняется, у нового — `0600`. Соединение `openrouter` на другом хосте — отказ; под `record:` — отказ. Движок получает соединение через новый `EngineHandle.addConnection`. На следующий запуск ключ нужно положить в `OPENROUTER_API_KEY`.
+- **Отношение к принятому.** D-73: ключи в файле по-прежнему запрещены — файл получает только несекретный блок. До сих пор `config.toml` писал только `rp-core init`, и только новым файлом.
+- **Рекомендация.** Принять.
+- **Альтернативы.** Только подсказка, что дописать в `config.toml`; хранить ключ в хранилище ключей системы — его в v1 нет [D-13, D-20].
+- **Статус.** Ждёт подтверждения (вопрос 28).
+
 ### 19.11 Вопрос 13: доводы
 
 *Рев. 5:* Леви выбрала Compendium целиком (25.10). *Рев. 6:* все четыре вопроса решены проходом по Compendium: вызовы перед ответом — §7.4.2 и §7.4.7, размер снимка — §7.4.6, схема для слабых моделей — §7.4.3, хранение — §5.8. Доводы ниже сохранены как история — список того, что пришлось решить при порте:
@@ -7622,7 +8730,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 **Принято с явным отступлением от требований критика исследования.**
 
 8. *Ревью 2: убрать `chk{round}`.* Критик требует чекпоинт после каждого раунда тулов. Но восстановление не продолжает цикл, а тулы v1 только читают, так что повторять нечего. Чекпоинт раунда вернётся вместе с пишущими тулами.
-9. *Ревью 2: убрать закрепление `id_slot`.* Критик называет его опцией; оно отложено, а в v1 его заменяет вытеснение фоновых запросов.
+9. *Ревью 2: убрать закрепление `id_slot`.* Критик называет его опцией; оно отложено, а в v1 его заменяет вытеснение фоновых запросов. *Рев. 19:* закрепление построено на M5d [D-211] — рядом с вытеснением, а не вместо него. На локальном origin фон по-прежнему вытесняется, а `id_slot` держит кэш каждого слота за одним видом промпта: рассказчик — 0, агенты — 1. Само оно включается только на llama.cpp с ≥ 2 слотами; `slot_pin = false` его выключает.
 
 **Ревизия 3 (25.10.2026, решения Леви).**
 
@@ -7668,7 +8776,7 @@ Thinking у Qwen3 переключается через `control:'toggle'` и `c
 
 23. Переписаны §5.8, §7.3 (под D-61…D-65), §7.4, §19.7 и веха M5; новые решения D-74…D-89 (§19.10). M5 — 32–52 дня, итог — ≈ 120–202.
 24. Проект проверили два ревьюера: сверка фактов и согласованность с реализмом. Приняты все замечания уровней blocker и major. Частично принято одно: окно historian в lite не уменьшено — цену запуска задаёт вывод (пересказ и переписанный обзор), и меньшее окно дало бы больше запусков; вместо этого — уведомление `memory_starved` и приоритет голодающей задачи.
-25. Главные правки по ревью: ёмкость origin не берётся из `/slots` (общий KV llama-server); на локальном origin фон не идёт рядом с ходом и стартует с задержкой `idleDelaySec`; закрепление `id_slot` перенесено на M5c; `/memory undo` больше не превращается в повторную запись; резерв ответа на малом окне [D-89]; относительный критерий качества prefetch; §5.9, §7.2 и D-61, D-62 согласованы с §7.3.
+25. Главные правки по ревью: ёмкость origin не берётся из `/slots` (общий KV llama-server); на локальном origin фон не идёт рядом с ходом и стартует с задержкой `idleDelaySec`; закрепление `id_slot` перенесено на M5c (*рев. 19:* построено на M5d [D-211]); `/memory undo` больше не превращается в повторную запись; резерв ответа на малом окне [D-89]; относительный критерий качества prefetch; §5.9, §7.2 и D-61, D-62 согласованы с §7.3.
 26. Заново проверены: 15 упоминаний `commit_planning_round.X`; system filing — 1 148 токенов, список полей — 620, `LITE_FIELDS` — 431; выбор слота, общий KV и `id_slot` — по исходникам llama-server.
 
 **Ревизия 7 (26.10.2026, ответы на вопросы 5–12).**

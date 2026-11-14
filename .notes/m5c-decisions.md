@@ -3,7 +3,7 @@
 M5c = "recall": before a reply, a model picks the Compendium entries the narrator will need (tier 1 of
 the M5a selector), synchronously next to the Director or as a background prefetch while the player types
 (ARCHITECTURE.md §7.4.2, §7.4.6, §7.4.7, §15 M5c, §19.7; D-78, D-79, D-84, D-85; M5a D-140…D-169, M5b
-D-170…D-184, the import D-185…D-195). These become D-196…D-212 in ARCHITECTURE.md rev 19 (question 27).
+D-170…D-184, the import D-185…D-195). These become D-196…D-208 in ARCHITECTURE.md rev 19 (question 27).
 Research (the lead gives the absolute path): `<session scratchpad>/m5c/understand/` — `design.md` (spec
 digest; 28 gaps in §7), `bunraku.md` (+ `bunraku-probe/`: Bunraku's recall, prompts verbatim, tests),
 `rolecall.md` (+ `rc-recall-vectors.ts`), `rpcore.md` (insertion points), `demo.md` (+ `demo-draft/`).
